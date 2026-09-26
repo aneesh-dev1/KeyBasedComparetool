@@ -422,3 +422,37 @@ for each run. Compare `--sort-workers 1` and `2` on the same hardware.
 `--rows 1000000` generates approximately 5.8 GB per file for a full-scale
 synthetic test; reserve storage first. No full-scale or native Windows test
 was performed during this change.
+
+## Windows upload and header fixes
+
+Blank or whitespace-only CSV headers now receive a positional name such as
+`column2`. Repeated headers receive `_1`, `_2`, and subsequent free suffixes.
+Explicit existing names are preserved: `a,a,a_1` becomes `a,a_2,a_1`; an empty
+first header alongside an existing `column1` becomes `column1_1`. Names are
+case-sensitive. Normalization reads only the header and does not rewrite source
+files. Repeated names align by occurrence, and anonymous columns by position.
+The same names appear in key selection, scope, previews and mismatch exports.
+The UI shows up to 200 header adjustments and reports retain all adjustments.
+
+Upload checkpoints now use the actual saved file length instead of replacing
+job metadata after every 8 MB chunk. Temporary metadata files have unique names
+and bounded retries for permission/sharing errors. A permanent lock still
+requires closing the application holding the file or choosing a writable local
+data directory; it is reported without replacing the previous metadata.
+Interrupted requests reconcile the server offset before retrying, avoiding
+duplicate bytes. Pause finishes the active chunk; Resume continues from the
+saved offset. After reopening the browser, reselect the same source files to
+resume. Job history, JSON, and container navigation remain available during
+upload; opening a different job or starting a new job requires pausing first.
+
+The layout wraps settings and long content to fit available window width and
+keeps wide tables in their own scroll areas. Sidebar content can scroll on
+short displays. Upload progress painting is throttled. Browser checks covered
+620, 900, 1280, and 1920 CSS pixels, plus navigation/pause/resume on two roughly
+580 MB synthetic files. Windows file-lock failures were simulated in tests;
+this change was not run on the user's Windows laptop or external monitor.
+
+To update: stop the running server, replace application source files from the
+new ZIP, retain the existing `data` directory, restart the Windows launcher,
+and refresh the browser. A failed upload can be resumed from Job history with
+the same original files. Do not run two servers against the same data folder.

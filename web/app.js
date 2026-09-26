@@ -7,6 +7,7 @@ const ignoredColumns = new Set();
 let keyPage = 0, ignorePage = 0;
 const pageSize = 100;
 let job = null, uploading = false, pollTimer = null;
+let pauseUploadRequested=false, lastUploadPaint=0;
 let overrideRules=[], currentView='uploadPanel', hydratedId=null, historyOffset=0, sourceColumnOffset=0;
 let logCursor=0, logText='', logJobId=null;
 let viewingHistoryJob=false;
@@ -36,7 +37,7 @@ function syncNavigation(){
   $('navPreview').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
   $('navPipeline').disabled=!job||!['queued','running','complete','error'].includes(job.state);
   $('navResults').disabled=job?.state!=='complete';
-  $('navJson').disabled=$('navContainers').disabled=$('navHistory').disabled=$('navNew').disabled=uploading;
+  $('navJson').disabled=$('navContainers').disabled=$('navHistory').disabled=$('navNew').disabled=false;
   $('reset').disabled=uploading;
 }
 function panel(name) {
@@ -68,6 +69,7 @@ function panel(name) {
 function configuration(){return {keys:[...selected],memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules};}
 async function saveDraft(){if(job?.state==='ready')await api(endpoint('/config'),configuration());}
 async function goView(name){
+  if(uploading&&name!=='uploadPanel'&&!['jsonPanel','containersPanel','historyPanel'].includes(name))return;
   clearError();await saveDraft();panel(name);
   if(name==='keysPanel'){renderKeys();renderIgnoredColumns();await loadContainers();}
   if(name==='containersPanel')await loadContainers();
@@ -109,7 +111,10 @@ function sendChunk(side, blob, offset, update) {
   });
 }
 $('upload').addEventListener('click', async () => {
-  clearError(); uploading = true;syncNavigation(); $('upload').disabled = true; $('reset').disabled = true;
+  if(uploading)return;
+  clearError(); uploading = true;pauseUploadRequested=false;lastUploadPaint=0;
+  $('pauseUpload').hidden=false;$('pauseUpload').disabled=false;$('pauseUpload').textContent='Pause upload';$('uploadActivity').hidden=false;
+  syncNavigation(); $('upload').disabled = true; $('reset').disabled = true;
   for(const side of ['left','right']) $(`${side}File`).disabled = true;
   $('delimiter').disabled = $('encoding').disabled = true;
   try {
@@ -117,6 +122,7 @@ $('upload').addEventListener('click', async () => {
       job = await api('/api/jobs',{delimiter:$('delimiter').value==='tab'?'\t':$('delimiter').value,encoding:$('encoding').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))});
       localStorage.setItem('keywise-job',job.id);
     }
+    job=await api(endpoint());
     for(const side of ['left','right']) {
       if(files[side].size!==job.files[side].size || files[side].name!==job.files[side].name) throw new Error('To resume, select the same files. Use New comparison to choose different files.');
     }
@@ -125,29 +131,39 @@ $('upload').addEventListener('click', async () => {
     for(const side of ['left','right']) {
       let offset = job.files[side].uploaded;
       while(offset < files[side].size) {
+        if(pauseUploadRequested)return;
         const start = offset;
-        const result = await sendChunk(side,files[side].slice(start,start+8*1024*1024),start,loaded=>{
+        const result = await sendChunkRecoverable(side,files[side].slice(start,start+8*1024*1024),start,loaded=>{
+          const now=performance.now();if(now-lastUploadPaint<100&&loaded<Math.min(8*1024*1024,files[side].size-start))return;lastUploadPaint=now;
           const completed = (side==='right'?files.left.size:0)+start+loaded;
           const percent = Math.min(100,100*completed/total);
-          $('uploadText').textContent = `Uploading ${side} file · ${bytes(completed)} of ${bytes(total)}`;
+          const message=`Uploading ${side} file · ${bytes(completed)} of ${bytes(total)}`;
+          $('uploadText').textContent=message;$('uploadActivityText').textContent=message;
           $('uploadPercent').textContent = `${percent.toFixed(1)}%`; $('uploadBar').value=percent;
         });
         offset = result.uploaded; job.files[side].uploaded = offset;
+        await new Promise(resolve=>setTimeout(resolve,0));
       }
     }
+    if(pauseUploadRequested)return;
     $('uploadText').textContent = 'Checking column names…';
     job = await api(endpoint('/finalize'),{});
-    currentView=job.state==='ready'?'keysPanel':'uploadPanel';await refresh();if(job.state==='selecting_sheets')$('sheetPanel').scrollIntoView({behavior:'smooth',block:'start'});
+    if(currentView==='uploadPanel')currentView=job.state==='ready'?'keysPanel':'uploadPanel';await refresh();if(currentView==='uploadPanel'&&job.state==='selecting_sheets')$('sheetPanel').scrollIntoView({behavior:'smooth',block:'start'});
   } catch(error) {
     showError(error);
     if(job) {try {job=await api(endpoint());} catch { /* Keep current job to allow retry. */ }}
   } finally {
     uploading=false; $('upload').disabled=job&&job.state!=='uploading'; $('reset').disabled=false; $('reset').hidden=!job;
     for(const side of ['left','right']) $(`${side}File`).disabled=job&&job.state!=='uploading';
+    $('pauseUpload').hidden=true;
+    $('uploadActivity').hidden=job?.state!=='uploading';
+    if(job?.state==='uploading'){const done=job.files.left.uploaded+job.files.right.uploaded;const message=`${pauseUploadRequested?'Upload paused':'Upload stopped'} · ${bytes(done)} saved. Click Resume upload to continue.`;$('uploadText').textContent=message;$('uploadActivityText').textContent=message;$('upload').textContent='Resume upload →';}
     if(!job) $('delimiter').disabled=$('encoding').disabled=false;syncNavigation();
   }
 });
 function renderKeys() {
+  const changes=job.header_changes||[];$('headerChanges').hidden=!changes.length;$('headerChangesTitle').textContent=`${changes.length} header names normalized — view ${changes.length>200?'first 200 changes':'changes'}`;
+  if(changes.length&&$('headerChangesTable').dataset.job!==job.id){drawTable('headerChangesTable',['File','Column number','Original header','Comparison header'],changes.slice(0,200).map(c=>[c.side,c.column,c.original||'(empty)',c.normalized]));$('headerChangesTable').dataset.job=job.id;}
   const matches=job.columns.filter(name=>name.toLowerCase().includes($('keySearch').value.toLowerCase()));
   keyPage=Math.min(keyPage,Math.max(0,Math.ceil(matches.length/pageSize)-1));
   $('keyList').replaceChildren();
@@ -367,10 +383,12 @@ async function loadHistory(){
   const table=$('historyTable');table.replaceChildren();
   const header=document.createElement('tr');for(const label of ['Created','Files','Status','Changed cells','Action']){const th=document.createElement('th');th.textContent=label;header.append(th);}const head=document.createElement('thead');head.append(header);table.append(head);
   const body=document.createElement('tbody');
-  for(const item of result.jobs){const row=document.createElement('tr');for(const text of [new Date(item.created*1000).toLocaleString(),`${item.files.left.name}${item.files.left.sheet?' ['+item.files.left.sheet+']':''} ↔ ${item.files.right.name}${item.files.right.sheet?' ['+item.files.right.sheet+']':''}`,item.state,item.changed_cells==null?'—':number(item.changed_cells)]){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}const cell=document.createElement('td');const button=document.createElement('button');button.className='subtle';button.textContent='Open';button.setAttribute('aria-label',`Open comparison ${item.id}`);button.addEventListener('click',()=>openJob(item.id).catch(showError));cell.append(button);row.append(cell);body.append(row);}table.append(body);
+  for(const item of result.jobs){const row=document.createElement('tr');for(const text of [new Date(item.created*1000).toLocaleString(),`${item.files.left.name}${item.files.left.sheet?' ['+item.files.left.sheet+']':''} ↔ ${item.files.right.name}${item.files.right.sheet?' ['+item.files.right.sheet+']':''}`,item.state,item.changed_cells==null?'—':number(item.changed_cells)]){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}const cell=document.createElement('td');const button=document.createElement('button');button.className='subtle';button.textContent='Open';button.disabled=uploading;button.setAttribute('aria-label',`Open comparison ${item.id}`);button.addEventListener('click',()=>openJob(item.id).catch(showError));cell.append(button);row.append(cell);body.append(row);}table.append(body);
   $('historyRange').textContent=result.total?`${historyOffset+1}–${Math.min(historyOffset+25,result.total)} of ${result.total} saved jobs`:'No comparisons yet.';$('historyPrev').disabled=historyOffset===0;$('historyNext').disabled=historyOffset+25>=result.total;
 }
 async function openJob(id){
+  if(uploading){showError('Pause the upload before opening another job.');return;}
+  $('uploadActivity').hidden=true;
   clearTimeout(pollTimer);await saveDraft();clearError();viewingHistoryJob=true;job=await api('/api/jobs/'+id);localStorage.setItem('keywise-job',id);renderedId=null;hydratedId=null;hydrate();
   for(const side of ['left','right']){files[side]=null;$(`${side}File`).value='';$(`${side}Name`).textContent=job.files[side].name;$(`${side}Size`).textContent=bytes(job.files[side].size);}
   $('sourceLeftTable').replaceChildren();$('sourceRightTable').replaceChildren();
@@ -398,6 +416,7 @@ $('sidebarToggle').addEventListener('click',()=>{
 });
 $('navNew').addEventListener('click',async()=>{
   try{
+    if(uploading){panel('uploadPanel');return;}
     if(['containersPanel','jsonPanel'].includes(currentView)&&!viewingHistoryJob){await goView(job?.state==='ready'?'keysPanel':job?.state==='complete'?'results':job&&['running','queued','error'].includes(job.state)?'runningPanel':'uploadPanel');return;}
     if(currentView==='historyPanel'||viewingHistoryJob){await saveDraft();localStorage.removeItem('keywise-job');location.reload();}
   }catch(error){showError(error);}
@@ -485,3 +504,21 @@ $('jsonHtml').addEventListener('click',()=>{
   const html='<!doctype html><html lang="en"><meta charset="utf-8"><title>JSON comparison</title><style>body{font:15px system-ui;color:#004364;margin:32px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccdce3;padding:12px;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}th{background:#e6f6fa}pre{white-space:pre-wrap}</style><h1>JSON comparison</h1><p>'+escape($('jsonResultTitle').textContent)+' · '+escape($('jsonCounts').textContent)+'</p><h2>Array settings</h2><pre>'+escape(JSON.stringify({default_order:jsonResult.default_order,rules:jsonResult.rules,warnings:jsonResult.warnings},null,2))+'</pre><p>Paths use original array positions. Unordered blocks without matching fields are reported as removed/added. Duplicates remain significant.</p><table><tr><th>Difference</th><th>File 1 path</th><th>File 2 path</th><th>File 1 value</th><th>File 2 value</th></tr>'+rows+'</table></html>';
   saveJsonReport(html,'text/html','json-comparison.html');
 });
+
+$('pauseUpload').addEventListener('click',()=>{pauseUploadRequested=true;$('pauseUpload').disabled=true;$('pauseUpload').textContent='Pausing after current chunk…';});
+$('returnUpload').addEventListener('click',()=>{goView(job?.state==='ready'?'keysPanel':'uploadPanel').catch(showError);});
+async function sendChunkRecoverable(side,blob,offset,update){
+  for(let attempt=0;attempt<3;attempt++){
+    try{return await sendChunk(side,blob,offset,update);}catch(error){
+      // The server may have saved the chunk before the response was lost.
+      // Reconcile its durable file offset before retrying; never append twice.
+      const latest=await api(endpoint());
+      const uploaded=latest.files[side].uploaded;
+      job.files[side].uploaded=uploaded;
+      if(uploaded===offset+blob.size)return {uploaded};
+      if(uploaded!==offset||attempt===2)throw error;
+      $('uploadActivityText').textContent=`Retrying ${side} upload chunk (${attempt+1}/2)…`;
+      await new Promise(resolve=>setTimeout(resolve,500*(attempt+1)));
+    }
+  }
+}

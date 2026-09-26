@@ -22,7 +22,8 @@ import webbrowser
 
 from json_compare import compare_json
 from excel_input import sheets as excel_sheets, convert as convert_excel
-from compare import header, validate_scope, validate_overrides
+from file_io import atomic_write_text, replace_retry
+from compare import read_header, normalize_headers, header, validate_scope, validate_overrides
 from reports import export_excel, export_html, make_summary_html
 
 BASE = Path(__file__).resolve().parent
@@ -40,12 +41,16 @@ class Application:
         csv.field_size_limit(64 * 1024 * 1024)
         for path in self.root.glob('*/job.json'):
             job = json.loads(path.read_text())
+            changed = False
             if job['state'] in ('queued', 'running', 'preparing'):
                 job.update(state='error', error='Server stopped before comparison completed. Start a new comparison.')
+                changed = True
             for export in job.get('exports', {}).values():
                 if export['state'] in ('queued', 'running'):
                     export.update(state='error', error='Export interrupted. Generate it again.')
-            self.save(job)
+                    changed = True
+            if changed:
+                self.save(job)
 
     def directory(self, identity):
         if not re.fullmatch(r'[a-f0-9]{32}', identity):
@@ -57,14 +62,17 @@ class Application:
             path = self.directory(identity) / 'job.json'
             if not path.is_file():
                 raise ValueError('Comparison not found')
-            return json.loads(path.read_text())
+            job = json.loads(path.read_text())
+            if job['state'] == 'uploading':
+                for side in ('left', 'right'):
+                    source = self.upload_path(job, side)
+                    job['files'][side]['uploaded'] = source.stat().st_size if source.exists() else 0
+            return job
 
     def save(self, job):
         with self.lock:
             path = self.directory(job['id']) / 'job.json'
-            temp = path.with_suffix('.tmp')
-            temp.write_text(json.dumps(job), encoding='utf-8')
-            os.replace(temp, path)
+            atomic_write_text(path, json.dumps(job))
 
     def patch(self, identity, **values):
         with self.lock:
@@ -116,8 +124,8 @@ class Application:
                         writer = csv.writer(output)
                         for row in csv.reader(stream, delimiter=job['delimiter'], strict=True):
                             writer.writerow(row)
-                    os.replace(source, directory / f'{side}.source.csv')
-                    os.replace(temporary, source)
+                    replace_retry(source, directory / f'{side}.source.csv')
+                    replace_retry(temporary, source)
                     columns[side] = header(source, ',', 'utf-8')
             if set(columns['left']) != set(columns['right']):
                 raise ValueError('Selected sheets/files must have the same set of column headers')
@@ -166,7 +174,7 @@ class Application:
         status('running', message='Preparing report')
         try:
             (export_excel if kind == 'excel' else export_html)(directory / 'report', temporary, notify)
-            os.replace(temporary, target)
+            replace_retry(temporary, target)
             status('complete', size=target.stat().st_size)
         except Exception as error:
             temporary.unlink(missing_ok=True)
@@ -254,9 +262,7 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError('Invalid number of key columns')
                         validate_scope([str(i) for i in range(width)], [], [], data['values'])
                         items.append(dict(id=uuid.uuid4().hex, name=data['name'].strip(), reason=data['reason'].strip(), values=data['values'], key_width=width))
-                        temporary = target.with_suffix('.tmp')
-                        temporary.write_text(json.dumps(items), encoding='utf-8')
-                        os.replace(temporary, target)
+                        atomic_write_text(target, json.dumps(items))
                     return self.json_response({'containers': items})
             if self.command == 'POST' and path == '/api/jobs':
                 return self.json_response(self.app.create(self.body()), 201)
@@ -307,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
                 rows, size = [], 0
                 with (directory / f'{side}.csv').open(encoding=job['encoding'], newline='') as source:
                     reader = csv.reader(source, delimiter=job['delimiter'], strict=True)
-                    names = next(reader)
+                    names = normalize_headers(next(reader, None))
                     if start >= len(names):
                         raise ValueError('Invalid column page')
                     for row in itertools.islice(reader, limit):
@@ -358,10 +364,8 @@ class Handler(BaseHTTPRequestHandler):
                         except Exception:
                             stream.truncate(current)
                             raise
-                    with self.app.lock:
-                        job = self.app.load(identity)
-                        job['files'][side]['uploaded'] = current + size
-                        self.app.save(job)
+                    # File length is the durable upload checkpoint. Avoid renaming
+                    # job metadata for every chunk (a common Windows lock conflict).
                 return self.json_response({'uploaded': current + size})
             if self.command == 'POST' and action == 'finalize':
                 with self.app.lock:
@@ -369,6 +373,7 @@ class Handler(BaseHTTPRequestHandler):
                     if job['state'] != 'uploading':
                         raise ValueError('Upload already finalized')
                     columns = {}
+                    header_changes = []
                     for side in ('left', 'right'):
                         file = self.app.upload_path(job, side)
                         if not file.exists() or file.stat().st_size != job['files'][side]['size']:
@@ -376,7 +381,9 @@ class Handler(BaseHTTPRequestHandler):
                         if job['files'][side].get('format') == 'excel':
                             job['files'][side]['sheets'] = excel_sheets(file)
                         else:
-                            columns[side] = header(file, job['delimiter'], job['encoding'])
+                            columns[side], changes = read_header(file, job['delimiter'], job['encoding'])
+                            header_changes.extend(dict(side=side, **change) for change in changes)
+                    job['header_changes'] = header_changes
                     if any(item.get('format') == 'excel' for item in job['files'].values()):
                         for item in job['files'].values():
                             item['complete'] = True

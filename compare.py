@@ -15,6 +15,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+from file_io import atomic_write_text
 
 
 def encode(value):
@@ -35,17 +36,43 @@ def progress(args, phase, **values):
     print(f'{time.strftime("%H:%M:%S")}  {phase}' + ''.join(f' | {key}={value:,}' if isinstance(value, int) else f' | {key}={value}' for key, value in values.items()), flush=True)
     if getattr(args, 'progress_file', None):
         target = Path(args.progress_file)
-        staging = target.with_suffix('.tmp')
-        staging.write_text(json.dumps(dict(phase=phase, stage=stage, **values)), encoding='utf-8')
-        os.replace(staging, target)
+        try:
+            atomic_write_text(target, json.dumps(dict(phase=phase, stage=stage, **values)))
+        except PermissionError as error:
+            print(f'Progress snapshot disabled: {error}; comparison continues, see console log.', flush=True)
+            args.progress_file = None
+
+
+def normalize_headers(names):
+    if not names:
+        raise ValueError('CSV must contain a header row')
+    reserved = {name for name in names if name.strip()}
+    used = set()
+    result = []
+    for number, name in enumerate(names, 1):
+        base = name if name.strip() else f'column{number}'
+        candidate = base
+        suffix = 1
+        # Keep explicitly named columns intact, including existing _1 suffixes.
+        while candidate in used or (candidate in reserved and candidate != name):
+            candidate = f'{base}_{suffix}'
+            suffix += 1
+        used.add(candidate)
+        result.append(candidate)
+    return result
+
+
+def read_header(path, delimiter, encoding):
+    with open(path, encoding=encoding, newline='') as stream:
+        original = next(csv.reader(stream, delimiter=delimiter, strict=True), None)
+    normalized = normalize_headers(original)
+    changes = [dict(column=i, original=before, normalized=after)
+               for i,(before,after) in enumerate(zip(original,normalized),1) if before != after]
+    return normalized, changes
 
 
 def header(path, delimiter, encoding):
-    with open(path, encoding=encoding, newline='') as stream:
-        names = next(csv.reader(stream, delimiter=delimiter, strict=True), None)
-    if not names or any(not name for name in names) or len(set(names)) != len(names):
-        raise ValueError(f'{path}: headers must be nonempty and unique')
-    return names
+    return read_header(path, delimiter, encoding)[0]
 
 
 def validate_scope(keys, columns, ignored_columns=None, ignored_keys_text=''):
@@ -295,8 +322,8 @@ def compare(args):
     progress(args, 'Validating configuration')
     # CSV cells can exceed Python's small default field limit.
     csv.field_size_limit(args.max_field_mb * 1024 * 1024)
-    left_names = header(args.left, args.delimiter, args.encoding)
-    right_names = header(args.right, args.delimiter, args.encoding)
+    left_names, left_header_changes = read_header(args.left, args.delimiter, args.encoding)
+    right_names, right_header_changes = read_header(args.right, args.delimiter, args.encoding)
     if set(left_names) != set(right_names):
         raise ValueError(f'Schema mismatch: left-only={sorted(set(left_names)-set(right_names))}, '
                          f'right-only={sorted(set(right_names)-set(left_names))}')
@@ -382,13 +409,12 @@ def compare(args):
     progress(args, 'Writing reports')
     stats.update(keys=args.keys, comparison='exact text with explicit value overrides' if overrides else 'exact text', changed_cells_by_column=columns,
                  value_overrides=overrides, ignore_key_containers=exclusion_audit,
+                 header_changes=[dict(side=side, **change) for side, changes in (("left", left_header_changes), ("right", right_header_changes)) for change in changes],
                  ignored_columns=ignored_columns, ignored_keys_count=len(args.excluded_keys),
                  left_compared_rows=stats['left_rows']-stats['left_excluded_rows'],
                  right_compared_rows=stats['right_rows']-stats['right_excluded_rows'],
                  elapsed_seconds=round(time.monotonic() - started, 3))
-    staging = out / 'summary.json.tmp'
-    staging.write_text(json.dumps(stats, indent=2), encoding='utf-8')
-    os.replace(staging, out / 'summary.json')
+    atomic_write_text(out / 'summary.json', json.dumps(stats, indent=2))
     (out / 'INCOMPLETE').unlink()
     return stats
 

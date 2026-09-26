@@ -3,6 +3,7 @@
 Uses stored values (not display formats); never executes formulas or macros.
 """
 import csv
+from file_io import replace_retry
 from functools import lru_cache
 import json
 import os
@@ -152,7 +153,7 @@ def convert(path, sheet_name, destination, notify=lambda text: None):
                         raise ValueError('Selected worksheet is empty')
             finally:
                 db.close()
-        os.replace(temporary, destination)
+        replace_retry(temporary, destination)
         return names, count
     except (zipfile.BadZipFile, KeyError, ET.ParseError) as error:
         raise ValueError('Invalid Excel worksheet data') from error
