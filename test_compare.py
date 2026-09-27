@@ -68,6 +68,50 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(result['changed_cells_by_column'], {})
         self.assertEqual(result['unmatched_columns'], {'left':['v'],'right':['other']})
 
+    def test_more_columns_in_left_file(self):
+        left=self.write('a.csv',['id','left_extra','Value','another_extra'],[['001','x','old','y']])
+        right=self.write('b.csv',['value','ID'],[['new','001']])
+        result=self.run_comparison(left,right)
+        self.assertEqual(result['changed_cells_by_column'],{'Value':1})
+        self.assertEqual(result['unmatched_columns'],{'left':['left_extra','another_extra'],'right':[]})
+        self.assertEqual(result['matched_keys'],1)
+
+    def test_more_columns_in_right_file(self):
+        left=self.write('a.csv',['id','v'],[['001','same']])
+        right=self.write('b.csv',['extra1','V','ID','extra2'],[['x','same','001','y']])
+        result=self.run_comparison(left,right)
+        self.assertEqual(result['changed_cells_by_column'],{'v':0})
+        self.assertEqual(result['unmatched_columns'],{'left':[],'right':['extra1','extra2']})
+        self.assertEqual(result['equal_rows'],1)
+
+    def test_missing_key_in_one_file_is_rejected(self):
+        left=self.write('a.csv',['id','v'],[['001','a']])
+        right=self.write('b.csv',['different_key','v'],[['001','a']])
+        with self.assertRaisesRegex(ValueError,'Keys must be distinct existing column names'):
+            self.run_comparison(left,right)
+
+    def test_no_common_columns_is_rejected(self):
+        left=self.write('a.csv',['id','v'],[['001','a']])
+        right=self.write('b.csv',['other_id','other_value','extra'],[['001','a','x']])
+        with self.assertRaisesRegex(ValueError,'Keys must be distinct existing column names'):
+            self.run_comparison(left,right)
+
+    def test_only_key_is_common(self):
+        left=self.write('a.csv',['id','left_only'],[['001','a'],['002','b']])
+        right=self.write('b.csv',['right_only','ID','extra'],[['x','001','z'],['y','003','z']])
+        result=self.run_comparison(left,right)
+        self.assertEqual(result['changed_cells_by_column'],{})
+        self.assertEqual([result[k] for k in ('matched_keys','left_only','right_only')],[1,1,1])
+
+    def test_renaming_unequal_header_counts(self):
+        left=self.write('a.csv',['id','AT01S','unused'],[['001','a','x']])
+        right=self.write('b.csv',['AT02S','ID'],[['b','001']])
+        args=parser().parse_args([str(left),str(right),'--keys','id','--output',str(self.root/'report')])
+        args.column_headers={'left':['id','AT01S','unused'],'right':['AT01S','ID']}
+        result=compare(args)
+        self.assertEqual(result['changed_cells_by_column'],{'AT01S':1})
+        self.assertEqual(result['unmatched_columns']['left'],['unused'])
+
     def test_wide_multiple_merge_passes(self):
         names = ['id'] + [f'c{i}' for i in range(1999)]
         rows = [[str(i)] + ['abcdef'] * 1999 for i in range(400)]
