@@ -46,7 +46,7 @@ def progress(args, phase, **values):
 def normalize_headers(names):
     if not names:
         raise ValueError('CSV must contain a header row')
-    reserved = {name for name in names if name.strip()}
+    reserved = {name.casefold() for name in names if name.strip()}
     used = set()
     result = []
     for number, name in enumerate(names, 1):
@@ -54,12 +54,38 @@ def normalize_headers(names):
         candidate = base
         suffix = 1
         # Keep explicitly named columns intact, including existing _1 suffixes.
-        while candidate in used or (candidate in reserved and candidate != name):
+        while candidate.casefold() in used or (candidate.casefold() in reserved and candidate != name):
             candidate = f'{base}_{suffix}'
             suffix += 1
-        used.add(candidate)
+        used.add(candidate.casefold())
         result.append(candidate)
     return result
+
+
+def align_headers(source, layout=None):
+    """Resolve positional aliases using headers only; never scan or rewrite data."""
+    layout = source if layout is None else layout
+    if not isinstance(layout, dict) or set(layout) != {'left', 'right'}:
+        raise ValueError('Provide column header lists for both files')
+    for side in ('left', 'right'):
+        names = layout[side]
+        if not isinstance(names, list) or len(names) != len(source[side]):
+            raise ValueError(f'{side}: header count must match the uploaded file')
+        if any(not isinstance(n, str) or not n.strip() for n in names):
+            raise ValueError(f'{side}: comparison headers cannot be empty')
+        if len({n.casefold() for n in names}) != len(names):
+            raise ValueError(f'{side}: comparison headers must be unique, ignoring case')
+    canonical = {n.casefold(): n for n in layout['left']}
+    right = {n.casefold(): n for n in layout['right']}
+    if canonical.keys() != right.keys():
+        left_only = [n for k,n in canonical.items() if k not in right]
+        right_only = [n for k,n in right.items() if k not in canonical]
+        raise ValueError(f'Schema mismatch. Align column headers first. File 1 only: {left_only[:20]}; File 2 only: {right_only[:20]}')
+    aligned = dict(left=list(layout['left']), right=[canonical[n.casefold()] for n in layout['right']])
+    audit = [dict(side=side, column=i, original=old, normalized=new)
+             for side in ('left', 'right')
+             for i,(old,new) in enumerate(zip(source[side], aligned[side]),1) if old != new]
+    return aligned, audit
 
 
 def read_header(path, delimiter, encoding):
@@ -324,9 +350,8 @@ def compare(args):
     csv.field_size_limit(args.max_field_mb * 1024 * 1024)
     left_names, left_header_changes = read_header(args.left, args.delimiter, args.encoding)
     right_names, right_header_changes = read_header(args.right, args.delimiter, args.encoding)
-    if set(left_names) != set(right_names):
-        raise ValueError(f'Schema mismatch: left-only={sorted(set(left_names)-set(right_names))}, '
-                         f'right-only={sorted(set(right_names)-set(left_names))}')
+    aligned, layout_changes = align_headers(dict(left=left_names, right=right_names), getattr(args, 'column_headers', None))
+    left_names, right_names = aligned['left'], aligned['right']
     if len(set(args.keys)) != len(args.keys) or any(k not in left_names for k in args.keys):
         raise ValueError('Keys must be distinct existing column names')
     ignored_columns, args.excluded_keys = validate_scope(args.keys, left_names,
@@ -409,6 +434,7 @@ def compare(args):
     progress(args, 'Writing reports')
     stats.update(keys=args.keys, comparison='exact text with explicit value overrides' if overrides else 'exact text', changed_cells_by_column=columns,
                  value_overrides=overrides, ignore_key_containers=exclusion_audit,
+                 column_headers=aligned, header_layout_changes=layout_changes,
                  header_changes=[dict(side=side, **change) for side, changes in (("left", left_header_changes), ("right", right_header_changes)) for change in changes],
                  ignored_columns=ignored_columns, ignored_keys_count=len(args.excluded_keys),
                  left_compared_rows=stats['left_rows']-stats['left_excluded_rows'],

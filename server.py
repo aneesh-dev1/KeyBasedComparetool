@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Local CSV comparison UI. Run: python3 server.py"""
 import argparse
+from http.cookies import SimpleCookie
+import signal
 from concurrent.futures import ThreadPoolExecutor
 import csv
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,7 +25,7 @@ import webbrowser
 from json_compare import compare_json
 from excel_input import sheets as excel_sheets, convert as convert_excel
 from file_io import atomic_write_text, replace_retry
-from compare import read_header, normalize_headers, header, validate_scope, validate_overrides
+from compare import align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
 from reports import export_excel, export_html, make_summary_html
 
 BASE = Path(__file__).resolve().parent
@@ -31,13 +33,14 @@ CHUNK = 8 * 1024 * 1024
 
 
 class Application:
-    def __init__(self, root):
+    def __init__(self, root, max_jobs=1):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.token = secrets.token_urlsafe(32)
         self.lock = threading.RLock()
         self.file_locks = {}
-        self.pool = ThreadPoolExecutor(max_workers=1)  # Bound expensive work globally.
+        self.pool = ThreadPoolExecutor(max_workers=max_jobs)  # Shared, bounded queue across sessions.
+        self.json_lock = threading.Lock()
         csv.field_size_limit(64 * 1024 * 1024)
         for path in self.root.glob('*/job.json'):
             job = json.loads(path.read_text())
@@ -80,7 +83,7 @@ class Application:
             job.update(values)
             self.save(job)
 
-    def create(self, config):
+    def create(self, config, owner=None):
         delimiter = config.get('delimiter', ',')
         encoding = config.get('encoding', 'utf-8-sig')
         if delimiter not in (',', '\t', ';', '|') or encoding not in ('utf-8-sig', 'utf-16', 'cp1252'):
@@ -97,7 +100,7 @@ class Application:
                                format='excel' if suffix in ('.xlsx', '.xlsm') else 'csv')
         identity = uuid.uuid4().hex
         self.directory(identity).mkdir()
-        job = dict(id=identity, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, exports={})
+        job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, exports={})
         self.save(job)
         return job
 
@@ -127,9 +130,7 @@ class Application:
                     replace_retry(source, directory / f'{side}.source.csv')
                     replace_retry(temporary, source)
                     columns[side] = header(source, ',', 'utf-8')
-            if set(columns['left']) != set(columns['right']):
-                raise ValueError('Selected sheets/files must have the same set of column headers')
-            self.patch(identity, state='ready', columns=columns['left'], delimiter=',', encoding='utf-8', preparation_message='Selected sheets are ready')
+            self.patch(identity, state='ready', source_headers=columns, column_headers=columns, headers_reviewed=False, columns=columns['left'], delimiter=',', encoding='utf-8', preparation_message='Selected sheets are ready')
         except Exception as error:
             self.patch(identity, state='error', error=str(error))
 
@@ -210,14 +211,47 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError('Expected a JSON object')
         return value
 
+    def end_headers(self):
+        if getattr(self, 'new_workspace', False):
+            cookie = f'compare-workspace={self.workspace}; Path=/; HttpOnly; SameSite=Lax; Max-Age=15552000'
+            if self.server.public_url and self.server.public_url.startswith('https://'):
+                cookie += '; Secure'
+            self.send_header('Set-Cookie', cookie)
+            self.new_workspace = False
+        super().end_headers()
+
+    def container_path(self):
+        if not self.server.shared:
+            return self.app.root / 'key-containers.json'
+        folder = self.app.root / 'workspaces' / self.workspace
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder / 'key-containers.json'
+
     def check_request(self):
         port = self.server.server_address[1]
         hosts = {f'127.0.0.1:{port}', f'localhost:{port}'}
+        origins = {f'http://{host}' for host in hosts}
+        if self.server.public_url:
+            hosts.add(urlsplit(self.server.public_url).netloc)
+            origins.add(self.server.public_url)
         if self.headers.get('Host') not in hosts:
-            raise ValueError('Use the local application address')
-        origin = self.headers.get('Origin')
-        if origin and origin not in {f'http://{host}' for host in hosts}:
+            raise ValueError('Use the configured application URL')
+        if self.headers.get('Origin') and self.headers['Origin'] not in origins:
             raise ValueError('Cross-origin request rejected')
+        self.workspace = None
+        self.new_workspace = False
+        if self.server.shared:
+            cookies = SimpleCookie()
+            try:
+                cookies.load(self.headers.get('Cookie', ''))
+            except Exception:
+                pass
+            value = cookies.get('compare-workspace')
+            value = value.value if value else ''
+            if not re.fullmatch(r'[a-f0-9]{32}', value):
+                value = secrets.token_hex(16)
+                self.new_workspace = True
+            self.workspace = value
         url = urlsplit(self.path)
         if url.path.startswith('/api/'):
             token = self.headers.get('X-App-Token') or parse_qs(url.query).get('token', [''])[0]
@@ -228,9 +262,11 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch(self):
         try:
             path, query = self.check_request()
+            if self.command == 'GET' and path == '/health':
+                return self.json_response(dict(service='key-based-compare', status='ready', pid=os.getpid()))
             if self.command == 'GET' and path in ('/', '/app.js', '/style.css', '/assets/transunion-logo.svg'):
                 target = BASE / 'web' / ('index.html' if path == '/' else path[1:])
-                data = target.read_bytes().replace(b'__APP_TOKEN__', self.app.token.encode())
+                data = target.read_bytes().replace(b'__APP_TOKEN__', self.app.token.encode()).replace(b'__WORKSPACE_MODE__', b'team' if self.server.shared else b'local').replace(b'__MAX_SORT_MB__', str(self.server.max_sort_mb).encode())
                 self.send_response(200)
                 self.send_header('Content-Type', mimetypes.guess_type(target)[0] + '; charset=utf-8')
                 self.send_header('Content-Length', str(len(data)))
@@ -242,11 +278,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == '/api/json-compare' and self.command == 'POST':
                 config = self.body(64 * 1024 * 1024)
-                result = self.app.pool.submit(compare_json, config.get('left'), config.get('right'), config.get('default_order', 'ordered'), config.get('rules', [])).result()
-                return self.json_response(result)
+                if not self.app.json_lock.acquire(blocking=False):
+                    return self.json_response({'error': 'Another JSON comparison is running. Try again shortly.'}, 429)
+                try:
+                    result = compare_json(config.get('left'), config.get('right'), config.get('default_order', 'ordered'), config.get('rules', []), True)
+                    return self.json_response(result)
+                finally:
+                    self.app.json_lock.release()
             if path == '/api/key-containers' and self.command in ('GET', 'POST'):
                 with self.app.lock:
-                    target = self.app.root / 'key-containers.json'
+                    target = self.container_path()
                     items = json.loads(target.read_text()) if target.exists() else []
                     if self.command == 'POST':
                         data = self.body()
@@ -265,7 +306,7 @@ class Handler(BaseHTTPRequestHandler):
                         atomic_write_text(target, json.dumps(items))
                     return self.json_response({'containers': items})
             if self.command == 'POST' and path == '/api/jobs':
-                return self.json_response(self.app.create(self.body()), 201)
+                return self.json_response(self.app.create(self.body(), self.workspace), 201)
             if self.command == 'GET' and path == '/api/jobs':
                 offset = max(0, int(query.get('offset', ['0'])[0]))
                 records = []
@@ -273,6 +314,8 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         item = self.app.load(entry.parent.name)
                     except (ValueError, OSError):
+                        continue
+                    if self.server.shared and item.get('owner') != self.workspace:
                         continue
                     summary = item.get('summary', {})
                     records.append(dict(id=item['id'], created=item['created'], state=item['state'],
@@ -285,8 +328,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({'error': 'Not found'}, 404)
             identity, action = match.groups()
             job = self.app.load(identity)
+            if self.server.shared and job.get('owner') != self.workspace:
+                return self.json_response({'error': 'Comparison not found in this browser workspace'}, 404)
             directory = self.app.directory(identity)
             if self.command == 'GET' and action is None:
+                if 'source_headers' not in job and job['state'] in ('ready', 'queued', 'running', 'complete'):
+                    job['source_headers'] = {side: header(directory / f'{side}.csv', job['delimiter'], job['encoding']) for side in ('left', 'right')}
+                    job.setdefault('column_headers', job['source_headers'])
                 progress = directory / 'progress.json'
                 if progress.exists():
                     job['progress'] = json.loads(progress.read_text())
@@ -313,7 +361,8 @@ class Handler(BaseHTTPRequestHandler):
                 rows, size = [], 0
                 with (directory / f'{side}.csv').open(encoding=job['encoding'], newline='') as source:
                     reader = csv.reader(source, delimiter=job['delimiter'], strict=True)
-                    names = normalize_headers(next(reader, None))
+                    original_names = normalize_headers(next(reader, None))
+                    names = job.get('column_headers', {}).get(side, original_names)
                     if start >= len(names):
                         raise ValueError('Invalid column page')
                     for row in itertools.islice(reader, limit):
@@ -327,6 +376,27 @@ class Handler(BaseHTTPRequestHandler):
                         rows.append(values)
                 return self.json_response(dict(headers=names[start:start+20], rows=rows, requested_rows=limit,
                     total_columns=len(names), column_offset=start, limited=len(rows)<limit))
+            if self.command == 'POST' and action == 'headers':
+                config = self.body()
+                with self.app.lock:
+                    job = self.app.load(identity)
+                    if job['state'] != 'ready':
+                        raise ValueError('Column headers are locked after comparison starts')
+                    source = job.get('source_headers') or {side: header(directory / f'{side}.csv', job['delimiter'], job['encoding']) for side in ('left', 'right')}
+                    layout = config.get('column_headers')
+                    if layout is None:
+                        raise ValueError('Column headers are required')
+                    aligned, changes = align_headers(source, layout)
+                    # Preserve existing scope selections by their left-file position.
+                    rename = dict(zip(job['columns'], aligned['left']))
+                    draft = job.get('draft', {})
+                    for key in ('keys', 'ignore_columns'):
+                        draft[key] = [rename.get(n,n) for n in (draft.get(key) or [])]
+                    draft['value_overrides'] = [dict(rule, column=rename.get(rule['column'],rule['column'])) for rule in (draft.get('value_overrides') or [])]
+                    job.update(source_headers=source, column_headers=layout, columns=aligned['left'],
+                               header_layout_changes=changes, headers_reviewed=True, draft=draft)
+                    self.app.save(job)
+                return self.json_response(job)
             if self.command == 'POST' and action == 'config':
                 config = self.body()
                 with self.app.lock:
@@ -351,6 +421,8 @@ class Handler(BaseHTTPRequestHandler):
                     current = target.stat().st_size if target.exists() else 0
                     if not 0 < size <= CHUNK or offset != current or current + size > job['files'][side]['size']:
                         raise ValueError(f'Invalid upload chunk. Expected offset {current}.')
+                    if shutil.disk_usage(directory).free < size + 128 * 1024 * 1024:
+                        raise ValueError('Server disk space is low. Free space before resuming this upload.')
                     self.connection.settimeout(120)
                     with target.open('ab') as stream:
                         remaining = size
@@ -390,11 +462,9 @@ class Handler(BaseHTTPRequestHandler):
                         job['state'] = 'selecting_sheets'
                         self.app.save(job)
                         return self.json_response(job)
-                    if set(columns['left']) != set(columns['right']):
-                        raise ValueError('Column names differ between files. Both files must have the same set of columns.')
                     for side in ('left', 'right'):
                         job['files'][side]['complete'] = True
-                    job.update(state='ready', columns=columns['left'])
+                    job.update(state='ready', source_headers=columns, column_headers=columns, headers_reviewed=False, columns=columns['left'])
                     self.app.save(job)
                 return self.json_response(job)
             if self.command == 'POST' and action == 'select-sheets':
@@ -420,12 +490,16 @@ class Handler(BaseHTTPRequestHandler):
                     job = self.app.load(identity)
                     if job['state'] != 'ready':
                         raise ValueError('Comparison is not ready to start')
+                    source = job.get('source_headers') or {side: header(directory / f'{side}.csv', job['delimiter'], job['encoding']) for side in ('left', 'right')}
+                    align_headers(source, job.get('column_headers'))
                     keys = config.get('keys', [])
                     if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys) or len(set(keys)) != len(keys) or any(k not in job['columns'] for k in keys):
                         raise ValueError('Select at least one valid, unique key column')
                     memory = int(config.get('memory_mb', 4096))
                     if memory not in (64, 128, 256, 512, 1024, 2048, 4096, 8192):
                         raise ValueError('Invalid memory setting')
+                    if memory > self.server.max_sort_mb:
+                        raise ValueError(f'The server limits each comparison to {self.server.max_sort_mb} MB sort memory')
                     sort_workers = config.get('sort_workers', 2)
                     if type(sort_workers) is not int or sort_workers not in (1, 2):
                         raise ValueError('Choose one or two sort workers')
@@ -433,7 +507,7 @@ class Handler(BaseHTTPRequestHandler):
                     ids = config.get('ignore_container_ids', [])
                     if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
                         raise ValueError('Select valid ignore key containers')
-                    library = self.app.root / 'key-containers.json'
+                    library = self.container_path()
                     available = {item['id']: item for item in json.loads(library.read_text())} if library.exists() else {}
                     if any(i not in available for i in ids):
                         raise ValueError('An ignore key container no longer exists')
@@ -519,27 +593,78 @@ class Handler(BaseHTTPRequestHandler):
     do_PUT = dispatch
 
 
-def make_server(root, port=8765):
-    server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
-    server.app = Application(root)
+def make_server(root, port=8765, host='127.0.0.1', public_url=None, max_jobs=1, max_sort_mb=8192):
+    if not 1 <= max_jobs <= 5:
+        raise ValueError('Concurrent comparisons must be between 1 and 5')
+    if max_sort_mb not in (64,128,256,512,1024,2048,4096,8192):
+        raise ValueError('Invalid server sort memory limit')
+    if public_url:
+        parsed = urlsplit(public_url)
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
+            raise ValueError('Public URL must be an http(s) origin, without a path or credentials')
+        public_url = public_url.rstrip('/')
+    if host not in ('127.0.0.1', 'localhost') and not public_url:
+        raise ValueError('Network binding requires --public-url, for example http://server-name:8765')
+    server = ThreadingHTTPServer((host, port), Handler)
+    server.shared = public_url is not None
+    server.public_url = public_url
+    server.max_sort_mb = max_sort_mb
+    server.app = Application(root, max_jobs)
     return server
+
+
+def lock_data_directory(root):
+    """One server owns a data folder; independent workers do not take this lock."""
+    root = Path(root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    handle = (root / '.server.lock').open('a+b')
+    try:
+        if os.name == 'nt':
+            import msvcrt
+            if handle.tell() == 0:
+                handle.write(b'0'); handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        raise ValueError('Another server is already using this data directory')
+    return handle
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--public-url', help='Team URL, such as http://compare.internal:8765; enables separate browser workspaces without login')
+    parser.add_argument('--max-jobs', type=int, default=1, help='Maximum simultaneous comparisons/imports/exports; other jobs queue')
+    parser.add_argument('--max-sort-mb', type=int, default=4096, help='Maximum sort budget for each comparison')
     parser.add_argument('--data-dir', default=str(BASE / 'data'), help='Upload, scratch and report storage; use a fast SSD')
     parser.add_argument('--open', action='store_true', help='Open the UI in your default browser')
     args = parser.parse_args()
-    server = make_server(args.data_dir, args.port)
-    print(f'CSV Compare is ready at http://127.0.0.1:{server.server_address[1]}', flush=True)
+    data_lock = lock_data_directory(args.data_dir)
+    server = make_server(args.data_dir, args.port, args.host, args.public_url, args.max_jobs, args.max_sort_mb)
+    url = args.public_url or f'http://127.0.0.1:{server.server_address[1]}'
+    print(f'CSV Compare is ready at {url}', flush=True)
     print(f'Data directory: {server.app.root}', flush=True)
+    print(f'Concurrent heavy jobs: {args.max_jobs}; per-job sort budget limit: {args.max_sort_mb} MB', flush=True)
+    if server.shared:
+        print('Team mode: no login; separate browser workspaces. Keep access on a trusted internal network.', flush=True)
     if args.open:
-        webbrowser.open(f'http://127.0.0.1:{server.server_address[1]}')
+        webbrowser.open(url)
+    stopping = threading.Event()
+    def stop(signum, frame):
+        if not stopping.is_set():
+            stopping.set()
+            print('Stopping new requests; finishing queued and active work before exit…', flush=True)
+            threading.Thread(target=server.shutdown, daemon=True).start()
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
     try:
         server.serve_forever()
-    except KeyboardInterrupt:
-        print('\nFinishing active work before shutdown…', flush=True)
     finally:
         server.server_close()
         server.app.pool.shutdown(wait=True)
+        data_lock.close()

@@ -1,6 +1,8 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="app-token"]').content;
+const maxSortMb=Number(document.querySelector('meta[name="max-sort-mb"]').content)||4096;
+for(const option of $('memory').options)option.disabled=Number(option.value)>maxSortMb;
 const files = {left:null,right:null};
 const selected = new Set();
 const ignoredColumns = new Set();
@@ -12,8 +14,8 @@ let overrideRules=[], currentView='uploadPanel', hydratedId=null, historyOffset=
 let logCursor=0, logText='', logJobId=null;
 let viewingHistoryJob=false;
 let keyContainers=[], selectedContainers=new Set();
-const phaseLabels=['Files','Keys & scope','Value overrides','File preview','Pipeline & logs','Results'];
-const views={uploadPanel:'navFiles',keysPanel:'navScope',overridesPanel:'navOverrides',sourcePanel:'navPreview',runningPanel:'navPipeline',results:'navResults',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson'};
+const phaseLabels=['Files','Column headers','Keys & scope','Value overrides','File preview','Pipeline & logs','Results'];
+const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',sourcePanel:'navPreview',runningPanel:'navPipeline',results:'navResults',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs'};
 const number = value => Number(value).toLocaleString();
 const bytes = value => value >= 1024**3 ? `${(value / 1024**3).toFixed(2)} GB` : value >= 1024**2 ? `${(value / 1024**2).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
 function showError(error) { $('error').textContent = error.message || String(error); $('error').hidden = false; }
@@ -32,10 +34,12 @@ function download(name) {
 function setStep() { /* Navigation state is shown in the sidebar. */ }
 function syncNavigation(){
   const ready=job?.state==='ready';
-  $('navScope').disabled=!ready||uploading;
+  $('navHeaders').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
+  $('navScope').disabled=!ready||uploading||job.headers_reviewed===false;
   $('navOverrides').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
   $('navPreview').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
   $('navPipeline').disabled=!job||!['queued','running','complete','error'].includes(job.state);
+  if(ready&&job.headers_reviewed===false){$('navOverrides').disabled=$('navPreview').disabled=true;}
   $('navResults').disabled=job?.state!=='complete';
   $('navJson').disabled=$('navContainers').disabled=$('navHistory').disabled=$('navNew').disabled=false;
   $('reset').disabled=uploading;
@@ -47,15 +51,17 @@ function panel(name) {
   $('sheetPanel').hidden=name!=='uploadPanel'||!['selecting_sheets','preparing'].includes(job?.state);
   $('reset').hidden=!job;
   const history=currentView==='historyPanel';
-  const library=['containersPanel','jsonPanel'].includes(currentView);
+  const library=['containersPanel','jsonPanel','docsPanel'].includes(currentView);
   $('comparisonFlow').hidden=history||library;
   $('navNew').classList.toggle('active',!history&&!library&&!viewingHistoryJob);
   $('navHistory').classList.toggle('active',history||(!library&&viewingHistoryJob));
+  for(const id of ['navNew','navJson','navContainers','navHistory','navDocs']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
+  if(typeof closeSidebarDrawer==='function')closeSidebarDrawer();
   $('flowTitle').textContent=viewingHistoryJob?'Saved comparison':'New comparison';
   const phase=Object.keys(views).indexOf(name);
-  if(!history&&!library)$('phaseLabel').textContent=`Step ${phase+1} of 6 · ${phaseLabels[phase]}`;
+  if(!history&&!library)$('phaseLabel').textContent=`Step ${phase+1} of 7 · ${phaseLabels[phase]}`;
   for(const [id,control] of Object.entries(views)){
-    if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
+    if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
   }
   syncNavigation();
   if(name==='uploadPanel'&&job&&job.state!=='uploading'){
@@ -69,8 +75,11 @@ function panel(name) {
 function configuration(){return {keys:[...selected],memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules};}
 async function saveDraft(){if(job?.state==='ready')await api(endpoint('/config'),configuration());}
 async function goView(name){
-  if(uploading&&name!=='uploadPanel'&&!['jsonPanel','containersPanel','historyPanel'].includes(name))return;
-  clearError();await saveDraft();panel(name);
+  if(uploading&&name!=='uploadPanel'&&!['jsonPanel','containersPanel','historyPanel','docsPanel'].includes(name))return;
+  clearError();await saveDraft();
+  if(headerDirty&&headerDraftJob===job?.id&&['keysPanel','overridesPanel','sourcePanel'].includes(name))await applyHeaders();
+  panel(name);
+  if(name==='headersPanel')renderHeaders();
   if(name==='keysPanel'){renderKeys();renderIgnoredColumns();await loadContainers();}
   if(name==='containersPanel')await loadContainers();
   if(name==='overridesPanel'){renderOverrideColumns();renderOverrides();}
@@ -148,7 +157,7 @@ $('upload').addEventListener('click', async () => {
     if(pauseUploadRequested)return;
     $('uploadText').textContent = 'Checking column names…';
     job = await api(endpoint('/finalize'),{});
-    if(currentView==='uploadPanel')currentView=job.state==='ready'?'keysPanel':'uploadPanel';await refresh();if(currentView==='uploadPanel'&&job.state==='selecting_sheets')$('sheetPanel').scrollIntoView({behavior:'smooth',block:'start'});
+    if(currentView==='uploadPanel')currentView=job.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel';await refresh();if(currentView==='uploadPanel'&&job.state==='selecting_sheets')$('sheetPanel').scrollIntoView({behavior:'smooth',block:'start'});
   } catch(error) {
     showError(error);
     if(job) {try {job=await api(endpoint());} catch { /* Keep current job to allow retry. */ }}
@@ -162,7 +171,7 @@ $('upload').addEventListener('click', async () => {
   }
 });
 function renderKeys() {
-  const changes=job.header_changes||[];$('headerChanges').hidden=!changes.length;$('headerChangesTitle').textContent=`${changes.length} header names normalized — view ${changes.length>200?'first 200 changes':'changes'}`;
+  const changes=[...(job.header_changes||[]),...(job.header_layout_changes||[])];$('headerChanges').hidden=!changes.length;$('headerChangesTitle').textContent=`${changes.length} header names normalized — view ${changes.length>200?'first 200 changes':'changes'}`;
   if(changes.length&&$('headerChangesTable').dataset.job!==job.id){drawTable('headerChangesTable',['File','Column number','Original header','Comparison header'],changes.slice(0,200).map(c=>[c.side,c.column,c.original||'(empty)',c.normalized]));$('headerChangesTable').dataset.job=job.id;}
   const matches=job.columns.filter(name=>name.toLowerCase().includes($('keySearch').value.toLowerCase()));
   keyPage=Math.min(keyPage,Math.max(0,Math.ceil(matches.length/pageSize)-1));
@@ -259,6 +268,55 @@ for(const kind of ['excel','html']) $(kind).addEventListener('click',async()=>{
   $(kind).disabled=true;
   try{await api(endpoint(`/export/${kind}`),{});await refresh();}catch(error){showError(error);$(kind).disabled=false;}
 });
+let headerDraft=null, headerDraftJob=null, headerDirty=false, headerPage=0;
+function headerSources(){return job.source_headers||{left:job.columns,right:job.columns};}
+function renderHeaders(){
+  if(headerDraftJob!==job.id){headerDraft=structuredClone(job.column_headers||headerSources());headerDraftJob=job.id;headerDirty=false;headerPage=0;}
+  const search=$('headerSearch').value.toLowerCase();
+  const source=headerSources();
+  const matches=Object.fromEntries(['left','right'].map(side=>[side,source[side].map((name,i)=>i).filter(i=>(source[side][i]+' '+headerDraft[side][i]).toLowerCase().includes(search))]));
+  const total=Math.max(matches.left.length,matches.right.length), size=50;
+  headerPage=Math.min(headerPage,Math.max(0,Math.ceil(total/size)-1));
+  for(const side of ['left','right']){
+    const title=side==='left'?'Left':'Right', list=$('header'+title+'List');list.replaceChildren();
+    $('header'+title+'Title').textContent=`File ${side==='left'?1:2} · ${job.files[side].name} · ${source[side].length} columns`;
+    for(const index of matches[side].slice(headerPage*size,(headerPage+1)*size)){
+      const label=document.createElement('label');label.className='header-edit';
+      const original=document.createElement('span');original.textContent=`${index+1}. ${source[side][index]}`;
+      const input=document.createElement('input');input.value=headerDraft[side][index];input.disabled=job.state!=='ready';input.dataset.side=side;input.dataset.index=index;
+      input.setAttribute('aria-label',`File ${side==='left'?1:2} column ${index+1} comparison header`);
+      input.addEventListener('input',()=>{headerDraft[side][index]=input.value;headerDirty=true;updateHeaderStatus();});
+      label.append(original,input);list.append(label);
+    }
+  }
+  $('headerRange').textContent=total?`${headerPage*size+1}–${Math.min(total,(headerPage+1)*size)} of ${total} positions (filtered separately per file)`:'No matching headers';
+  $('headerPrev').disabled=headerPage===0;$('headerNext').disabled=(headerPage+1)*size>=total;
+  $('headerContinue').hidden=$('headerReset').hidden=job.state!=='ready';updateHeaderStatus();
+}
+function updateHeaderStatus(){
+  // Server casefold validation is authoritative for all Unicode headers.
+  const maps={left:new Map(),right:new Map()};let invalid=0;
+  for(const side of ['left','right'])for(const name of headerDraft[side]){const key=name.toLowerCase();maps[side].set(key,(maps[side].get(key)||0)+1);if(!name.trim())invalid++;}
+  const missing={left:headerDraft.left.filter(n=>!maps.right.has(n.toLowerCase())),right:headerDraft.right.filter(n=>!maps.left.has(n.toLowerCase()))};
+  const duplicate=Object.values(maps).reduce((n,m)=>n+[...m.values()].filter(v=>v>1).length,0);
+  $('headerLayoutStatus').textContent=invalid||duplicate?`${invalid} empty names · ${duplicate} duplicate names. Every comparison header must be unique within its file, ignoring case.`:missing.left.length||missing.right.length?`Needs alignment · File 1 only: ${missing.left.slice(0,8).join(', ')||'none'}${missing.left.length>8?' …':''} · File 2 only: ${missing.right.slice(0,8).join(', ')||'none'}${missing.right.length>8?' …':''}. Rename these headers to align the files.`:`All ${headerDraft.left.length} columns match ignoring case. ${headerDirty?'Apply your edits to continue.':'Ready to continue.'}`;
+  for(const input of $('headersPanel').querySelectorAll('input[data-side]')){const side=input.dataset.side,key=input.value.toLowerCase();input.classList.toggle('header-unmatched',!maps[side==='left'?'right':'left'].has(key)||maps[side].get(key)>1||!input.value.trim());}
+}
+async function applyHeaders(){
+  await saveDraft();
+  job=await api(endpoint('/headers'),{column_headers:headerDraft});
+  headerDirty=false;hydratedId=null;hydrate();syncNavigation();
+  $('headerChangesTable').dataset.job='';
+}
+$('headerSearch').addEventListener('input',()=>{headerPage=0;renderHeaders();});
+$('headerPrev').addEventListener('click',()=>{headerPage--;renderHeaders();});
+$('headerNext').addEventListener('click',()=>{headerPage++;renderHeaders();});
+$('headerReset').addEventListener('click',()=>{headerDraft=structuredClone(headerSources());headerDirty=true;renderHeaders();});
+$('headerContinue').addEventListener('click',async()=>{
+  clearError();$('headerContinue').disabled=true;
+  try{await applyHeaders();panel('keysPanel');renderKeys();renderIgnoredColumns();await loadContainers();}
+  catch(error){showError(error);}finally{$('headerContinue').disabled=false;}
+});
 let renderedId=null;
 function hydrate(){
   if(hydratedId===job.id)return;
@@ -271,6 +329,7 @@ function hydrate(){
   overrideRules=Array.isArray(draft.value_overrides)?draft.value_overrides:[];
   $('ignoreKeys').value=typeof draft.ignore_keys==='string'?draft.ignore_keys:'';
   $('memory').value=[64,128,256,512,1024,2048,4096,8192].includes(draft.memory_mb)?String(draft.memory_mb):'4096';
+  if(Number($('memory').value)>maxSortMb)$('memory').value=String(maxSortMb);
   $('sortWorkers').value=[1,2].includes(draft.sort_workers)?String(draft.sort_workers):job.state==='ready'?'2':'1';
   keyPage=ignorePage=sourceColumnOffset=0;hydratedId=job.id;
 }
@@ -287,7 +346,9 @@ async function refresh() {
     if(job.state==='preparing')pollTimer=setTimeout(()=>refresh().catch(pollError),1500);
   } else if(job.state==='ready'){
     if(previousState==='preparing')await loadContainers();
-    if(currentView==='uploadPanel'||currentView==='keysPanel'){panel('keysPanel');renderKeys();renderIgnoredColumns();}
+    if(currentView==='uploadPanel')panel('headersPanel');
+    if(currentView==='headersPanel'){panel('headersPanel');renderHeaders();}
+    if(currentView==='keysPanel'){panel('keysPanel');renderKeys();renderIgnoredColumns();}
     $('diskInfo').textContent=`${bytes(job.free_disk_bytes)} free disk space. Allow room for scratch files and reports.`;
   } else if(['running','queued'].includes(job.state)){
     if(currentView==='runningPanel')await renderPipeline();
@@ -300,8 +361,8 @@ async function refresh() {
     } else if(currentView==='runningPanel')await renderPipeline();
     if(Object.values(job.exports).some(value=>['queued','running'].includes(value.state)))pollTimer=setTimeout(()=>refresh().catch(pollError),1500);
   } else if(job.state==='error'){
-    if(!['historyPanel','containersPanel','jsonPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);}
-  } else if(!['historyPanel','containersPanel','jsonPanel'].includes(currentView)){
+    if(!['historyPanel','containersPanel','jsonPanel','docsPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);}
+  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel'].includes(currentView)){
     panel('uploadPanel');$('delimiter').disabled=$('encoding').disabled=true;$('delimiter').value=job.delimiter==='\t'?'tab':job.delimiter;$('encoding').value=job.encoding;
   }
 }
@@ -311,7 +372,7 @@ $('reset').addEventListener('click',()=>{localStorage.removeItem('keywise-job');
   const id=localStorage.getItem('keywise-job');
   if(id&&/^[a-f0-9]{32}$/.test(id)){
     job={id};
-    try{job=await api(endpoint());currentView=job.state==='complete'?'results':['running','queued','error'].includes(job.state)?'runningPanel':job.state==='ready'?'keysPanel':'uploadPanel';panel(currentView);await refresh();if(job.state==='uploading')showError(`Upload not finished. Reselect ${job.files.left.name} and ${job.files.right.name} to resume, or start a new comparison.`);}
+    try{job=await api(endpoint());currentView=job.state==='complete'?'results':['running','queued','error'].includes(job.state)?'runningPanel':job.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel';panel(currentView);await refresh();if(job.state==='uploading')showError(`Upload not finished. Reselect ${job.files.left.name} and ${job.files.right.name} to resume, or start a new comparison.`);}
     catch(error){showError(error);$('reset').hidden=false;}
   }
 })();
@@ -369,7 +430,7 @@ async function renderPipeline(){
   const stages=[['validate','Validate configuration'],...(job.sort_workers===2?[['sort','Read & sort both files']]:[['left','Read & sort file 1'],['right','Read & sort file 2']]),['compare','Compare matching keys'],['reports','Write results'],['complete','Complete']];
   const stage=job.state==='complete'?'complete':job.progress?.stage||'validate';const index=stages.findIndex(([id])=>id===stage);
   $('phase').textContent=job.state==='complete'?'Comparison complete':job.state==='error'?'Comparison failed':job.state==='queued'?'Queued':job.progress?.phase||'Starting worker';
-  $('processed').textContent=job.state==='error'?job.error:job.progress?.rows!==undefined?`${number(job.progress.rows)} rows processed in the current phase`:'Stages update as the worker processes the files.';
+  $('processed').textContent=job.state==='error'?job.error:job.progress?.rows!==undefined?`${number(job.progress.rows)} rows processed in the current phase`:job.state==='queued'?'Waiting for a server worker. Your files and results are kept in your own job.':'Stages update as the worker processes the files.';
   $('pipelineState').textContent=job.state;$('pipelineStages').replaceChildren();
   stages.forEach(([id,label],i)=>{const item=document.createElement('li');const state=job.state==='queued'?'pending':job.state==='complete'||i<index?'done':i===index?(job.state==='error'?'failed':'active'):'pending';item.className=state;item.textContent=`${state==='done'?'✓':state==='failed'?'!':i+1}  ${label}`;$('pipelineStages').append(item);});
   if(logJobId!==job.id){logJobId=job.id;logCursor=0;logText='';}
@@ -379,7 +440,7 @@ async function renderPipeline(){
   if(log.text.length>=60000)pollTimer=setTimeout(()=>refresh().catch(pollError),300);
 }
 async function loadHistory(){
-  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel'].includes(currentView))return;
+  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel'].includes(currentView))return;
   const table=$('historyTable');table.replaceChildren();
   const header=document.createElement('tr');for(const label of ['Created','Files','Status','Changed cells','Action']){const th=document.createElement('th');th.textContent=label;header.append(th);}const head=document.createElement('thead');head.append(header);table.append(head);
   const body=document.createElement('tbody');
@@ -394,7 +455,7 @@ async function openJob(id){
   $('sourceLeftTable').replaceChildren();$('sourceRightTable').replaceChildren();
   $('sourceLeftTitle').textContent='File 1';$('sourceRightTitle').textContent='File 2';
   $('sourceStatus').textContent='Choose a row limit, then load this comparison’s source preview.';
-  panel(job.state==='complete'?'results':['queued','running','error'].includes(job.state)?'runningPanel':job.state==='ready'?'keysPanel':'uploadPanel');
+  panel(job.state==='complete'?'results':['queued','running','error'].includes(job.state)?'runningPanel':job.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel');
   await refresh();
   if(job.state==='uploading')showError(`Reselect ${job.files.left.name} and ${job.files.right.name} to resume this upload.`);
 }
@@ -402,22 +463,64 @@ $('historyRefresh').addEventListener('click',()=>loadHistory().catch(showError))
 $('historyPrev').addEventListener('click',()=>{historyOffset=Math.max(0,historyOffset-25);loadHistory().catch(showError);});
 $('historyNext').addEventListener('click',()=>{historyOffset+=25;loadHistory().catch(showError);});
 
-function applySidebar(collapsed){
-  document.body.classList.toggle('sidebar-collapsed',collapsed);
-  $('sidebarToggle').textContent=collapsed?'›':'‹';
-  $('sidebarToggle').setAttribute('aria-expanded',String(!collapsed));
-  $('sidebarToggle').setAttribute('aria-label',collapsed?'Expand sidebar':'Collapse sidebar');
-  $('sidebarToggle').title=collapsed?'Expand sidebar':'Collapse sidebar';
+const sidebarMedia=matchMedia('(max-width: 800px)');
+let desktopSidebarCollapsed=localStorage.getItem('tu-sidebar-collapsed')==='true';
+function hideSidebarTip(){
+  $('sidebarTooltip').hidden=true;
+  document.querySelectorAll('[aria-describedby="sidebarTooltip"]').forEach(el=>el.removeAttribute('aria-describedby'));
 }
-applySidebar(localStorage.getItem('tu-sidebar-collapsed')==='true');
+function applySidebar(collapsed){
+  const drawer=sidebarMedia.matches&&!collapsed;
+  document.body.classList.toggle('sidebar-collapsed',collapsed);
+  document.body.classList.toggle('sidebar-drawer-open',drawer);
+  $('sidebarToggle').setAttribute('aria-expanded',String(!collapsed));
+  $('sidebarToggle').setAttribute('aria-label',collapsed?'Expand sidebar':drawer?'Close navigation':'Collapse sidebar');
+  document.querySelector('.toggle-label').textContent=drawer?'Close navigation':'Collapse sidebar';
+  $('sidebarBackdrop').hidden=!drawer;
+  $('mainWorkspace').inert=drawer;
+  if(drawer){$('workspaceSidebar').setAttribute('role','dialog');$('workspaceSidebar').setAttribute('aria-modal','true');}
+  else{$('workspaceSidebar').removeAttribute('role');$('workspaceSidebar').removeAttribute('aria-modal');}
+  hideSidebarTip();
+}
+function closeSidebarDrawer(){
+  if(document.body.classList.contains('sidebar-drawer-open')){applySidebar(true);$('sidebarToggle').focus();}
+}
+applySidebar(sidebarMedia.matches||desktopSidebarCollapsed);
 $('sidebarToggle').addEventListener('click',()=>{
   const collapsed=!document.body.classList.contains('sidebar-collapsed');
-  applySidebar(collapsed);localStorage.setItem('tu-sidebar-collapsed',String(collapsed));
+  if(!sidebarMedia.matches){desktopSidebarCollapsed=collapsed;localStorage.setItem('tu-sidebar-collapsed',String(collapsed));}
+  applySidebar(collapsed);
 });
+sidebarMedia.addEventListener('change',()=>applySidebar(sidebarMedia.matches||desktopSidebarCollapsed));
+$('sidebarBackdrop').addEventListener('click',closeSidebarDrawer);
+document.addEventListener('keydown',event=>{
+  if(!document.body.classList.contains('sidebar-drawer-open'))return;
+  if(event.key==='Escape'){event.preventDefault();closeSidebarDrawer();}
+  if(event.key==='Tab'){
+    const controls=[...$('workspaceSidebar').querySelectorAll('a,button:not(:disabled)')].filter(el=>el.getClientRects().length);
+    const first=controls[0],last=controls[controls.length-1];
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+  }
+});
+for(const button of document.querySelectorAll('.sidebar [data-tip]')){
+  function showTip(){
+    if(!document.body.classList.contains('sidebar-collapsed'))return;
+    const box=button.getBoundingClientRect(),tip=$('sidebarTooltip');
+    tip.textContent=button.dataset.tip;tip.hidden=false;
+    tip.style.left=(box.right+12)+'px';tip.style.top=Math.max(8,Math.min(innerHeight-tip.offsetHeight-8,box.top+(box.height-tip.offsetHeight)/2))+'px';
+    button.setAttribute('aria-describedby','sidebarTooltip');
+  }
+  button.addEventListener('mouseenter',showTip);button.addEventListener('focus',showTip);
+  button.addEventListener('mouseleave',hideSidebarTip);button.addEventListener('blur',hideSidebarTip);
+  button.addEventListener('click',hideSidebarTip);
+}
+$('workspaceSidebar').addEventListener('scroll',hideSidebarTip);
+window.addEventListener('resize',hideSidebarTip);
 $('navNew').addEventListener('click',async()=>{
   try{
     if(uploading){panel('uploadPanel');return;}
-    if(['containersPanel','jsonPanel'].includes(currentView)&&!viewingHistoryJob){await goView(job?.state==='ready'?'keysPanel':job?.state==='complete'?'results':job&&['running','queued','error'].includes(job.state)?'runningPanel':'uploadPanel');return;}
+    if(['containersPanel','jsonPanel','docsPanel'].includes(currentView)&&!viewingHistoryJob){await goView(job?.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):job?.state==='complete'?'results':job&&['running','queued','error'].includes(job.state)?'runningPanel':'uploadPanel');return;}
     if(currentView==='historyPanel'||viewingHistoryJob){await saveDraft();localStorage.removeItem('keywise-job');location.reload();}
   }catch(error){showError(error);}
 });
@@ -491,22 +594,82 @@ $('jsonCompare').addEventListener('click',async()=>{
     $('jsonResult').hidden=false;$('jsonResultTitle').textContent=jsonResult.equal?'JSON documents match':'JSON differences found';
     $('jsonCounts').textContent=`${jsonResult.counts.changed} changed · ${jsonResult.counts.added} added · ${jsonResult.counts.removed} removed`;
     $('jsonWarnings').textContent=jsonResult.warnings.join(' · ');
-    drawTable('jsonDiffTable',['Difference','File 1 path','File 2 path','File 1 value','File 2 value'],jsonResult.differences.slice(0,200).map(d=>[d.kind,d.left_path??'—',d.right_path??'—',d.left_value===null?'(missing)':d.left_value.slice(0,1000),d.right_value===null?'(missing)':d.right_value.slice(0,1000)]));
+    prepareJsonView();$('jsonResult').scrollIntoView({block:'start'});
     $('jsonStatus').textContent='Comparison complete. Source JSON is unchanged.';
   }catch(error){$('jsonStatus').textContent='Comparison failed.';showError(error);}finally{jsonBusy=false;controls.forEach(id=>$(id).disabled=false);$('jsonRuleField').disabled=$('jsonRuleMode').value!=='keyed';renderJsonRules();}
 });
 function saveJsonReport(content,type,name){const url=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 $('jsonDownload').addEventListener('click',()=>{if(jsonResult)saveJsonReport(JSON.stringify(jsonResult,null,2),'application/json','json-comparison.json');});
+let jsonViewRows=[], jsonViewPage=0, jsonDiffIndex=-1, jsonDiffRows=[];
+const jsonPageSize=200;
+function prepareJsonView(){
+  jsonViewPage=0;jsonDiffIndex=-1;jsonDiffRows=[];
+  for(let i=0;i<jsonResult.view.length;i++){const d=jsonResult.view[i].difference;if(d!==null&&jsonDiffRows[d]===undefined)jsonDiffRows[d]=i;}
+  filterJsonView();
+}
+function filterJsonView(){
+  const view=jsonResult.view;
+  if($('jsonChangesOnly').checked){
+    const keep=new Set();
+    for(let i=0;i<view.length;i++)if(view[i].kind!=='equal')for(let j=Math.max(0,i-2);j<=Math.min(view.length-1,i+2);j++)keep.add(j);
+    jsonViewRows=[...keep].sort((a,b)=>a-b);
+  }else jsonViewRows=Array.from({length:view.length},(_,i)=>i);
+  jsonViewPage=0;renderJsonView();
+}
+function jsonCodeCell(token,other,kind){
+  const cell=document.createElement('div');cell.className='json-code-cell'+(!token?' json-gap':'');
+  if(!token){cell.setAttribute('aria-label','No corresponding line');return cell;}
+  cell.title=token.path;
+  const line=document.createElement('span');line.className='json-line-number';line.textContent=token.line;
+  const code=document.createElement('code');const text=token.text.slice(0,2000);code.append('  '.repeat(token.depth));
+  if(kind==='changed'&&other&&text!==other.text){
+    const otherText=other.text;let start=0,end=0;
+    while(start<Math.min(text.length,otherText.length)&&text[start]===otherText[start])start++;
+    while(end<Math.min(text.length,otherText.length)-start&&text[text.length-1-end]===otherText[otherText.length-1-end])end++;
+    code.append(text.slice(0,start));const mark=document.createElement('mark');mark.textContent=text.slice(start,text.length-end);code.append(mark,text.slice(text.length-end));
+  }else code.append(text);
+  if(token.text.length>2000)code.append(' … [long line; full value in download]');
+  cell.append(line,code);return cell;
+}
+function renderJsonView(){
+  const total=jsonViewRows.length;jsonViewPage=Math.min(jsonViewPage,Math.max(0,Math.ceil(total/jsonPageSize)-1));
+  const fragment=document.createDocumentFragment();let previous=null;
+  for(const index of jsonViewRows.slice(jsonViewPage*jsonPageSize,(jsonViewPage+1)*jsonPageSize)){
+    if(previous!==null&&index>previous+1){const gap=document.createElement('div');gap.className='json-context-gap';gap.textContent=`${index-previous-1} unchanged aligned lines hidden`;fragment.append(gap);}
+    const item=jsonResult.view[index],row=document.createElement('div');row.className='json-code-row '+item.kind;row.dataset.row=index;
+    if(item.difference===jsonDiffIndex&&jsonDiffIndex>=0)row.classList.add('current-difference');
+    row.append(jsonCodeCell(item.left,item.right,item.kind),jsonCodeCell(item.right,item.left,item.kind));fragment.append(row);previous=index;
+  }
+  if(!total){const p=document.createElement('p');p.textContent='No differences. Uncheck the context filter to view both documents.';fragment.append(p);}
+  $('jsonCodeView').replaceChildren(fragment);$('jsonCodeView').scrollTop=0;
+  $('jsonLineRange').textContent=total?`Aligned lines ${jsonViewPage*jsonPageSize+1}–${Math.min(total,(jsonViewPage+1)*jsonPageSize)} of ${number(total)} · hover a line for its original path`:'No changed lines';
+  $('jsonPrevPage').disabled=jsonViewPage===0;$('jsonNextPage').disabled=(jsonViewPage+1)*jsonPageSize>=total;
+  $('jsonPrevDiff').disabled=$('jsonNextDiff').disabled=!jsonDiffRows.length;
+  $('jsonDiffPosition').textContent=jsonDiffRows.length?(jsonDiffIndex<0?`${number(jsonDiffRows.length)} differences`:`Difference ${jsonDiffIndex+1} of ${number(jsonDiffRows.length)}`):'Documents match';
+}
+function moveJsonDifference(direction){
+  if(!jsonDiffRows.length)return;
+  jsonDiffIndex=jsonDiffIndex<0?(direction>0?0:jsonDiffRows.length-1):(jsonDiffIndex+direction+jsonDiffRows.length)%jsonDiffRows.length;
+  const row=jsonDiffRows[jsonDiffIndex],position=jsonViewRows.indexOf(row);
+  jsonViewPage=Math.floor(position/jsonPageSize);renderJsonView();
+  const element=$('jsonCodeView').querySelector(`[data-row="${row}"]`);if(element)$('jsonCodeView').scrollTop=element.offsetTop-$('jsonCodeView').offsetTop;
+}
+$('jsonChangesOnly').addEventListener('change',()=>{if(jsonResult)filterJsonView();});
+$('jsonPrevDiff').addEventListener('click',()=>moveJsonDifference(-1));
+$('jsonNextDiff').addEventListener('click',()=>moveJsonDifference(1));
+$('jsonPrevPage').addEventListener('click',()=>{jsonViewPage--;renderJsonView();});
+$('jsonNextPage').addEventListener('click',()=>{jsonViewPage++;renderJsonView();});
 $('jsonHtml').addEventListener('click',()=>{
   if(!jsonResult)return;
-  const escape=value=>String(value??'(missing)').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const rows=jsonResult.differences.map(d=>'<tr>'+[d.kind,d.left_path,d.right_path,d.left_value,d.right_value].map(v=>'<td>'+escape(v)+'</td>').join('')+'</tr>').join('');
-  const html='<!doctype html><html lang="en"><meta charset="utf-8"><title>JSON comparison</title><style>body{font:15px system-ui;color:#004364;margin:32px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccdce3;padding:12px;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}th{background:#e6f6fa}pre{white-space:pre-wrap}</style><h1>JSON comparison</h1><p>'+escape($('jsonResultTitle').textContent)+' · '+escape($('jsonCounts').textContent)+'</p><h2>Array settings</h2><pre>'+escape(JSON.stringify({default_order:jsonResult.default_order,rules:jsonResult.rules,warnings:jsonResult.warnings},null,2))+'</pre><p>Paths use original array positions. Unordered blocks without matching fields are reported as removed/added. Duplicates remain significant.</p><table><tr><th>Difference</th><th>File 1 path</th><th>File 2 path</th><th>File 1 value</th><th>File 2 value</th></tr>'+rows+'</table></html>';
+  const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const cell=t=>'<pre>'+(t?'<small>'+t.line+'</small> '+escape('  '.repeat(t.depth)+t.text):'')+'</pre>';
+  const lines=jsonResult.view.map(row=>'<div class="row '+row.kind+'">'+cell(row.left)+cell(row.right)+'</div>').join('');
+  const html='<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>JSON comparison</title><style>body{font:15px system-ui;color:#004364;margin:24px}.row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}pre{margin:0;padding:4px 10px;border-right:1px solid #ccdce3;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 monospace}small{color:#647d8b}.changed{background:#fff1c1}.removed{background:#ffe6e4}.added{background:#e0f4e8}.settings{white-space:pre-wrap;margin-bottom:20px}.head{position:sticky;top:0;background:#004364;color:white;padding:12px}h1{font-size:24px}</style><h1>JSON comparison</h1><p>'+escape($('jsonResultTitle').textContent)+' · '+escape($('jsonCounts').textContent)+'</p><p>Yellow: changed. Red: removed. Green: added. Blocks are aligned by the selected array rules. Line numbers refer to pretty-printed original documents; source order and values are preserved in the original inputs.</p><details><summary>Array settings and warnings</summary><pre class="settings">'+escape(JSON.stringify({default_order:jsonResult.default_order,rules:jsonResult.rules,warnings:jsonResult.warnings},null,2))+'</pre></details><div class="row head"><strong>File 1 · Original</strong><strong>File 2 · Updated</strong></div>'+lines+'</html>';
   saveJsonReport(html,'text/html','json-comparison.html');
 });
 
 $('pauseUpload').addEventListener('click',()=>{pauseUploadRequested=true;$('pauseUpload').disabled=true;$('pauseUpload').textContent='Pausing after current chunk…';});
-$('returnUpload').addEventListener('click',()=>{goView(job?.state==='ready'?'keysPanel':'uploadPanel').catch(showError);});
+$('returnUpload').addEventListener('click',()=>{goView(job?.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel').catch(showError);});
 async function sendChunkRecoverable(side,blob,offset,update){
   for(let attempt=0;attempt<3;attempt++){
     try{return await sendChunk(side,blob,offset,update);}catch(error){
@@ -522,3 +685,23 @@ async function sendChunkRecoverable(side,blob,offset,update){
     }
   }
 }
+
+if(!job){$('navNew').classList.add('active');$('navNew').setAttribute('aria-current','page');}
+
+// Help stays available during uploads and comparison, without fetching data.
+const docsEntries=[...$('docsPanel').querySelectorAll('[data-doc-entry]')];
+const docsIndex=docsEntries.map(entry=>entry.textContent.toLowerCase());
+function filterDocs(){
+  const terms=$('docsSearch').value.trim().toLowerCase().split(/\s+/).filter(Boolean);let count=0;
+  docsEntries.forEach((entry,i)=>{
+    const match=terms.every(term=>docsIndex[i].includes(term));entry.hidden=!match;
+    if(entry.tagName==='DETAILS')entry.open=terms.length>0&&match;
+    if(match)count++;
+  });
+  $('docsSearchStatus').textContent=terms.length?`${count} matching topics`:'Search the guides and frequently asked questions.';
+  $('docsEmpty').hidden=count>0;
+  $('docs-faq').hidden=!docsEntries.some(entry=>entry.tagName==='DETAILS'&&!entry.hidden);
+  document.querySelector('.docs-topics').hidden=terms.length>0;
+}
+$('docsSearch').addEventListener('input',filterDocs);
+filterDocs();

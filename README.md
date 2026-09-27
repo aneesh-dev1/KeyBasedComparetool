@@ -1,5 +1,10 @@
 # TransUnion-themed CSV key comparison
 
+## On-premises team deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the Linux `nohup` launcher, five-browser
+workspace separation without login, resource limits, and rollout checks.
+
 ## Web UI
 
 On macOS, double-click **Start CSV Compare.command**. It uses the bundled Codex
@@ -28,10 +33,15 @@ Open **http://127.0.0.1:8765**. No third-party packages are required.
    each category. Download the full results using the report buttons.
 6. Use **Job history** in the sidebar to reopen previous results or unfinished uploads.
 
-The sidebar contains **New comparison**, **Ignore key containers**, and **Job history**. Files, Keys & scope,
-Value overrides, File preview, Pipeline & logs, and Results are phases within
-New comparison. Use the arrow at the top of the sidebar to collapse it to icons
-or expand it. Your choice is remembered after refreshing.
+The sidebar groups **New comparison** and **JSON comparison** under Compare,
+and **Ignore key containers** and **Job history** under Manage. Files, Column
+headers, Keys & scope, Value overrides, File preview, Pipeline & logs, and Results
+are phases within New comparison. The bottom **Collapse sidebar** control switches
+to a compact icon rail; hover or keyboard-focus an icon to see its label. Desktop
+collapse preferences are remembered after refreshing. On screens up to 800 px,
+the sidebar starts as an icon rail. Expanding opens a navigation drawer; selecting
+a destination, clicking outside, or pressing Escape closes it. Keyboard focus stays
+inside the drawer while it is open.
 
 **Excel workbook:** one `.xlsx` file with exactly one sheet per mismatched
 column. Ten mismatched columns produce ten mismatch sheets. Configured key exclusions add an **Ignored key containers** audit sheet.
@@ -456,3 +466,46 @@ To update: stop the running server, replace application source files from the
 new ZIP, retain the existing `data` directory, restart the Windows launcher,
 and refresh the browser. A failed upload can be resumed from Job history with
 the same original files. Do not run two servers against the same data folder.
+
+### Column headers step
+
+After CSV upload or Excel worksheet import, review **Column headers** before
+choosing keys. Rename any header in either file to align differently named
+columns, such as `AT02S` and `AT01S`. Header matching ignores case, so `AT01S`
+and `at01s` match automatically. Column order may differ. Results and key/scope
+lists use the spelling from file 1.
+
+The editor searches and pages through loaded header metadata (50 names per
+file per page). It does not read data rows or rewrite either uploaded file.
+Apply validates that every header is nonempty and unique ignoring case, and
+that the two files have the same set of comparison names. Files with different
+column counts still need matching schemas; this step renames columns and does
+not add or remove them. Existing keys, ignored columns, and value overrides
+follow renamed file 1 columns by position. Header layouts persist in job history
+and become read-only when comparison starts. Cell values and key values remain
+case-sensitive. Case-only duplicate CSV headers receive distinct numeric
+suffixes during initial normalization.
+
+### Side-by-side JSON results
+
+JSON results show aligned code panes with original pretty-printed line numbers,
+original paths on hover, and changed/added/removed highlighting. Next/previous
+difference controls navigate every reported change; a context filter hides
+unrelated equal lines. Matching honors preserve-order, ignore-order, and
+match-by-field array rules, including rules for nested arrays. Reordered blocks
+retain their original paths and line numbers. This is a comparison view, not a
+merge editor; it does not modify the input JSON.
+
+Only 200 aligned rows are rendered at a time to bound browser DOM work. Lines
+longer than 2,000 characters are shortened in the interactive preview; JSON and
+side-by-side HTML downloads contain full values. All existing input, nesting,
+node-count, and difference-count limits still apply. Number text is preserved
+by the server, including integers larger than JavaScript's exact numeric range.
+
+### Built-in Docs & FAQ
+
+Open **Docs & FAQ** under Help in the sidebar for six workflow guides and
+15 troubleshooting answers. Search across all topics; matching FAQ answers
+expand automatically. This page is bundled with the app, works without internet,
+and stays accessible during uploads and comparisons. Clear the search to restore
+all topics and use the topic links to jump to a section.

@@ -74,7 +74,7 @@ def property_path(path,key):
     return path+'.'+key if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',key) else path+'['+json.dumps(key,ensure_ascii=False)+']'
 
 
-def compare_json(left_text, right_text, default='ordered', rules=None):
+def compare_json(left_text, right_text, default='ordered', rules=None, include_view=False):
     if default not in ('ordered','unordered'): raise ValueError('Choose preserve or ignore array order')
     rules=[] if rules is None else rules
     if not isinstance(rules,list) or len(rules)>100: raise ValueError('Use up to 100 array rules')
@@ -135,17 +135,54 @@ def compare_json(left_text, right_text, default='ordered', rules=None):
         return result
     fingerprint(left,());fingerprint(right,())
     differences=[]
+    view=[]
+    # Each token retains its path and line in a pretty-printed original document.
+    # Display pairing can move a block while its original position stays visible.
+    def tokens(value):
+        lines=[]; spans={}
+        def visit(item,path,depth,prefix='',suffix=''):
+            start=len(lines)
+            def emit(text):
+                lines.append(dict(text=text, depth=depth, path=path, line=len(lines)+1))
+            if isinstance(item,(dict,list)):
+                is_object=isinstance(item,dict)
+                emit(prefix+('{' if is_object else '['))
+                entries=list(item.items()) if is_object else list(enumerate(item))
+                for i,(key,child) in enumerate(entries):
+                    visit(child,property_path(path,key) if is_object else f'{path}[{key}]',depth+1,
+                          json.dumps(key,ensure_ascii=False)+': ' if is_object else '', ',' if i<len(entries)-1 else '')
+                emit(('}' if is_object else ']')+suffix)
+            else:emit(prefix+dump(item)+suffix)
+            spans[path]=(start,len(lines))
+        visit(value,'$',0)
+        return lines,spans
+    alines,aspans=tokens(left) if include_view else ([],{})
+    blines,bspans=tokens(right) if include_view else ([],{})
+    def emit(lp,rp,kind='equal',difference=None,closing=False,whole=False):
+        if not include_view:return
+        def select(lines,spans,path):
+            if path is None:return []
+            start,end=spans[path]
+            return lines[start:end] if whole else [lines[end-1 if closing else start]]
+        aa=select(alines,aspans,lp);bb=select(blines,bspans,rp)
+        for i in range(max(len(aa),len(bb))):
+            view.append(dict(left=aa[i] if i<len(aa) else None,right=bb[i] if i<len(bb) else None,kind=kind,difference=difference))
     def add(kind,lp,rp,a=None,b=None):
         if len(differences)>=MAX_DIFFERENCES:raise ValueError('More than 10,000 differences. Compare a smaller JSON document; no partial result was returned.')
+        emit(lp,rp,kind,len(differences),whole=True)
         differences.append(dict(kind=kind,left_path=lp,right_path=rp,left_value=dump(a) if lp is not None else None,right_value=dump(b) if rp is not None else None))
     def walk(a,b,path,lp,rp):
-        if fingerprint(a,path)==fingerprint(b,path):return
+        equal=fingerprint(a,path)==fingerprint(b,path)
+        if equal and not include_view:return
         if isinstance(a,dict) and isinstance(b,dict):
+            emit(lp,rp)
             for key in sorted(a.keys()|b.keys()):
                 if key not in b:add('removed',property_path(lp,key),None,a[key])
                 elif key not in a:add('added',None,property_path(rp,key),b=b[key])
                 else:walk(a[key],b[key],path+(key,),property_path(lp,key),property_path(rp,key))
+            emit(lp,rp,closing=True)
         elif isinstance(a,list) and isinstance(b,list):
+            emit(lp,rp)
             mode,field=policy(path)
             if mode=='ordered':
                 for i in range(max(len(a),len(b))):
@@ -166,10 +203,14 @@ def compare_json(left_text, right_text, default='ordered', rules=None):
                 matched=set()
                 for i,item in enumerate(a):
                     matches=remaining[fingerprint(item,path+(None,))]
-                    if matches:matched.add(matches.popleft())
+                    if matches:
+                        j=matches.popleft();matched.add(j)
+                        walk(item,b[j],path+(None,),f'{lp}[{i}]',f'{rp}[{j}]')
                     else:add('removed',f'{lp}[{i}]',None,item)
                 for j,item in enumerate(b):
                     if j not in matched:add('added',None,f'{rp}[{j}]',b=item)
+            emit(lp,rp,closing=True)
+        elif equal:emit(lp,rp)
         else:add('changed',lp,rp,a,b)
     walk(left,right,(),'$','$')
-    return dict(equal=not differences,counts={kind:sum(d['kind']==kind for d in differences) for kind in ('added','removed','changed')},differences=differences,default_order=default,rules=rules,warnings=[f'Rule did not match an array: {value[2]}' for key,value in indexed.items() if key not in used])
+    return dict(view=view,equal=not differences,counts={kind:sum(d['kind']==kind for d in differences) for kind in ('added','removed','changed')},differences=differences,default_order=default,rules=rules,warnings=[f'Rule did not match an array: {value[2]}' for key,value in indexed.items() if key not in used])
