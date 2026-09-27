@@ -21,7 +21,7 @@ class ContainerTests(WorkflowAPITests):
             self.wait(path,lambda j:j['exports'][kind]['state'] in ('complete','error'))
         with zipfile.ZipFile(io.BytesIO(self.request(path+'/download/mismatches.xlsx'))) as z:
             wb=z.read('xl/workbook.xml').decode();self.assertIn('name="Ignored key containers"',wb);self.assertIn('name="Ignored key containers (2)"',wb)
-            audit=z.read('xl/worksheets/sheet2.xml').decode();self.assertIn('NO_HIT_KEYS',audit);self.assertIn('001',audit);self.assertIn('No hit &lt;source&gt;',audit)
+            audit=z.read('xl/worksheets/sheet3.xml').decode();self.assertIn('NO_HIT_KEYS',audit);self.assertIn('001',audit);self.assertIn('No hit &lt;source&gt;',audit)
         with zipfile.ZipFile(io.BytesIO(self.request(path+'/download/html.zip'))) as z:self.assertIn('No hit &lt;source&gt;',z.read('index.html').decode())
     def test_composite_container_width(self):
         item=self.request('/api/key-containers',dict(name='COMPOSITE',reason='Composite exclusion',values='[["001","A"]]',key_width=2))['containers'][-1]

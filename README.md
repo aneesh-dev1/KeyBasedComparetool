@@ -534,3 +534,20 @@ Only direct scalar fields present, non-null and unique in every occurrence of
 an array on both sides are offered. No key is selected automatically. Editing
 inputs keeps existing rules; find arrays again to review keys, or remove rules
 in Advanced array rules. Discovery supports up to 100 distinct array paths.
+
+## Comparison reports
+
+HTML ZIP exports now include a sidebar dashboard with matched-row and cell-match
+metrics, searchable column statistics, expandable per-column previews, and fully
+matching attributes. Full column results are paginated; extract the ZIP and open
+index.html. Preview content is capped at 1 MiB; full result pages retain all values.
+
+Excel exports include File Summary and TOC sheets with difference counts, match
+percentages, internal View links, and an editable Comments column. Each changed
+column still has its own sheet, with keys, valueA, valueB, variable, typeA, typeB,
+diffAB and Back to TOC. Values remain text, including leading zeros and formula-like
+strings. Types are reported as text, reflecting the comparison engine; diffAB is
+a diagnostic decimal subtraction where possible, not the equality rule. Numeric
+diagnostics are omitted for nonfinite values or unusually long/extreme numbers.
+Rates use matched keys after exclusions and overrides; no matched keys means N/A.
+Old exports can be regenerated in the new layout after restarting the server.

@@ -9,6 +9,10 @@ from pathlib import Path
 import re
 import tempfile
 import zipfile
+from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
+
+REPORT_VERSION = 2
 
 TABLES = ('differences', 'left_only', 'right_only')
 TITLES = {'differences': 'Changed cells', 'left_only': 'Keys only in left file', 'right_only': 'Keys only in right file'}
@@ -52,9 +56,72 @@ def exclusion_html(summary):
     return '<h2>Ignored key containers</h2><p>' + html.escape(title) + '</p><table>' + html_row(next(rows), True) + ''.join(html_row(row) for row in rows) + '</table>'
 
 
-def make_summary_html(summary):
-    rows = iter(summary_rows(summary))
-    return html_start('CSV comparison summary') + '<p>Text comparison within the selected scope, including any explicit value overrides listed below. Counts refer to matched keys, changed cells, and keys unique to each file.</p><table>' + html_row(next(rows), True) + ''.join(html_row(row) for row in rows) + '</table>' + exclusion_html(summary) + '</body></html>'
+def column_stats(summary):
+    matched = summary.get('matched_keys', 0)
+    return [(name, count, 100 * count / matched if matched else None,
+             100 * (matched-count) / matched if matched else None)
+            for name, count in sorted(summary['changed_cells_by_column'].items(), key=lambda item: (-item[1], item[0]))]
+
+
+def percent(value):
+    return 'N/A' if value is None else f'{value:.4f}%'
+
+
+def source_labels(summary):
+    sources = {item['side']: item for item in summary.get('sources', [])}
+    return [sources.get(side, {}).get('file', fallback) +
+            (' [' + sources[side]['sheet'] + ']' if sources.get(side, {}).get('sheet') else '')
+            for side, fallback in [('left', 'File 1'), ('right', 'File 2')]]
+
+
+DASH_STYLE = """body{max-width:none;margin:0;padding:0;background:#f3f7f9}body>header,body>h1{display:none}.report-head{background:#004364;color:white;padding:20px 28px;display:flex;gap:24px;align-items:center}.report-head p{margin:0;overflow-wrap:anywhere}.report-grid{display:grid;grid-template-columns:220px minmax(0,1fr)}.report-side{background:#004364;padding:24px;min-height:100vh}.report-side a{display:block;color:white;padding:12px 0;text-decoration:none}.report-main{padding:28px;min-width:0}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}.card,.report-section{background:white;border:1px solid #dce5eb;border-radius:8px;padding:18px;margin-bottom:20px}.card{border-top:4px solid #00a6ca}.card strong{display:block;font-size:28px;margin-top:8px}.card small{display:block;color:#526c7b}.report-section h2{font-size:18px;margin:0 0 18px}.table-wrap{overflow:auto}th{background:#004364;color:white}td.before{background:#fff0ee;color:#9b3025}td.after{background:#eaf7ec;color:#256238}.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{background:#eaf7ec;color:#256238;padding:6px 10px;border-radius:4px}summary{cursor:pointer;padding:12px 0;font-weight:600}input[type=search]{padding:10px;max-width:100%;border:1px solid #9cbac5;border-radius:4px}.muted{color:#526c7b}.row-counts{margin:12px 0 24px}nav{flex-wrap:wrap} @media(max-width:900px){.report-grid{grid-template-columns:1fr}.report-side{min-height:0;display:flex;gap:18px;flex-wrap:wrap;padding:8px 20px}.report-main{padding:16px}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}"""
+
+
+def make_summary_html(summary, links=None, previews=None):
+    links, previews = links or {}, previews or {}
+    stats = column_stats(summary)
+    changed = [row for row in stats if row[1]]
+    equal = [row[0] for row in stats if not row[1]]
+    matched = summary.get('matched_keys', 0)
+    overall = 100 * (1-summary['changed_cells']/(matched*len(stats))) if matched and stats else None
+    labels = source_labels(summary)
+    out = html_start('Comparison report') + '<style>' + DASH_STYLE + '</style>'
+    out += '<div class="report-head"><strong>Comparison Report</strong><p>' + html.escape(' vs '.join(labels)) + '</p></div><div class="report-grid"><aside class="report-side"><a href="#summary">Summary</a><a href="#statistics">Column Statistics</a><a href="#differences">Column Differences</a><a href="#matching">100% Match</a><a href="#scope">Scope &amp; exclusions</a></aside><main class="report-main">'
+    out += '<section id="summary" class="cards">'
+    for title, value in [('Rows matched', f'{matched:,}'), ('Overall cell match rate', percent(overall)), ('Columns with differences', f'{len(changed):,} of {len(stats):,}'), ('Total cell differences', f'{summary["changed_cells"]:,}')]:
+        out += '<div class="card"><small>'+title+'</small><strong>'+value+'</strong></div>'
+    out += '</section><p class="row-counts">Rows in both files: '+f'{matched:,} · Only in File 1: {summary.get("left_only",0):,} · Only in File 2: {summary.get("right_only",0):,}'+'</p><p class="muted">Rates use matched keys and compared non-key columns, after exclusions and value overrides. Keys found in only one file are reported separately. N/A means no comparable cells. Percentages are rounded to four decimal places.</p>'
+    out += '<section id="statistics" class="report-section"><h2>Column Statistics</h2><input type="search" id="columnSearch" placeholder="Search columns…" aria-label="Search column statistics"><div class="table-wrap"><table id="columnStats">'+html_row(['Column','Differences','Mismatch %','Match %','View'],True)
+    for i,(name,count,mismatch,match) in enumerate(stats):
+        link = '<a href="#column-'+str(i)+'">View</a>' if count else 'No differences' if matched else 'No matched rows'
+        out += '<tr>'+''.join('<td>'+html.escape(str(v))+'</td>' for v in [name,count,percent(mismatch),percent(match)])+'<td>'+link+'</td></tr>'
+    out += '</table></div></section><section id="differences" class="report-section"><h2>Column Differences</h2>'
+    for i,(name,count,_,_) in enumerate(stats):
+        if not count: continue
+        out += '<details id="column-'+str(i)+'"><summary>'+html.escape(name)+f' · {count:,} differences</summary>'
+        if name in previews:
+            out += '<div class="table-wrap"><table>'+html_row(summary['keys']+labels,True)
+            for row in previews[name]:
+                out += '<tr>'+''.join('<td>'+html.escape(str(v))+'</td>' for v in row[:-2])+'<td class="before">'+html.escape(row[-2])+'</td><td class="after">'+html.escape(row[-1])+'</td></tr>'
+            out += '</table></div>'
+        if name in links:
+            out += '<a href="'+html.escape(links[name],quote=True)+'">View all differences for this column</a>'
+        else:
+            out += '<p>Generate the full HTML export to browse this column’s mismatches.</p>'
+        out += '</details>'
+    out += '</section><section id="matching" class="report-section"><h2>Attributes with 100% match</h2><div class="chips">'
+    out += ''.join('<span class="chip">'+html.escape(name)+'</span>' for name in equal) if matched else '<p>No matched rows; match rates cannot be calculated.</p>'
+    out += '</div></section><section id="scope" class="report-section"><h2>Scope &amp; exclusions</h2><details><summary>Comparison settings and metrics</summary><div class="table-wrap"><table>'
+    out += ''.join(html_row(row, i==0) for i,row in enumerate(summary_rows(summary)))+'</table></div></details>'+exclusion_html(summary)+'</section>'
+    out += """<script>document.getElementById('columnSearch').addEventListener('input',function(){const q=this.value.toLowerCase();document.querySelectorAll('#columnStats tr').forEach((r,i)=>{if(i)r.hidden=!r.cells[0].textContent.toLowerCase().includes(q);});});document.querySelectorAll('a[href^="#column-"]').forEach(a=>a.addEventListener('click',()=>{document.querySelector(a.getAttribute('href')).open=true;}));</script>"""
+    return out+'</main></div></body></html>'
+
+
+@dataclass
+class Link:
+    text: str
+    sheet: str
+    cell: str = 'A1'
 
 
 def column_letter(number):
@@ -93,8 +160,9 @@ def sheet_names(columns):
     return result
 
 
-def write_xlsx(path, sheets):
+def write_xlsx(path, sheets, options=None):
     """Write worksheets sequentially; source text is never interpreted as a formula."""
+    options = options or {}
     ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
     rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as book:
@@ -105,10 +173,12 @@ def write_xlsx(path, sheets):
         book.writestr('xl/workbook.xml', f'<workbook xmlns="{ns}" xmlns:r="{rel}"><sheets>{entries}</sheets></workbook>')
         relations = ''.join(f'<Relationship Id="rId{i}" Type="{rel}/worksheet" Target="worksheets/sheet{i}.xml"/>' for i in range(1, len(sheets)+1))
         book.writestr('xl/_rels/workbook.xml.rels', f'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{relations}<Relationship Id="styles" Type="{rel}/styles" Target="styles.xml"/></Relationships>')
-        book.writestr('xl/styles.xml', f'''<styleSheet xmlns="{ns}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF004364"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>''')
+        book.writestr('xl/styles.xml', f'''<styleSheet xmlns="{ns}"><fonts count="5"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font><font><color rgb="FF9B3025"/><sz val="11"/><name val="Calibri"/></font><font><color rgb="FF256238"/><sz val="11"/><name val="Calibri"/></font><font><color rgb="FF007B99"/><u/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF004364"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="5"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>''')
         for sheet_index, (name, rows) in enumerate(sheets, 1):
+            header_rows = options.get(name, {}).get('header_rows', 2)
+            hyperlinks = []
             with book.open(f'xl/worksheets/sheet{sheet_index}.xml', 'w', force_zip64=True) as stream:
-                stream.write(f'<worksheet xmlns="{ns}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="2" topLeftCell="A3" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="16384" width="32" customWidth="1"/></cols><sheetData>'.encode())
+                stream.write(f'<worksheet xmlns="{ns}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="{header_rows}" topLeftCell="A{header_rows+1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="16384" width="32" customWidth="1"/></cols><sheetData>'.encode())
                 max_columns = number = 0
                 for number, row in enumerate(rows, 1):
                     if number > 1048576 or len(row) > 16384:
@@ -117,26 +187,28 @@ def write_xlsx(path, sheets):
                     cells = []
                     for col, value in enumerate(row, 1):
                         ref = f'{column_letter(col)}{number}'
-                        style = 1 if number <= 2 else 0
+                        style = 1 if number <= header_rows else 0
+                        if number > header_rows:
+                            color_columns = options.get(name, {}).get('value_columns', [])
+                            if col in color_columns:
+                                style = 2 + color_columns.index(col)
+                        if isinstance(value, Link):
+                            style = 4
+                            location = "'" + value.sheet.replace("'", "''") + "'!" + value.cell
+                            hyperlinks.append(f'<hyperlink ref="{ref}" location="{html.escape(location, quote=True)}"/>')
+                            value = value.text
                         if isinstance(value, (int, float)):
                             cells.append(f'<c r="{ref}" s="{style}"><v>{value}</v></c>')
                         else:
                             cells.append(f'<c r="{ref}" s="{style}" t="inlineStr"><is><t xml:space="preserve">{xml_text(value)}</t></is></c>')
                     stream.write((f'<row r="{number}">' + ''.join(cells) + '</row>').encode('utf-8'))
-                stream.write((f'</sheetData><autoFilter ref="A2:{column_letter(max_columns)}{max(2, number)}"/></worksheet>').encode())
+                stream.write((f'</sheetData><autoFilter ref="A{header_rows}:{column_letter(max_columns)}{max(header_rows, number)}"/>' + ('<hyperlinks>'+''.join(hyperlinks)+'</hyperlinks>' if hyperlinks else '') + '</worksheet>').encode())
 
 
-def export_excel(report, destination, notify=lambda message: None):
-    summary = json.loads((report / 'summary.json').read_text())
-    columns = [name for name, count in summary['changed_cells_by_column'].items() if count]
-    if any(summary['changed_cells_by_column'][name] > 1048574 for name in columns):
-        raise ValueError('One column has more than 1,048,574 mismatches and cannot fit in one Excel sheet. Download HTML or CSV instead.')
-    audit = [('Ignored key containers', exclusion_rows(summary))] if summary.get('ignore_key_containers') else []
-    if not columns:
-        write_xlsx(destination, [('No mismatches', iter([['Comparison result'], ['Status', 'Details'], ['No changed cells', 'Keys found in only one file are available in the separate CSV downloads.']]))] + audit)
-        return
+@contextlib.contextmanager
+def partition_columns(report, columns, parent, notify):
     # Partition in a single pass. Limit open files even with 2,000 changed columns.
-    with tempfile.TemporaryDirectory(dir=destination.parent) as work:
+    with tempfile.TemporaryDirectory(dir=parent) as work:
         paths = {column: Path(work) / f'{i}.jsonl' for i, column in enumerate(columns)}
         # Two-stage partitioning avoids opening/closing a file for every cell
         # when each row has thousands of changed columns.
@@ -160,23 +232,110 @@ def export_excel(report, destination, notify=lambda message: None):
                         column, values = json.loads(line)
                         handles[column].write(json.dumps(values, ensure_ascii=False) + '\n')
             bucket.unlink()
+        yield paths
+
+
+def export_excel(report, destination, notify=lambda message: None):
+    summary = json.loads((report / 'summary.json').read_text())
+    stats = column_stats(summary)
+    columns = [name for name,count,_,_ in stats if count]
+    if any(summary['changed_cells_by_column'][name] > 1048574 for name in columns):
+        raise ValueError('One column has more than 1,048,574 mismatches and cannot fit in one Excel sheet. Download HTML or CSV instead.')
+    reserved = ['File Summary', 'TOC'] + (['Ignored key containers'] if summary.get('ignore_key_containers') else [])
+    names = sheet_names(reserved + columns)
+    mapped = dict(zip(columns, names[len(reserved):]))
+    def toc():
+        yield ['Column', 'DifferenceCount', 'Mismatch %', 'Match %', 'Link', 'Comments']
+        for name,count,mismatch,match in stats:
+            yield [name,count,round(mismatch,4) if mismatch is not None else 'N/A',round(match,4) if match is not None else 'N/A',Link('View',mapped[name]) if count else 'No differences' if summary.get('matched_keys') else 'No matched rows','']
+    def summary_sheet():
+        yield ['Metric','Value']
+        yield ['File 1',source_labels(summary)[0]]
+        yield ['File 2',source_labels(summary)[1]]
+        yield ['Rows matched',summary.get('matched_keys',0)]
+        yield ['Columns with differences',len(columns)]
+        yield ['Columns with 100% match',len(stats)-len(columns) if summary.get('matched_keys') else 'N/A']
+        yield ['Overall match %',round(sum(row[3] for row in stats)/len(stats),4) if stats and summary.get('matched_keys') else 'N/A']
+        yield ['Rate basis','Matched keys only; after exclusions and value overrides. One-sided keys are reported separately.']
+        yield ['Types','Values are compared as exact text; typeA/typeB are text. diffAB is valueA minus valueB for finite decimal values only.']
+        yield ['Contents',Link('Open TOC','TOC')]
+        for row in itertools.islice(summary_rows(summary),1,None):
+            value=row[1]
+            if isinstance(value,str) and len(value)>15000:
+                for start in range(0,len(value),15000):
+                    yield [row[0] if not start else row[0]+' (continued)',value[start:start+15000]]
+            else:
+                yield row
+    sheets = [('File Summary',summary_sheet()), ('TOC',toc())]
+    if summary.get('ignore_key_containers'):
+        sheets.append(('Ignored key containers',exclusion_rows(summary)))
+    options = {name: {'header_rows':1} for name in ['File Summary','TOC']+list(mapped.values())}
+    for name in mapped.values():
+        options[name]['value_columns']=[len(summary['keys'])+1,len(summary['keys'])+2]
+    with partition_columns(report, columns, destination.parent, notify) as paths:
         def rows(column):
             notify(f'Writing sheet for {column}')
-            yield ['Column', column]
-            yield [f'Key: {key}' for key in summary['keys']] + ['Left value', 'Right value']
+            yield summary['keys']+['valueA','valueB','variable','typeA','typeB','diffAB',Link('Back to TOC','TOC')]
             with paths[column].open(encoding='utf-8') as source:
                 for line in source:
-                    yield json.loads(line)
-        names = sheet_names((['Ignored key containers'] if audit else []) + columns)
-        sheets = list(zip(names[len(audit):], (rows(column) for column in columns)))
-        write_xlsx(destination, sheets + audit)
+                    values=json.loads(line)
+                    yield values+[column,'text','text',numeric_difference(values[-2],values[-1])]
+        sheets.extend((mapped[column],rows(column)) for column in columns)
+        if not columns:
+            sheets.append(('No mismatches',iter([['Comparison result'],['Status','Details'],['No changed cells','Check summary for keys found only in one file.']])))
+        write_xlsx(destination,sheets,options)
+
+
+def numeric_difference(left, right):
+    if len(left)>1000 or len(right)>1000:
+        return ''
+    try:
+        a,b=Decimal(left),Decimal(right)
+        if not a.is_finite() or not b.is_finite() or max(abs(a.adjusted()),abs(b.adjusted()))>1000:
+            return ''
+        # Diagnostic only; never use numeric coercion for comparison equality.
+        from decimal import localcontext
+        with localcontext() as context:
+            context.prec=max(len(a.as_tuple().digits),len(b.as_tuple().digits))+abs(a.adjusted()-b.adjusted())+2
+            return str(a-b)
+    except (InvalidOperation, ValueError):
+        return ''
 
 
 def export_html(report, destination, notify=lambda message: None, page_size=1000):
     summary = json.loads((report / 'summary.json').read_text())
     counts = {'differences': summary['changed_cells'], 'left_only': summary['left_only'], 'right_only': summary['right_only']}
     with zipfile.ZipFile(destination, 'w', zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as bundle:
-        index = make_summary_html(summary).replace('</body></html>', '<h2>Full results</h2><p>Every result is included. Open a category and use Next to browse its pages.</p>')
+        columns = [name for name,count,_,_ in column_stats(summary) if count]
+        links, previews = {}, {}
+        preview_bytes = 0
+        with partition_columns(report, columns, destination.parent, notify) as paths:
+            for number, column in enumerate(columns,1):
+                pages=(summary['changed_cells_by_column'][column]+page_size-1)//page_size
+                links[column]=f'column_{number:05d}_00001.html'
+                with paths[column].open(encoding='utf-8') as source:
+                    previews[column]=[]
+                    for page in range(1,pages+1):
+                        notify(f'Writing {column}, page {page} of {pages}')
+                        with bundle.open(f'column_{number:05d}_{page:05d}.html','w',force_zip64=True) as output:
+                            def write(text): output.write(text.encode('utf-8'))
+                            nav='<nav><a href="index.html#differences">Summary</a>'
+                            if page>1: nav+=f'<a href="column_{number:05d}_{page-1:05d}.html">Previous</a>'
+                            if page<pages: nav+=f'<a href="column_{number:05d}_{page+1:05d}.html">Next</a>'
+                            nav+=f'<span>Page {page} of {pages}</span></nav>'
+                            write(html_start(column)+'<style>td:nth-last-child(2){background:#fff0ee;color:#9b3025}td:last-child{background:#eaf7ec;color:#256238}</style>'+nav+'<table>'+html_row(summary['keys']+source_labels(summary),True))
+                            for line in itertools.islice(source,page_size):
+                                row=json.loads(line)
+                                if len(previews[column])<5 and preview_bytes<1024*1024:
+                                    preview=[v[:500] for v in row]
+                                    size=sum(len(v.encode('utf-8')) for v in preview)
+                                    if preview_bytes+size<=1024*1024:
+                                        previews[column].append(preview)
+                                        preview_bytes+=size
+                                write(html_row(row))
+                            write('</table>'+nav+'</body></html>')
+        index = make_summary_html(summary,links,previews).replace('</main>', '<section class="report-section"><h2>All result records</h2><p>Every result is included. Per-column previews show up to five rows, with values limited to 500 characters and a 1 MiB overall preview budget. Column pages below contain full values.</p>')
+        index = index.replace('</div></body></html>', '')
         for table in TABLES:
             pages = (counts[table] + page_size - 1) // page_size
             index += f'<p>{TITLES[table]}: {counts[table]:,} records'
@@ -202,4 +361,4 @@ def export_html(report, destination, notify=lambda message: None, page_size=1000
                         for row in itertools.islice(rows, page_size):
                             write(html_row(row))
                         write('</table>' + nav + '</body></html>')
-        bundle.writestr('index.html', index + '</body></html>')
+        bundle.writestr('index.html', index + '</section></main></div></body></html>')

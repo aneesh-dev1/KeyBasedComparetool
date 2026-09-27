@@ -17,29 +17,29 @@ class ReportTests(unittest.TestCase):
                 w=csv.writer(f);w.writerow(list(keys)+names);w.writerows(rows)
         compare(parser().parse_args([str(self.root/'left.csv'),str(self.root/'right.csv'),'--keys',*keys,'--output',str(self.root/'report')]))
         return self.root/'report'
-    def test_ten_changed_columns_exactly_ten_sheets(self):
+    def test_ten_changed_columns_plus_summary_and_toc(self):
         columns=[f'column_{i}' for i in range(10)]
         report=self.report(columns,[['001','A']+['old']*10,['002','B']+['same']*10],[['001','A']+['new']*10,['002','B']+['same']*10],keys=('id','part'))
         target=self.root/'result.xlsx';export_excel(report,target)
         with zipfile.ZipFile(target) as book:
             root=ET.fromstring(book.read('xl/workbook.xml'))
-            self.assertEqual([s.attrib['name'] for s in root.findall('s:sheets/s:sheet',NS)],columns)
-            for i,column in enumerate(columns,1):
+            self.assertEqual([s.attrib['name'] for s in root.findall('s:sheets/s:sheet',NS)],['File Summary','TOC']+columns)
+            for i,column in enumerate(columns,3):
                 root=ET.fromstring(book.read(f'xl/worksheets/sheet{i}.xml'))
                 rows=[[c.find('s:is/s:t',NS).text or '' for c in row] for row in root.findall('s:sheetData/s:row',NS)]
-                self.assertEqual(rows,[['Column',column],['Key: id','Key: part','Left value','Right value'],['001','A','old','new']])
+                self.assertEqual(rows,[['id','part','valueA','valueB','variable','typeA','typeB','diffAB','Back to TOC'],['001','A','old','new',column,'text','text','']])
     def test_only_own_column(self):
         report=self.report(['a','b'],[['01','x','x'],['02','x','same'],['03','same','x']],[['01','y','y'],['02','y','same'],['03','same','y']])
         target=self.root/'result.xlsx';export_excel(report,target)
         with zipfile.ZipFile(target) as book:
-            for index,keys in [(1,['01','02']),(2,['01','03'])]:
-                rows=ET.fromstring(book.read(f'xl/worksheets/sheet{index}.xml')).findall('s:sheetData/s:row',NS)[2:]
+            for index,keys in [(3,['01','02']),(4,['01','03'])]:
+                rows=ET.fromstring(book.read(f'xl/worksheets/sheet{index}.xml')).findall('s:sheetData/s:row',NS)[1:]
                 self.assertEqual([r[0].find('s:is/s:t',NS).text for r in rows],keys)
     def test_text_safety_and_html_pagination(self):
         report=self.report(['value'],[['001','=1+1'],['002','<script>alert(1)</script>']],[['001','01'],['002','&']])
         target=self.root/'result.xlsx';export_excel(report,target)
         with zipfile.ZipFile(target) as book:
-            root=ET.fromstring(book.read('xl/worksheets/sheet1.xml'))
+            root=ET.fromstring(book.read('xl/worksheets/sheet3.xml'))
             self.assertFalse(root.findall('.//s:f',NS));self.assertIn('=1+1',[e.text for e in root.findall('.//s:t',NS)])
         target=self.root/'html.zip';export_html(report,target,page_size=1)
         with zipfile.ZipFile(target) as book:
@@ -53,10 +53,10 @@ class ReportTests(unittest.TestCase):
         target=self.root/'wide.xlsx';export_excel(report,target)
         with zipfile.ZipFile(target) as book:
             root=ET.fromstring(book.read('xl/workbook.xml'))
-            self.assertEqual(len(root.findall('s:sheets/s:sheet',NS)),130)
-            last=ET.fromstring(book.read('xl/worksheets/sheet130.xml'))
-            values=[v.text for v in last.findall('s:sheetData/s:row',NS)[2].findall('.//s:t',NS)]
-            self.assertEqual(values,['01','a','b'])
+            self.assertEqual(len(root.findall('s:sheets/s:sheet',NS)),132)
+            last=ET.fromstring(book.read('xl/worksheets/sheet132.xml'))
+            values=[v.text for v in last.findall('s:sheetData/s:row',NS)[1].findall('.//s:t',NS)]
+            self.assertEqual(values[:3],['01','a','b'])
     def test_no_changes(self):
         report=self.report(['v'],[['001','x']],[['001','x']]);target=self.root/'result.xlsx';export_excel(report,target)
         with zipfile.ZipFile(target) as book:self.assertIn('No mismatches',book.read('xl/workbook.xml').decode())
@@ -97,7 +97,7 @@ class ServerTests(unittest.TestCase):
             self.request(path+'/export/'+kind,{});result=self.wait(path,lambda j:j['exports'][kind]['state'] in ('complete','error'));self.assertEqual(result['exports'][kind]['state'],'complete',result)
             with zipfile.ZipFile(io.BytesIO(self.request(path+'/download/'+filename))) as archive:
                 self.assertIsNone(archive.testzip())
-                if kind=='excel':self.assertEqual([s.attrib['name'] for s in ET.fromstring(archive.read('xl/workbook.xml')).findall('s:sheets/s:sheet',NS)],['price','status'])
+                if kind=='excel':self.assertEqual([s.attrib['name'] for s in ET.fromstring(archive.read('xl/workbook.xml')).findall('s:sheets/s:sheet',NS)],['File Summary','TOC','price','status'])
         self.assertIn(b'003',self.request(path+'/download/left_only.csv'));self.assertIn(b'004',self.request(path+'/download/right_only.csv'))
     def test_auth_required(self):
         with self.assertRaises(HTTPError):self.request('/api/jobs',{},auth=False)

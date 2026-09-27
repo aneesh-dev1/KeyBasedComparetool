@@ -26,7 +26,7 @@ from json_compare import compare_json, discover_arrays
 from excel_input import sheets as excel_sheets, convert as convert_excel
 from file_io import atomic_write_text, replace_retry
 from compare import align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
-from reports import export_excel, export_html, make_summary_html
+from reports import export_excel, export_html, make_summary_html, REPORT_VERSION
 
 BASE = Path(__file__).resolve().parent
 CHUNK = 8 * 1024 * 1024
@@ -75,6 +75,9 @@ class Application:
                 for side in ('left', 'right'):
                     source = self.upload_path(job, side)
                     job['files'][side]['uploaded'] = source.stat().st_size if source.exists() else 0
+            for export in job.get('exports', {}).values():
+                if export.get('state') == 'complete' and export.get('report_version') != REPORT_VERSION:
+                    export.update(state='outdated', message='New report layout available. Generate this export again.')
             return job
 
     def save(self, job):
@@ -231,7 +234,7 @@ class Application:
         try:
             (export_excel if kind == 'excel' else export_html)(directory / 'report', temporary, notify)
             replace_retry(temporary, target)
-            status('complete', size=target.stat().st_size)
+            status('complete', size=target.stat().st_size, report_version=REPORT_VERSION)
         except Exception as error:
             temporary.unlink(missing_ok=True)
             status('error', error=str(error))
