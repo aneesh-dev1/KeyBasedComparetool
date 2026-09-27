@@ -47,6 +47,19 @@ class DashboardTests(unittest.TestCase):
         text=make_summary_html(self.summary)
         self.assertIn('No matched rows; match rates cannot be calculated.',text)
         self.assertIsNone(column_stats(self.summary)[0][3])
+    def test_exclusion_highlights(self):
+        self.summary['ignore_key_containers']=[dict(name='NO_HIT_KEYS',reason='No hit <reason>',keys=[['007']])]
+        (self.root/'summary.json').write_text(json.dumps(self.summary))
+        text=make_summary_html(self.summary)
+        self.assertIn('Ignored key containers — excluded from comparison',text)
+        self.assertIn('No hit &lt;reason&gt;',text)
+        target=self.root/'highlight.xlsx';export_excel(self.root,target)
+        with zipfile.ZipFile(target) as z:
+            audit=ET.fromstring(z.read('xl/worksheets/sheet3.xml'))
+            self.assertTrue(all(c.attrib['s']=='5' for c in audit.findall('.//s:c',NS)))
+            summary=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            self.assertIn("'Ignored key containers'!A1",[link.attrib['location'] for link in summary.findall('s:hyperlinks/s:hyperlink',NS)])
+
     def test_numeric_delta_is_diagnostic_only(self):
         self.assertEqual(numeric_difference('4994','4993'),'1')
         self.assertEqual(numeric_difference('001','1'),'0')

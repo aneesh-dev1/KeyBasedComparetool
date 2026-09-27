@@ -14,8 +14,8 @@ let overrideRules=[], currentView='uploadPanel', hydratedId=null, historyOffset=
 let logCursor=0, logText='', logJobId=null;
 let viewingHistoryJob=false;
 let keyContainers=[], selectedContainers=new Set();
-const phaseLabels=['Files','Column headers','Keys & scope','Value overrides','File preview','Pipeline & logs','Results'];
-const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',sourcePanel:'navPreview',runningPanel:'navPipeline',results:'navResults',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs'};
+const phaseLabels=['Files','Column headers','Keys & scope','Value overrides','File preview','Pipeline & logs','Results','Analysis'];
+const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',sourcePanel:'navPreview',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs'};
 const number = value => Number(value).toLocaleString();
 const bytes = value => value >= 1024**3 ? `${(value / 1024**3).toFixed(2)} GB` : value >= 1024**2 ? `${(value / 1024**2).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
 function showError(error) { $('error').textContent = error.message || String(error); $('error').hidden = false; }
@@ -40,7 +40,7 @@ function syncNavigation(){
   $('navPreview').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
   $('navPipeline').disabled=!job||!['queued','running','complete','error'].includes(job.state);
   if(ready&&job.headers_reviewed===false){$('navOverrides').disabled=$('navPreview').disabled=true;}
-  $('navResults').disabled=job?.state!=='complete';
+  $('navResults').disabled=$('navAnalysis').disabled=job?.state!=='complete';
   $('navJson').disabled=$('navContainers').disabled=$('navHistory').disabled=$('navNew').disabled=false;
   $('reset').disabled=uploading;
 }
@@ -59,7 +59,7 @@ function panel(name) {
   if(typeof closeSidebarDrawer==='function')closeSidebarDrawer();
   $('flowTitle').textContent=viewingHistoryJob?'Saved comparison':'New comparison';
   const phase=Object.keys(views).indexOf(name);
-  if(!history&&!library)$('phaseLabel').textContent=`Step ${phase+1} of 7 · ${phaseLabels[phase]}`;
+  if(!history&&!library)$('phaseLabel').textContent=`Step ${phase+1} of 8 · ${phaseLabels[phase]}`;
   for(const [id,control] of Object.entries(views)){
     if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
   }
@@ -79,6 +79,7 @@ async function goView(name){
   clearError();await saveDraft();
   if(headerDirty&&headerDraftJob===job?.id&&['keysPanel','overridesPanel','sourcePanel'].includes(name))await applyHeaders();
   panel(name);
+  if(name==='analysisPanel')await openAnalysis();
   if(name==='headersPanel')renderHeaders();
   if(name==='keysPanel'){renderKeys();renderIgnoredColumns();await loadContainers();}
   if(name==='containersPanel')await loadContainers();
@@ -256,10 +257,12 @@ function renderExports() {
   for(const kind of ['excel','html']) {
     const value=job.exports[kind];const button=$(kind);const status=$(`${kind}Status`);
     button.disabled=!!value&&['queued','running'].includes(value.state);
+    button.classList.toggle('export-busy',button.disabled);button.setAttribute('aria-busy',String(button.disabled));
+    button.querySelector('strong').textContent=button.disabled?(value.state==='queued'?'Queued — waiting for a worker':'Generating '+(kind==='excel'?'Excel workbook':'HTML report')):(kind==='excel'?'Excel workbook':'HTML report');
     if(!value)status.textContent='';
     else if(value.state==='complete')status.textContent=`Ready to download · ${bytes(value.size)}`;
     else if(value.state==='error')status.textContent=`Export failed: ${value.error}`;
-    else status.textContent=value.message||'Queued for export…';
+    else status.textContent=(value.message||'Queued for export…')+' Large reports may take time. You can continue reviewing results.';
   }
 }
 for(const kind of ['excel','html']) $(kind).addEventListener('click',async()=>{
@@ -299,7 +302,7 @@ function updateHeaderStatus(){
   for(const side of ['left','right'])for(const name of headerDraft[side]){const key=name.toLowerCase();maps[side].set(key,(maps[side].get(key)||0)+1);if(!name.trim())invalid++;}
   const missing={left:headerDraft.left.filter(n=>!maps.right.has(n.toLowerCase())),right:headerDraft.right.filter(n=>!maps.left.has(n.toLowerCase()))};
   const duplicate=Object.values(maps).reduce((n,m)=>n+[...m.values()].filter(v=>v>1).length,0);
-  $('headerLayoutStatus').textContent=invalid||duplicate?`${invalid} empty names · ${duplicate} duplicate names. Every comparison header must be unique within its file, ignoring case.`:missing.left.length||missing.right.length?`Needs alignment · File 1 only: ${missing.left.slice(0,8).join(', ')||'none'}${missing.left.length>8?' …':''} · File 2 only: ${missing.right.slice(0,8).join(', ')||'none'}${missing.right.length>8?' …':''}. Rename these headers to align the files.`:`All ${headerDraft.left.length} columns match ignoring case. ${headerDirty?'Apply your edits to continue.':'Ready to continue.'}`;
+  $('headerLayoutStatus').textContent=invalid||duplicate?`${invalid} empty names · ${duplicate} duplicate names. Every comparison header must be unique within its file, ignoring case.`:missing.left.length||missing.right.length?`Non-common columns will be excluded · File 1 only: ${missing.left.slice(0,8).join(', ')||'none'}${missing.left.length>8?' …':''} · File 2 only: ${missing.right.slice(0,8).join(', ')||'none'}${missing.right.length>8?' …':''}. Only shared columns will be available for keys and comparison. Rename a column if you want to match it.`:`All ${headerDraft.left.length} columns match ignoring case. ${headerDirty?'Apply your edits to continue.':'Ready to continue.'}`;
   for(const input of $('headersPanel').querySelectorAll('input[data-side]')){const side=input.dataset.side,key=input.value.toLowerCase();input.classList.toggle('header-unmatched',!maps[side==='left'?'right':'left'].has(key)||maps[side].get(key)>1||!input.value.trim());}
 }
 async function applyHeaders(){
@@ -361,8 +364,8 @@ async function refresh() {
     } else if(currentView==='runningPanel')await renderPipeline();
     if(Object.values(job.exports).some(value=>['queued','running'].includes(value.state)))pollTimer=setTimeout(()=>refresh().catch(pollError),1500);
   } else if(job.state==='error'){
-    if(!['historyPanel','containersPanel','jsonPanel','docsPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);}
-  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel'].includes(currentView)){
+    if(!['historyPanel','containersPanel','jsonPanel','docsPanel','analysisPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);}
+  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','analysisPanel'].includes(currentView)){
     panel('uploadPanel');$('delimiter').disabled=$('encoding').disabled=true;$('delimiter').value=job.delimiter==='\t'?'tab':job.delimiter;$('encoding').value=job.encoding;
   }
 }
@@ -440,7 +443,7 @@ async function renderPipeline(){
   if(log.text.length>=60000)pollTimer=setTimeout(()=>refresh().catch(pollError),300);
 }
 async function loadHistory(){
-  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel'].includes(currentView))return;
+  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel','analysisPanel'].includes(currentView))return;
   $('cleanupPolicy').textContent=result.retention_days?`Inactive jobs and all uploaded files, scratch data and reports are automatically deleted after ${result.retention_days} days. Download reports before expiry. Active jobs are protected.`:'Automatic cleanup is disabled. Delete unneeded jobs to reclaim disk space.';
   const table=$('historyTable');table.replaceChildren();
   const header=document.createElement('tr');for(const label of ['Created','Files','Status','Changed cells','Action']){const th=document.createElement('th');th.textContent=label;header.append(th);}const head=document.createElement('thead');head.append(header);table.append(head);
@@ -748,3 +751,56 @@ function filterDocs(){
 }
 $('docsSearch').addEventListener('input',filterDocs);
 filterDocs();
+
+let analysisOffset=0, analysisTimer=null, analysisGeneration=0;
+$('openAnalysis').addEventListener('click',()=>goView('analysisPanel').catch(showError));
+async function openAnalysis(){
+  clearTimeout(analysisTimer);analysisGeneration++;analysisOffset=0;
+  $('analysisRetry').hidden=true;
+  $('analysisKey').value='';$('analysisColumn').replaceChildren(new Option('All columns',''));
+  for(const [name,count] of Object.entries(job.summary.changed_cells_by_column))$('analysisColumn').add(new Option(`${name} (${number(count)})`,name));
+  $('analysisKeyLabel').firstChild.textContent=`Exact key (${job.keys.join(', ')}) `;
+  const containers=job.summary.ignore_key_containers||[];
+  $('analysisExclusions').textContent=containers.length?'Excluded containers: '+containers.map(c=>`${c.name}: ${c.reason} (${c.keys.length} configured keys)`).join(' · '):'No ignored-key containers configured.';
+  await loadAnalysis();
+}
+async function loadAnalysis(){
+  clearTimeout(analysisTimer);const generation=++analysisGeneration,id=job.id;
+  const column=$('analysisColumn').value,keyText=$('analysisKey').value,mode=$('analysisMode').value;
+  const table=$('analysisTable');table.replaceChildren();$('analysisStatus').classList.remove('loading-status');$('analysisRange').textContent='';clearError();
+  $('analysisPrev').disabled=$('analysisNext').disabled=true;
+  try{
+    let key;
+    if(keyText!==''){key=job.keys.length===1?[keyText]:JSON.parse(keyText);if(!Array.isArray(key)||key.length!==job.keys.length||key.some(v=>typeof v!=='string'))throw Error('Enter a JSON array with one text value for each key column.');}
+    let rows,headers,total,keyStatus;
+    if(mode==='columns'&&!column&&key===undefined){
+      const entries=Object.entries(job.summary.changed_cells_by_column).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));total=entries.length;
+      headers=['Column','Mismatches','Mismatch %','Match %','Inspect'];
+      rows=entries.slice(analysisOffset,analysisOffset+50).map(([name,count])=>[name,count,job.summary.matched_keys?(100*count/job.summary.matched_keys).toFixed(4):'N/A',job.summary.matched_keys?(100*(1-count/job.summary.matched_keys)).toFixed(4):'N/A']);
+    }else{
+      const params=new URLSearchParams({mode:mode==='keys'&&!column&&key===undefined?'keys':'cells',offset:String(analysisOffset),column});if(key!==undefined)params.set('key',JSON.stringify(key));
+      $('analysisStatus').textContent='Loading analysis…';$('analysisStatus').classList.add('loading-status');
+      const result=await api(`/api/jobs/${id}/analysis?${params}`);if(generation!==analysisGeneration||job?.id!==id||currentView!=='analysisPanel')return;
+      if(result.state!=='complete'){
+        if(result.state==='error'){$('analysisRetry').hidden=false;throw Error(result.message);}
+        if(result.state==='not_started')await api(`/api/jobs/${id}/analysis`,{});
+        $('analysisStatus').textContent=result.message||'Preparing analysis…';$('analysisStatus').classList.add('loading-status');
+        analysisTimer=setTimeout(()=>{if(currentView==='analysisPanel'&&job?.id===id)loadAnalysis();},1500);return;
+      }
+      total=result.total;keyStatus=result.key_status;
+      if(params.get('mode')==='keys'){headers=[...job.keys,'Status','Mismatches','Inspect'];rows=result.rows.map(r=>[...JSON.parse(r[0]),r[1],r[2]]);}
+      else{headers=[...job.keys,'Column','File 1 value','File 2 value'];rows=result.rows.map(r=>[...JSON.parse(r[0]),r[1],r[2]+(r[4]>1000?' … [truncated]':''),r[3]+(r[5]>1000?' … [truncated]':'')]);}
+    }
+    $('analysisStatus').classList.remove('loading-status');
+    const head=document.createElement('tr');headers.forEach(value=>{const th=document.createElement('th');th.textContent=value;head.append(th);});table.append(head);
+    rows.forEach(row=>{const tr=document.createElement('tr');row.forEach(value=>{const td=document.createElement('td');td.textContent=value;tr.append(td);});if(headers.at(-1)==='Inspect'){const td=document.createElement('td'),button=document.createElement('button');button.textContent='Inspect';button.className='subtle';button.addEventListener('click',()=>{if(mode==='columns')$('analysisColumn').value=row[0];else $('analysisKey').value=job.keys.length===1?row[0]:JSON.stringify(row.slice(0,job.keys.length));analysisOffset=0;loadAnalysis();});td.append(button);tr.append(td);}table.append(tr);});
+    $('analysisStatus').textContent=total?`${number(total)} results. Percentages use matched keys only.`:keyStatus==='left_only'?'This key exists only in File 1.':keyStatus==='right_only'?'This key exists only in File 2.':'No mismatches for this selection. Equal keys are not indexed.';
+    $('analysisRange').textContent=total?`${analysisOffset+1}–${Math.min(analysisOffset+50,total)} of ${number(total)}`:'0 results';
+    $('analysisPrev').disabled=!analysisOffset;$('analysisNext').disabled=analysisOffset+50>=total;
+  }catch(error){$('analysisStatus').classList.remove('loading-status');$('analysisStatus').textContent=error.message;showError(error);}
+}
+for(const id of ['analysisSearch','analysisMode','analysisColumn'])$(id).addEventListener(id==='analysisSearch'?'click':'change',()=>{if(id==='analysisMode')$('analysisColumn').value='';analysisOffset=0;loadAnalysis();});
+$('analysisPrev').addEventListener('click',()=>{analysisOffset=Math.max(0,analysisOffset-50);loadAnalysis();});
+$('analysisNext').addEventListener('click',()=>{analysisOffset+=50;loadAnalysis();});
+
+$('analysisRetry').addEventListener('click',async()=>{try{$('analysisRetry').hidden=true;await api(endpoint('/analysis'),{});await loadAnalysis();}catch(error){showError(error);}});

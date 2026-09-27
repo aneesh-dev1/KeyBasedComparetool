@@ -12,7 +12,7 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 2
+REPORT_VERSION = 3
 
 TABLES = ('differences', 'left_only', 'right_only')
 TITLES = {'differences': 'Changed cells', 'left_only': 'Keys only in left file', 'right_only': 'Keys only in right file'}
@@ -91,6 +91,11 @@ def make_summary_html(summary, links=None, previews=None):
     for title, value in [('Rows matched', f'{matched:,}'), ('Overall cell match rate', percent(overall)), ('Columns with differences', f'{len(changed):,} of {len(stats):,}'), ('Total cell differences', f'{summary["changed_cells"]:,}')]:
         out += '<div class="card"><small>'+title+'</small><strong>'+value+'</strong></div>'
     out += '</section><p class="row-counts">Rows in both files: '+f'{matched:,} · Only in File 1: {summary.get("left_only",0):,} · Only in File 2: {summary.get("right_only",0):,}'+'</p><p class="muted">Rates use matched keys and compared non-key columns, after exclusions and value overrides. Keys found in only one file are reported separately. N/A means no comparable cells. Percentages are rounded to four decimal places.</p>'
+    if summary.get('ignore_key_containers'):
+        out += '<section class="report-section" style="background:#fff8d9;border-left:6px solid #e2ae00"><h2>Ignored key containers — excluded from comparison</h2><p>'+f"File 1 excluded rows: {summary.get('left_excluded_rows',0):,} · File 2 excluded rows: {summary.get('right_excluded_rows',0):,}"+'</p>'
+        for item in summary['ignore_key_containers']:
+            out += '<p><strong>'+html.escape(item['name'])+'</strong> — '+html.escape(item['reason'])+f" · {len(item['keys']):,} configured keys"+'</p>'
+        out += '<a href="#scope">View all configured ignored keys</a></section>'
     out += '<section id="statistics" class="report-section"><h2>Column Statistics</h2><input type="search" id="columnSearch" placeholder="Search columns…" aria-label="Search column statistics"><div class="table-wrap"><table id="columnStats">'+html_row(['Column','Differences','Mismatch %','Match %','View'],True)
     for i,(name,count,mismatch,match) in enumerate(stats):
         link = '<a href="#column-'+str(i)+'">View</a>' if count else 'No differences' if matched else 'No matched rows'
@@ -173,7 +178,7 @@ def write_xlsx(path, sheets, options=None):
         book.writestr('xl/workbook.xml', f'<workbook xmlns="{ns}" xmlns:r="{rel}"><sheets>{entries}</sheets></workbook>')
         relations = ''.join(f'<Relationship Id="rId{i}" Type="{rel}/worksheet" Target="worksheets/sheet{i}.xml"/>' for i in range(1, len(sheets)+1))
         book.writestr('xl/_rels/workbook.xml.rels', f'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{relations}<Relationship Id="styles" Type="{rel}/styles" Target="styles.xml"/></Relationships>')
-        book.writestr('xl/styles.xml', f'''<styleSheet xmlns="{ns}"><fonts count="5"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font><font><color rgb="FF9B3025"/><sz val="11"/><name val="Calibri"/></font><font><color rgb="FF256238"/><sz val="11"/><name val="Calibri"/></font><font><color rgb="FF007B99"/><u/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF004364"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="5"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>''')
+        book.writestr('xl/styles.xml', f'''<styleSheet xmlns="{ns}"><fonts count="5"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font><font><color rgb="FF9B3025"/><sz val="11"/><name val="Calibri"/></font><font><color rgb="FF256238"/><sz val="11"/><name val="Calibri"/></font><font><color rgb="FF007B99"/><u/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF004364"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="6"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyAlignment="1"><alignment wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>''')
         for sheet_index, (name, rows) in enumerate(sheets, 1):
             header_rows = options.get(name, {}).get('header_rows', 2)
             hyperlinks = []
@@ -188,6 +193,8 @@ def write_xlsx(path, sheets, options=None):
                     for col, value in enumerate(row, 1):
                         ref = f'{column_letter(col)}{number}'
                         style = 1 if number <= header_rows else 0
+                        if options.get(name, {}).get('audit'):
+                            style = 5
                         if number > header_rows:
                             color_columns = options.get(name, {}).get('value_columns', [])
                             if col in color_columns:
@@ -258,6 +265,12 @@ def export_excel(report, destination, notify=lambda message: None):
         yield ['Overall match %',round(sum(row[3] for row in stats)/len(stats),4) if stats and summary.get('matched_keys') else 'N/A']
         yield ['Rate basis','Matched keys only; after exclusions and value overrides. One-sided keys are reported separately.']
         yield ['Types','Values are compared as exact text; typeA/typeB are text. diffAB is valueA minus valueB for finite decimal values only.']
+        if summary.get('ignore_key_containers'):
+            yield ['IGNORED KEY CONTAINERS',Link('Review exclusions and reasons','Ignored key containers')]
+            yield ['Excluded rows — File 1',summary.get('left_excluded_rows',0)]
+            yield ['Excluded rows — File 2',summary.get('right_excluded_rows',0)]
+            for item in summary['ignore_key_containers']:
+                yield [item['name'],item['reason']]
         yield ['Contents',Link('Open TOC','TOC')]
         for row in itertools.islice(summary_rows(summary),1,None):
             value=row[1]
@@ -270,6 +283,8 @@ def export_excel(report, destination, notify=lambda message: None):
     if summary.get('ignore_key_containers'):
         sheets.append(('Ignored key containers',exclusion_rows(summary)))
     options = {name: {'header_rows':1} for name in ['File Summary','TOC']+list(mapped.values())}
+    if summary.get('ignore_key_containers'):
+        options['Ignored key containers']={'header_rows':2,'audit':True}
     for name in mapped.values():
         options[name]['value_columns']=[len(summary['keys'])+1,len(summary['keys'])+2]
     with partition_columns(report, columns, destination.parent, notify) as paths:

@@ -22,10 +22,11 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 import webbrowser
 
+from analysis import build_index, query_index
 from json_compare import compare_json, discover_arrays
 from excel_input import sheets as excel_sheets, convert as convert_excel
 from file_io import atomic_write_text, replace_retry
-from compare import align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
+from compare import common_headers, align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
 from reports import export_excel, export_html, make_summary_html, REPORT_VERSION
 
 BASE = Path(__file__).resolve().parent
@@ -52,6 +53,9 @@ class Application:
             changed = False
             if job['state'] in ('queued', 'running', 'preparing'):
                 job.update(state='error', error='Server stopped before comparison completed. Start a new comparison.')
+                changed = True
+            if job.get('analysis', {}).get('state') in ('queued', 'running'):
+                job['analysis'] = dict(state='error', message='Analysis preparation interrupted. Try again.')
                 changed = True
             for export in job.get('exports', {}).values():
                 if export['state'] in ('queued', 'running'):
@@ -113,7 +117,7 @@ class Application:
         return job
 
     def busy(self, job):
-        return job['state'] in ('queued', 'running', 'preparing') or any(
+        return job['state'] in ('queued', 'running', 'preparing') or job.get('analysis', {}).get('state') in ('queued','running') or any(
             export.get('state') in ('queued', 'running') for export in job.get('exports', {}).values())
 
     def remove_job(self, identity, allowed_requests=0):
@@ -188,7 +192,7 @@ class Application:
                     replace_retry(source, directory / f'{side}.source.csv')
                     replace_retry(temporary, source)
                     columns[side] = header(source, ',', 'utf-8')
-            self.patch(identity, state='ready', source_headers=columns, column_headers=columns, headers_reviewed=False, columns=columns['left'], delimiter=',', encoding='utf-8', preparation_message='Selected sheets are ready')
+            self.patch(identity, state='ready', source_headers=columns, column_headers=columns, headers_reviewed=False, columns=common_headers(align_headers(columns)[0]), delimiter=',', encoding='utf-8', preparation_message='Selected sheets are ready')
         except Exception as error:
             self.patch(identity, state='error', error=str(error))
 
@@ -215,6 +219,21 @@ class Application:
             self.patch(identity, state='complete', summary=summary, finished=time.time())
         except Exception as error:
             self.patch(identity, state='error', error=str(error), finished=time.time())
+
+    def run_analysis(self, identity):
+        directory=self.directory(identity)
+        temporary=directory/'analysis.part.sqlite'
+        def notify(message):
+            self.patch(identity, analysis=dict(state='running',message=message))
+        try:
+            temporary.unlink(missing_ok=True)
+            notify('Preparing a disk-backed index for key and column analysis…')
+            build_index(directory/'report',temporary,notify)
+            replace_retry(temporary,directory/'analysis.sqlite')
+            self.patch(identity,analysis=dict(state='complete',message='Analysis ready'))
+        except Exception as error:
+            temporary.unlink(missing_ok=True)
+            self.patch(identity,analysis=dict(state='error',message=str(error)))
 
     def run_export(self, identity, kind):
         def status(state, **values):
@@ -450,12 +469,13 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('Column headers are required')
                     aligned, changes = align_headers(source, layout)
                     # Preserve existing scope selections by their left-file position.
-                    rename = dict(zip(job['columns'], aligned['left']))
+                    rename = dict(zip(job.get('column_headers',source)['left'], aligned['left']))
+                    common = common_headers(aligned)
                     draft = job.get('draft', {})
                     for key in ('keys', 'ignore_columns'):
-                        draft[key] = [rename.get(n,n) for n in (draft.get(key) or [])]
-                    draft['value_overrides'] = [dict(rule, column=rename.get(rule['column'],rule['column'])) for rule in (draft.get('value_overrides') or [])]
-                    job.update(source_headers=source, column_headers=layout, columns=aligned['left'],
+                        draft[key] = [rename.get(n,n) for n in (draft.get(key) or []) if rename.get(n,n) in common]
+                    draft['value_overrides'] = [dict(rule, column=rename.get(rule['column'],rule['column'])) for rule in (draft.get('value_overrides') or []) if rename.get(rule['column'],rule['column']) in common]
+                    job.update(source_headers=source, column_headers=layout, columns=common,
                                header_layout_changes=changes, headers_reviewed=True, draft=draft)
                     self.app.save(job)
                 return self.json_response(job)
@@ -526,7 +546,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.json_response(job)
                     for side in ('left', 'right'):
                         job['files'][side]['complete'] = True
-                    job.update(state='ready', source_headers=columns, column_headers=columns, headers_reviewed=False, columns=columns['left'])
+                    job.update(state='ready', source_headers=columns, column_headers=columns, headers_reviewed=False, columns=common_headers(align_headers(columns)[0]))
                     self.app.save(job)
                 return self.json_response(job)
             if self.command == 'POST' and action == 'select-sheets':
@@ -598,6 +618,24 @@ class Handler(BaseHTTPRequestHandler):
                         self.app.save(job)
                         self.app.pool.submit(self.app.run_export, identity, kind)
                 return self.json_response(job, 202)
+            if action == 'analysis' and self.command in ('GET','POST'):
+                if job['state'] != 'complete':
+                    raise ValueError('Complete the comparison before analysis')
+                if self.command == 'POST':
+                    with self.app.lock:
+                        job=self.app.load(identity)
+                        if job.get('analysis',{}).get('state') not in ('queued','running','complete'):
+                            job['analysis']=dict(state='queued',message='Waiting for a server worker…')
+                            self.app.save(job)
+                            self.app.pool.submit(self.app.run_analysis,identity)
+                    return self.json_response(job['analysis'],202)
+                state=job.get('analysis',{'state':'not_started'})
+                if state['state'] != 'complete': return self.json_response(state)
+                key=json.loads(query['key'][0]) if 'key' in query else None
+                if key is not None and (not isinstance(key,list) or len(key)!=len(job['keys']) or any(not isinstance(v,str) for v in key)):
+                    raise ValueError('Supply an exact text key with one value per key column')
+                result=query_index(directory/'analysis.sqlite',query.get('mode',['keys'])[0],int(query.get('offset',['0'])[0]),query.get('column',[''])[0],key)
+                return self.json_response(dict(state='complete',**result))
             if self.command == 'GET' and action == 'preview':
                 if job['state'] != 'complete':
                     raise ValueError('Results are not ready')

@@ -64,8 +64,9 @@ class ComparisonTests(unittest.TestCase):
     def test_schema_mismatch(self):
         left = self.write('a.csv', ['id', 'v'], [])
         right = self.write('b.csv', ['id', 'other'], [])
-        with self.assertRaisesRegex(ValueError, 'Schema mismatch'):
-            self.run_comparison(left, right)
+        result=self.run_comparison(left, right)
+        self.assertEqual(result['changed_cells_by_column'], {})
+        self.assertEqual(result['unmatched_columns'], {'left':['v'],'right':['other']})
 
     def test_wide_multiple_merge_passes(self):
         names = ['id'] + [f'c{i}' for i in range(1999)]

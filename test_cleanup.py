@@ -64,6 +64,15 @@ class CleanupTests(unittest.TestCase):
         self.app.cleanup()
         self.assertFalse(folder.exists())
         self.assertTrue(recent_folder.exists())
+    def test_analysis_preparation_protects_job(self):
+        job,folder=self.old_job()
+        job['analysis']={'state':'running'}
+        self.app.save(job)
+        os.utime(folder/'job.json',(1,1))
+        with self.assertRaises(ValueError): self.app.remove_job(job['id'])
+        self.app.cleanup()
+        self.assertTrue(folder.exists())
+
     def test_retries_interrupted_deletion(self):
         job, folder = self.old_job()
         trash = folder.with_name('.deleting-'+job['id'])

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from urllib.error import HTTPError
-from compare import align_headers, normalize_headers
+from compare import common_headers, align_headers, normalize_headers
 import test_ui
 from test_excel_input import workbook, data_rows
 from json_compare import compare_json
@@ -13,7 +13,7 @@ from json_compare import compare_json
 class LayoutTests(unittest.TestCase):
     def test_casefold_reordering_and_alias(self):
         source={'left':['ID','AT01S'], 'right':['AT02S','id']}
-        with self.assertRaisesRegex(ValueError,'Align column'):align_headers(source)
+        self.assertEqual(common_headers(align_headers(source)[0]),['ID'])
         aligned,audit=align_headers(source,{'left':['ID','AT01S'], 'right':['at01s','id']})
         self.assertEqual(aligned,{'left':['ID','AT01S'], 'right':['AT01S','ID']})
         self.assertEqual(len(audit),2)
@@ -41,7 +41,7 @@ class LayoutAPITests(unittest.TestCase):
                 right=b'skip,AT02S,id\ny,none,001\ny,old,002\ny,new,003\n'
                 path=self.upload(left,right)
                 self.assertFalse(self.request(path)['headers_reviewed'])
-                with self.assertRaises(HTTPError):self.request(path+'/start',{'keys':['ID']})
+                self.assertEqual(self.request(path)['columns'],['ID','skip'])
                 self.request(path+'/config',{'keys':['ID'],'ignore_columns':['skip'],'value_overrides':[dict(column='AT01S',left='None',right='none')]})
                 ready=self.request(path+'/headers',{'column_headers':layout})
                 col=layout['left'][1]

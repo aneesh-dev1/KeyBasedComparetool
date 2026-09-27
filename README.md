@@ -129,7 +129,7 @@ must not exist. Inputs are never modified. Progress appears every 100,000 rows.
   case matter. CSV quoting style and record line endings do not matter.
 - Empty fields are empty strings; `NULL` is literal text. No type inference.
 - Empty key components are rejected unless `--allow-empty-keys` is supplied.
-- Both files must have the same column names, but column order can differ.
+- Only common column names are compared, ignoring header case; column order can differ.
   Missing, empty or duplicate headers and inconsistent row widths are errors.
 - Default encoding is UTF-8 with optional BOM. Use `--encoding` and
   `--delimiter` for other input formats. Quoted multiline values are supported.
@@ -225,8 +225,7 @@ of public branding, not a certification against internal brand guidelines.
 selectors read only the CSV header record, never scan data rows to build the
 list, and render at most 100 choices per page. A column selected as a key cannot
 also be ignored. Ignored columns are omitted from temporary row payloads,
-equality checks, per-column counts, and mismatch exports. Both input schemas
-must still have the same set of column names.
+equality checks, per-column counts, and mismatch exports. Non-common columns are automatically omitted from comparison and recorded in the summary.
 
 **Ignore keys** excludes matching rows from both files, including rows that
 otherwise would appear as left-only or right-only. For a single key enter
@@ -478,7 +477,7 @@ lists use the spelling from file 1.
 The editor searches and pages through loaded header metadata (50 names per
 file per page). It does not read data rows or rewrite either uploaded file.
 Apply validates that every header is nonempty and unique ignoring case, and
-that the two files have the same set of comparison names. Files with different
+selects only the shared comparison names. Files with different
 column counts still need matching schemas; this step renames columns and does
 not add or remove them. Existing keys, ignored columns, and value overrides
 follow renamed file 1 columns by position. Header layouts persist in job history
@@ -551,3 +550,21 @@ a diagnostic decimal subtraction where possible, not the equality rule. Numeric
 diagnostics are omitted for nonfinite values or unusually long/extreme numbers.
 Rates use matched keys after exclusions and overrides; no matched keys means N/A.
 Old exports can be regenerated in the new layout after restarting the server.
+
+## Analysis and report progress
+
+After Results, open Analysis to review column mismatch counts and match rates,
+then inspect a column or an exact key. Single keys are literal text; composite
+keys are JSON arrays of strings. Key-level results include changed keys and
+keys found in only one file. Equal keys and excluded keys are not indexed.
+
+The first detail/key query queues an on-disk SQLite index using the shared
+heavy-job worker limit. This needs additional disk space; it is removed with
+the job. Results page 50 rows at a time and cap displayed values at 1,000
+characters. Full exported values are unchanged. Indexing progress appears in
+the Analysis screen, with a retry option if preparation fails. Active analysis
+preparation is protected from cleanup, just like comparison and export.
+
+Export buttons show queued/generating status with an accessible spinner and
+live progress messages. Ignore-key containers and reasons are highlighted in
+HTML summary callouts and the Excel audit sheet, with a link from File Summary.

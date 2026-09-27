@@ -77,15 +77,16 @@ def align_headers(source, layout=None):
             raise ValueError(f'{side}: comparison headers must be unique, ignoring case')
     canonical = {n.casefold(): n for n in layout['left']}
     right = {n.casefold(): n for n in layout['right']}
-    if canonical.keys() != right.keys():
-        left_only = [n for k,n in canonical.items() if k not in right]
-        right_only = [n for k,n in right.items() if k not in canonical]
-        raise ValueError(f'Schema mismatch. Align column headers first. File 1 only: {left_only[:20]}; File 2 only: {right_only[:20]}')
-    aligned = dict(left=list(layout['left']), right=[canonical[n.casefold()] for n in layout['right']])
+    aligned = dict(left=list(layout['left']), right=[canonical.get(n.casefold(), n) for n in layout['right']])
     audit = [dict(side=side, column=i, original=old, normalized=new)
              for side in ('left', 'right')
              for i,(old,new) in enumerate(zip(source[side], aligned[side]),1) if old != new]
     return aligned, audit
+
+
+def common_headers(aligned):
+    right = {name.casefold() for name in aligned['right']}
+    return [name for name in aligned['left'] if name.casefold() in right]
 
 
 def read_header(path, delimiter, encoding):
@@ -352,24 +353,26 @@ def compare(args):
     right_names, right_header_changes = read_header(args.right, args.delimiter, args.encoding)
     aligned, layout_changes = align_headers(dict(left=left_names, right=right_names), getattr(args, 'column_headers', None))
     left_names, right_names = aligned['left'], aligned['right']
-    if len(set(args.keys)) != len(args.keys) or any(k not in left_names for k in args.keys):
+    common = common_headers(aligned)
+    unmatched_columns = {side: [name for name in aligned[side] if name not in common] for side in ('left', 'right')}
+    if len(set(args.keys)) != len(args.keys) or any(k not in common for k in args.keys):
         raise ValueError('Keys must be distinct existing column names')
-    ignored_columns, args.excluded_keys = validate_scope(args.keys, left_names,
+    ignored_columns, args.excluded_keys = validate_scope(args.keys, common,
         getattr(args, 'ignore_columns', []), getattr(args, 'ignore_keys', ''))
     exclusion_audit = []
     for container in getattr(args, 'ignore_key_containers', []):
-        _, excluded = validate_scope(args.keys, left_names, [], container['values'])
+        _, excluded = validate_scope(args.keys, common, [], container['values'])
         args.excluded_keys.update(excluded)
         exclusion_audit.append(dict(name=container['name'], reason=container['reason'],
                                     keys=[json.loads(key.decode('utf-8')) for key in sorted(excluded)]))
     legacy = getattr(args, 'ignore_keys', '')
     if legacy.strip():
-        _, excluded = validate_scope(args.keys, left_names, [], legacy)
+        _, excluded = validate_scope(args.keys, common, [], legacy)
         exclusion_audit.append(dict(name='Manual keys', reason='Manually entered exclusion',
                                     keys=[json.loads(key.decode('utf-8')) for key in sorted(excluded)]))
     ignored_set = set(ignored_columns)
-    canonical = [name for name in left_names if name not in ignored_set]
-    overrides, override_lookup = validate_overrides(getattr(args, 'value_overrides', []), left_names, args.keys, ignored_columns)
+    canonical = [name for name in common if name not in ignored_set]
+    overrides, override_lookup = validate_overrides(getattr(args, 'value_overrides', []), common, args.keys, ignored_columns)
     # Exclusive creation prevents accidental replacement of previous reports.
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=False)
@@ -432,7 +435,7 @@ def compare(args):
                     progress(args, 'Comparison batch complete', stage='compare', batch=(processed-1)//batch_size+1, batch_keys=(processed-1)%batch_size+1, rows=processed, changed_cells=stats['changed_cells'], status='completed', elapsed_seconds=round(time.monotonic()-batch_start, 3))
             progress(args, 'Comparing keys', stage='compare', rows=processed, completed_batches=(processed+batch_size-1)//batch_size, status='completed')
     progress(args, 'Writing reports')
-    stats.update(keys=args.keys, comparison='exact text with explicit value overrides' if overrides else 'exact text', changed_cells_by_column=columns,
+    stats.update(unmatched_columns=unmatched_columns, keys=args.keys, comparison='exact text with explicit value overrides' if overrides else 'exact text', changed_cells_by_column=columns,
                  value_overrides=overrides, ignore_key_containers=exclusion_audit,
                  column_headers=aligned, header_layout_changes=layout_changes,
                  header_changes=[dict(side=side, **change) for side, changes in (("left", left_header_changes), ("right", right_header_changes)) for change in changes],
