@@ -12,7 +12,7 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 3
+REPORT_VERSION = 4
 
 TABLES = ('differences', 'left_only', 'right_only')
 TITLES = {'differences': 'Changed cells', 'left_only': 'Keys only in left file', 'right_only': 'Keys only in right file'}
@@ -22,7 +22,7 @@ STYLE = '''body{font:15px system-ui,sans-serif;color:#004364;background:#f7f9fa;
 def summary_rows(summary):
     yield ['Metric', 'Value']
     for key, value in summary.items():
-        if key not in ('changed_cells_by_column', 'ignore_key_containers'):
+        if key not in ('changed_cells_by_column', 'ignore_key_containers','analysis_notes'):
             yield [key.replace('_', ' ').capitalize(), json.dumps(value, ensure_ascii=False) if isinstance(value, list) else value]
     yield ['Column', 'Changed cells']
     for name, count in summary['changed_cells_by_column'].items():
@@ -54,6 +54,19 @@ def exclusion_html(summary):
     rows = iter(exclusion_rows(summary))
     title = next(rows)[0]
     return '<h2>Ignored key containers</h2><p>' + html.escape(title) + '</p><table>' + html_row(next(rows), True) + ''.join(html_row(row) for row in rows) + '</table>'
+
+
+def report_summary(report):
+    summary=json.loads((report/'summary.json').read_text())
+    notes=report/'annotations.json'
+    summary['analysis_notes']=json.loads(notes.read_text()) if notes.exists() else []
+    return summary
+
+
+def note_rows(summary):
+    yield ['Column']+summary['keys']+['Classification','Comments']
+    for note in summary.get('analysis_notes',[]):
+        yield [note['column'] or 'All columns']+(note['key'] if note['key'] is not None else ['All keys']*len(summary['keys']))+[note['status'],note['comment']]
 
 
 def column_stats(summary):
@@ -118,6 +131,8 @@ def make_summary_html(summary, links=None, previews=None):
     out += ''.join('<span class="chip">'+html.escape(name)+'</span>' for name in equal) if matched else '<p>No matched rows; match rates cannot be calculated.</p>'
     out += '</div></section><section id="scope" class="report-section"><h2>Scope &amp; exclusions</h2><details><summary>Comparison settings and metrics</summary><div class="table-wrap"><table>'
     out += ''.join(html_row(row, i==0) for i,row in enumerate(summary_rows(summary)))+'</table></div></details>'+exclusion_html(summary)+'</section>'
+    if summary.get('analysis_notes'):
+        out += '<section class="report-section"><h2>Analysis classifications &amp; comments</h2><div class="table-wrap"><table>'+''.join(html_row(row,i==0) for i,row in enumerate(note_rows(summary)))+'</table></div></section>'
     out += """<script>document.getElementById('columnSearch').addEventListener('input',function(){const q=this.value.toLowerCase();document.querySelectorAll('#columnStats tr').forEach((r,i)=>{if(i)r.hidden=!r.cells[0].textContent.toLowerCase().includes(q);});});document.querySelectorAll('a[href^="#column-"]').forEach(a=>a.addEventListener('click',()=>{document.querySelector(a.getAttribute('href')).open=true;}));</script>"""
     return out+'</main></div></body></html>'
 
@@ -165,7 +180,7 @@ def sheet_names(columns):
     return result
 
 
-def write_xlsx(path, sheets, options=None):
+def write_xlsx(path, sheets, options=None, notify=lambda message:None):
     """Write worksheets sequentially; source text is never interpreted as a formula."""
     options = options or {}
     ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
@@ -186,6 +201,7 @@ def write_xlsx(path, sheets, options=None):
                 stream.write(f'<worksheet xmlns="{ns}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="{header_rows}" topLeftCell="A{header_rows+1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="16384" width="32" customWidth="1"/></cols><sheetData>'.encode())
                 max_columns = number = 0
                 for number, row in enumerate(rows, 1):
+                    if number%10000==0: notify(f'Writing {name}: {number:,} rows')
                     if number > 1048576 or len(row) > 16384:
                         raise ValueError('A column exceeds Excel worksheet capacity. Download HTML or CSV results instead.')
                     max_columns = max(max_columns, len(row))
@@ -235,7 +251,8 @@ def partition_columns(report, columns, parent, notify):
             with contextlib.ExitStack() as stack:
                 handles = {column: stack.enter_context(paths[column].open('w', encoding='utf-8')) for column in group}
                 with bucket.open(encoding='utf-8') as source:
-                    for line in source:
+                    for index,line in enumerate(source):
+                        if index%10000==0:notify('Partitioning column results…')
                         column, values = json.loads(line)
                         handles[column].write(json.dumps(values, ensure_ascii=False) + '\n')
             bucket.unlink()
@@ -243,18 +260,19 @@ def partition_columns(report, columns, parent, notify):
 
 
 def export_excel(report, destination, notify=lambda message: None):
-    summary = json.loads((report / 'summary.json').read_text())
+    summary = report_summary(report)
     stats = column_stats(summary)
     columns = [name for name,count,_,_ in stats if count]
     if any(summary['changed_cells_by_column'][name] > 1048574 for name in columns):
         raise ValueError('One column has more than 1,048,574 mismatches and cannot fit in one Excel sheet. Download HTML or CSV instead.')
-    reserved = ['File Summary', 'TOC'] + (['Ignored key containers'] if summary.get('ignore_key_containers') else [])
+    reserved = ['File Summary', 'TOC'] + (['Ignored key containers'] if summary.get('ignore_key_containers') else []) + (['Analysis notes'] if summary.get('analysis_notes') else [])
     names = sheet_names(reserved + columns)
     mapped = dict(zip(columns, names[len(reserved):]))
+    column_notes={n['column']:n['status']+': '+n['comment'] for n in summary.get('analysis_notes',[]) if n['key'] is None}
     def toc():
         yield ['Column', 'DifferenceCount', 'Mismatch %', 'Match %', 'Link', 'Comments']
         for name,count,mismatch,match in stats:
-            yield [name,count,round(mismatch,4) if mismatch is not None else 'N/A',round(match,4) if match is not None else 'N/A',Link('View',mapped[name]) if count else 'No differences' if summary.get('matched_keys') else 'No matched rows','']
+            yield [name,count,round(mismatch,4) if mismatch is not None else 'N/A',round(match,4) if match is not None else 'N/A',Link('View',mapped[name]) if count else 'No differences' if summary.get('matched_keys') else 'No matched rows',column_notes.get(name,'')]
     def summary_sheet():
         yield ['Metric','Value']
         yield ['File 1',source_labels(summary)[0]]
@@ -282,7 +300,9 @@ def export_excel(report, destination, notify=lambda message: None):
     sheets = [('File Summary',summary_sheet()), ('TOC',toc())]
     if summary.get('ignore_key_containers'):
         sheets.append(('Ignored key containers',exclusion_rows(summary)))
-    options = {name: {'header_rows':1} for name in ['File Summary','TOC']+list(mapped.values())}
+    if summary.get('analysis_notes'):
+        sheets.append(('Analysis notes',note_rows(summary)))
+    options = {name: {'header_rows':1} for name in ['File Summary','TOC','Analysis notes']+list(mapped.values())}
     if summary.get('ignore_key_containers'):
         options['Ignored key containers']={'header_rows':2,'audit':True}
     for name in mapped.values():
@@ -298,7 +318,7 @@ def export_excel(report, destination, notify=lambda message: None):
         sheets.extend((mapped[column],rows(column)) for column in columns)
         if not columns:
             sheets.append(('No mismatches',iter([['Comparison result'],['Status','Details'],['No changed cells','Check summary for keys found only in one file.']])))
-        write_xlsx(destination,sheets,options)
+        write_xlsx(destination,sheets,options,notify)
 
 
 def numeric_difference(left, right):
@@ -318,7 +338,7 @@ def numeric_difference(left, right):
 
 
 def export_html(report, destination, notify=lambda message: None, page_size=1000):
-    summary = json.loads((report / 'summary.json').read_text())
+    summary = report_summary(report)
     counts = {'differences': summary['changed_cells'], 'left_only': summary['left_only'], 'right_only': summary['right_only']}
     with zipfile.ZipFile(destination, 'w', zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as bundle:
         columns = [name for name,count,_,_ in column_stats(summary) if count]

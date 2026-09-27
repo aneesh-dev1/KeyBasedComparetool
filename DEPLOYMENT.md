@@ -71,7 +71,7 @@ The launcher binds localhost or all IPv4 interfaces; IPv6 is not configured.
 ## Five users and resource limits
 
 Five browsers can upload concurrently and have independent comparisons. The
-server's heavy-job queue covers CSV comparison, Excel import, and report export.
+server's heavy-job queue covers CSV comparison, Excel import, report export, and Analysis index preparation.
 With `MAX_JOBS=1`, only one of those runs at a time; other jobs show Queued. This
 protects memory and disk throughput while keeping the HTTP UI responsive.
 
@@ -156,3 +156,19 @@ and graceful shutdown are exercised separately. Pilot with representative files,
 watch storage/memory, and confirm access through your real hostname/proxy before
 opening it to the whole team. This is a bounded small-team service, not a hardened
 public multi-tenant web platform.
+
+## Workflow operations
+
+Users can cancel their queued/running tasks in Storage & queue or the relevant
+comparison/export/analysis screen. Running work stops cooperatively at a safe
+checkpoint; do not terminate the server to cancel one user's job. Cancelled
+comparisons/imports need a new comparison; exports and analysis may be retried.
+
+Storage measurement is a snapshot of logical file sizes in the current workspace.
+Free disk space is server-wide. Preflight does not reserve disk for concurrent
+uploads. Profiles remain in the workspace library after job cleanup; analysis
+notes are part of the job and are deleted with it.
+
+Desktop notifications require browser permission and an open page. HTTPS is
+generally required for remote hostnames; localhost is an exception in supporting
+browsers. No email, external messaging service, or background push server is used.

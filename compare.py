@@ -16,6 +16,8 @@ import sys
 import tempfile
 import time
 from file_io import atomic_write_text
+from task_control import check_cancel
+from comparison_rules import validate_rules, equivalent
 
 
 def encode(value):
@@ -26,6 +28,7 @@ _PROGRESS_QUEUE = None
 
 
 def progress(args, phase, **values):
+    check_cancel(getattr(args,'cancel_file',None))
     if _PROGRESS_QUEUE is not None:
         _PROGRESS_QUEUE.put(('progress', phase, values))
         return
@@ -191,9 +194,10 @@ def merge(paths):
         yield from heapq.merge(*readers, key=itemgetter(0))
 
 
-def write_run(path, rows):
+def write_run(path, rows, args=None):
     with open(path, 'wb', buffering=1024*1024) as stream:
-        for key, payload in rows:
+        for index,(key, payload) in enumerate(rows):
+            if index%10000==0: check_cancel(getattr(args,'cancel_file',None))
             stream.write(FRAME.pack(len(key), len(payload)))
             stream.write(key)
             stream.write(payload)
@@ -216,7 +220,7 @@ def sort_csv(path, names, canonical, keys, temp, prefix, args):
         chunk.sort(key=itemgetter(0))
         target = temp / f'{prefix}-{serial}.run'
         serial += 1
-        write_run(target, chunk)
+        write_run(target, chunk, args)
         paths.append(target)
         progress(args, f'{prefix} sort batch complete', batch=serial, batch_rows=len(chunk), rows=count, status='completed', elapsed_seconds=round(time.monotonic()-batch_started, 3))
         chunk, size = [], 0
@@ -262,7 +266,7 @@ def sort_csv(path, names, canonical, keys, temp, prefix, args):
             total_batches = (len(paths)+args.fan_in-1)//args.fan_in
             progress(args, f'{prefix} merge batch started', merge_pass=merge_pass, batch=batch, total_batches=total_batches, input_runs=len(group), status='ongoing')
             with contextlib.closing(merge(group)) as rows:
-                write_run(target, rows)
+                write_run(target, rows, args)
             for source in group:
                 source.unlink()
             replacement.append(target)
@@ -308,6 +312,7 @@ def sort_inputs(args, left_names, right_names, canonical, temp):
             process.start()
             processes.append((side,process))
         while len(results) < 2:
+            check_cancel(getattr(args,'cancel_file',None))
             try:
                 kind, name, value = events.get(timeout=0.2)
             except queue.Empty:
@@ -335,13 +340,23 @@ def sort_inputs(args, left_names, right_names, canonical, temp):
         events.join_thread()
 
 
-def unique(rows, label):
-    previous = None
-    for key, payload in rows:
-        if key == previous:
-            raise ValueError(f'{label}: duplicate key {key.decode("utf-8")}; keys must be unique')
-        previous = key
-        yield key, payload
+def unique(rows, label, diagnostics=None, args=None):
+    """Report the first duplicate group with its full count and bounded samples."""
+    import itertools
+    for key,group in itertools.groupby(rows,key=lambda row:row[0]):
+        first=next(group);count=1;samples=[]
+        for item in group:
+            count+=1
+            if count%10000==0: check_cancel(getattr(args,'cancel_file',None))
+            if count==2:samples.append(unpack_values(first[1]))
+            if len(samples)<3:samples.append(unpack_values(item[1]))
+        if count>1:
+            if diagnostics:
+                atomic_write_text(diagnostics,json.dumps(dict(side=label,key=json.loads(key),count=count,
+                    sample_columns=getattr(args,'diagnostic_columns',[])[:20],samples=[[v[:500] for v in row[:20]] for row in samples],
+                    note='First duplicate key group encountered. Samples show up to 20 compared columns and 500 characters per value. Correct duplicates and rerun.')))
+            raise ValueError(f'{label}: duplicate key {key.decode("utf-8")}; {count} rows share this key; keys must be unique')
+        yield first
 
 
 def compare(args):
@@ -373,12 +388,15 @@ def compare(args):
     ignored_set = set(ignored_columns)
     canonical = [name for name in common if name not in ignored_set]
     overrides, override_lookup = validate_overrides(getattr(args, 'value_overrides', []), common, args.keys, ignored_columns)
+    rules=validate_rules(getattr(args,'comparison_rules',[]),common,args.keys,ignored_columns)
+    rule_lookup={rule['column']:rule for rule in rules}
+    args.diagnostic_columns=canonical
     # Exclusive creation prevents accidental replacement of previous reports.
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=False)
     (out / 'INCOMPLETE').write_text('Reports are incomplete until summary.json is present.\n')
     stats = dict(left_rows=0, right_rows=0, matched_keys=0, equal_rows=0,
-                 changed_rows=0, changed_cells=0, left_only=0, right_only=0, override_equivalent_cells=0)
+                 changed_rows=0, changed_cells=0, left_only=0, right_only=0, override_equivalent_cells=0, rule_equivalent_cells=0)
     columns = {name: 0 for name in canonical if name not in args.keys}
     with tempfile.TemporaryDirectory(prefix='csv-compare-', dir=args.temp_dir) as work:
         temp = Path(work)
@@ -395,8 +413,8 @@ def compare(args):
                 writers[name].writerow(fields)
             left_merge = stack.enter_context(contextlib.closing(merge(left_paths)))
             right_merge = stack.enter_context(contextlib.closing(merge(right_paths)))
-            left = unique(left_merge, 'left')
-            right = unique(right_merge, 'right')
+            left = unique(left_merge, 'left',getattr(args,'diagnostics_file',None),args)
+            right = unique(right_merge, 'right',getattr(args,'diagnostics_file',None),args)
             a, b = next(left, None), next(right, None)
             processed = 0
             batch_size = 10000
@@ -425,6 +443,9 @@ def compare(args):
                                 if (av, bv) in override_lookup.get(name, ()):
                                     stats['override_equivalent_cells'] += 1
                                     continue
+                                if name in rule_lookup and equivalent(av,bv,rule_lookup[name]):
+                                    stats['rule_equivalent_cells']+=1
+                                    continue
                                 changed = True
                                 columns[name] += 1
                                 stats['changed_cells'] += 1
@@ -435,7 +456,7 @@ def compare(args):
                     progress(args, 'Comparison batch complete', stage='compare', batch=(processed-1)//batch_size+1, batch_keys=(processed-1)%batch_size+1, rows=processed, changed_cells=stats['changed_cells'], status='completed', elapsed_seconds=round(time.monotonic()-batch_start, 3))
             progress(args, 'Comparing keys', stage='compare', rows=processed, completed_batches=(processed+batch_size-1)//batch_size, status='completed')
     progress(args, 'Writing reports')
-    stats.update(unmatched_columns=unmatched_columns, keys=args.keys, comparison='exact text with explicit value overrides' if overrides else 'exact text', changed_cells_by_column=columns,
+    stats.update(comparison_rules=rules, unmatched_columns=unmatched_columns, keys=args.keys, comparison='exact text with configured rules and/or overrides' if rules or overrides else 'exact text', changed_cells_by_column=columns,
                  value_overrides=overrides, ignore_key_containers=exclusion_audit,
                  column_headers=aligned, header_layout_changes=layout_changes,
                  header_changes=[dict(side=side, **change) for side, changes in (("left", left_header_changes), ("right", right_header_changes)) for change in changes],

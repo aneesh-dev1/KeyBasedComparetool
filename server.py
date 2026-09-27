@@ -22,6 +22,8 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 import webbrowser
 
+from task_control import check_cancel
+from comparison_rules import validate_rules
 from analysis import build_index, query_index
 from json_compare import compare_json, discover_arrays
 from excel_input import sheets as excel_sheets, convert as convert_excel
@@ -45,6 +47,8 @@ class Application:
         self.retention_days = 7
         self.pool = ThreadPoolExecutor(max_workers=max_jobs)  # Shared, bounded queue across sessions.
         self.json_lock = threading.Lock()
+        self.tasks = {}
+        self.max_jobs = max_jobs
         csv.field_size_limit(64 * 1024 * 1024)
         for path in self.root.glob('*/job.json'):
             if not re.fullmatch(r'[a-f0-9]{32}', path.parent.name):
@@ -63,6 +67,38 @@ class Application:
                     changed = True
             if changed:
                 self.save(job)
+
+    def submit(self, identity, kind, function, *args):
+        with self.lock:
+            flag=self.directory(identity)/('cancel-'+kind)
+            flag.unlink(missing_ok=True)
+            def run():
+                try:
+                    check_cancel(flag)
+                    function(identity,*args)
+                finally:
+                    with self.lock:
+                        if flag.exists(): self.mark_cancelled(identity,kind)
+                        self.tasks.pop((identity,kind),None)
+            future=self.pool.submit(run)
+            self.tasks[(identity,kind)]={'future':future,'queued_at':time.time()}
+
+    def mark_cancelled(self,identity,kind):
+        job=self.load(identity)
+        if kind in ('excel','html'):
+            job['exports'][kind]=dict(state='cancelled',updated=time.time(),message='Export cancelled. Generate it again when ready.')
+        elif kind=='analysis':job['analysis']=dict(state='cancelled',updated=time.time(),message='Analysis cancelled. Use Retry to prepare it again.')
+        else:job.update(state='cancelled',error='Cancelled by user. Start a new comparison.',finished=time.time())
+        self.save(job)
+
+    def cancel(self,identity,kind):
+        with self.lock:
+            entry=self.tasks.get((identity,kind))
+            if not entry: raise ValueError('This task has already finished or is not queued')
+            (self.directory(identity)/('cancel-'+kind)).touch()
+            if entry['future'].cancel():
+                self.mark_cancelled(identity,kind);self.tasks.pop((identity,kind),None)
+            return dict(message='Cancellation requested. Active work stops at its next safe checkpoint.')
 
     def directory(self, identity):
         if not re.fullmatch(r'[a-f0-9]{32}', identity):
@@ -113,6 +149,10 @@ class Application:
         identity = uuid.uuid4().hex
         self.directory(identity).mkdir()
         job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, exports={})
+        required=sum(f['size'] for f in files.values())
+        if shutil.disk_usage(self.root).free<required+128*1024**2:
+            self.directory(identity).rmdir()
+            raise ValueError('Insufficient server disk space for both uploaded files. Clean up old jobs first.')
         self.save(job)
         return job
 
@@ -173,6 +213,7 @@ class Application:
         job = self.load(identity)
         directory = self.directory(identity)
         def notify(message):
+            check_cancel(directory/'cancel-import')
             self.patch(identity, preparation_message=message)
             with (directory / 'run.log').open('a') as log:
                 log.write(f'{time.strftime("%H:%M:%S")}  {message}\n')
@@ -187,7 +228,8 @@ class Application:
                     temporary = directory / f'{side}.normalized'
                     with source.open(encoding=job['encoding'], newline='') as stream, temporary.open('w', encoding='utf-8', newline='') as output:
                         writer = csv.writer(output)
-                        for row in csv.reader(stream, delimiter=job['delimiter'], strict=True):
+                        for index,row in enumerate(csv.reader(stream, delimiter=job['delimiter'], strict=True)):
+                            if index%10000==0:check_cancel(directory/'cancel-import')
                             writer.writerow(row)
                     replace_retry(source, directory / f'{side}.source.csv')
                     replace_retry(temporary, source)
@@ -224,28 +266,30 @@ class Application:
         directory=self.directory(identity)
         temporary=directory/'analysis.part.sqlite'
         def notify(message):
+            check_cancel(directory/'cancel-analysis')
             self.patch(identity, analysis=dict(state='running',message=message))
         try:
             temporary.unlink(missing_ok=True)
             notify('Preparing a disk-backed index for key and column analysis…')
-            build_index(directory/'report',temporary,notify)
+            build_index(directory/'report',temporary,notify,lambda:(directory/'cancel-analysis').exists())
             replace_retry(temporary,directory/'analysis.sqlite')
-            self.patch(identity,analysis=dict(state='complete',message='Analysis ready'))
+            self.patch(identity,analysis=dict(state='complete',message='Analysis ready',updated=time.time()))
         except Exception as error:
             temporary.unlink(missing_ok=True)
-            self.patch(identity,analysis=dict(state='error',message=str(error)))
+            self.patch(identity,analysis=dict(state='error',message=str(error),updated=time.time()))
 
     def run_export(self, identity, kind):
         def status(state, **values):
             with self.lock:
                 job = self.load(identity)
-                job['exports'][kind] = dict(state=state, **values)
+                job['exports'][kind] = dict(state=state, updated=time.time(), **values)
                 self.save(job)
         directory = self.directory(identity)
         target = directory / ('mismatches.xlsx' if kind == 'excel' else 'html.zip')
         temporary = target.with_suffix(target.suffix + '.part')
         last_update = [0.0]
         def notify(message):
+            check_cancel(directory/('cancel-'+kind))
             if time.monotonic() - last_update[0] > 1:
                 status('running', message=message)
                 last_update[0] = time.monotonic()
@@ -382,6 +426,64 @@ class Handler(BaseHTTPRequestHandler):
                         items.append(dict(id=uuid.uuid4().hex, name=data['name'].strip(), reason=data['reason'].strip(), values=data['values'], key_width=width))
                         atomic_write_text(target, json.dumps(items))
                     return self.json_response({'containers': items})
+            if path == '/api/activity' and self.command == 'GET':
+                activities=[]
+                for target in self.app.root.glob('*/job.json'):
+                    try:item=self.app.load(target.parent.name)
+                    except (ValueError,OSError):continue
+                    if self.server.shared and item.get('owner')!=self.workspace:continue
+                    activities.append(dict(id=item['id'],kind='Comparison',state=item['state'],changed_at=item.get('finished',item['created'])))
+                    for kind,value in item.get('exports',{}).items():activities.append(dict(id=item['id'],kind=kind+' export',state=value['state'],changed_at=value.get('updated',item['created'])))
+                    if item.get('analysis'):activities.append(dict(id=item['id'],kind='Analysis',state=item['analysis']['state'],changed_at=item['analysis'].get('updated',item['created'])))
+                return self.json_response(dict(activities=activities))
+            if path == '/api/storage' and self.command == 'GET':
+                jobs=[]
+                for file in self.app.root.glob('*/job.json'):
+                    if not re.fullmatch(r'[a-f0-9]{32}',file.parent.name):continue
+                    try:item=self.app.load(file.parent.name)
+                    except (ValueError,OSError):continue
+                    if self.server.shared and item.get('owner')!=self.workspace:continue
+                    sizes=dict(uploads=0,reports=0,analysis=0,temporary=0)
+                    for folder,dirs,files in os.walk(file.parent,followlinks=False):
+                        dirs[:]=[d for d in dirs if not (Path(folder)/d).is_symlink()]
+                        for name in files:
+                            target=Path(folder)/name
+                            if target.is_symlink():continue
+                            try:size=target.stat().st_size
+                            except FileNotFoundError:continue
+                            category='analysis' if name.startswith('analysis') else 'reports' if 'report' in target.relative_to(file.parent).parts or name in ('mismatches.xlsx','html.zip') else 'uploads' if name in ('left.csv','right.csv','left.xlsx','right.xlsx','left.source.csv','right.source.csv') else 'temporary'
+                            sizes[category]+=size
+                    with self.app.lock:
+                        tasks=[dict(kind=kind,state='running' if entry['future'].running() else 'queued',queued_at=entry['queued_at'],cancelling=(file.parent/('cancel-'+kind)).exists()) for (identity,kind),entry in self.app.tasks.items() if identity==item['id']]
+                    jobs.append(dict(id=item['id'],created=item['created'],state=item['state'],files=item['files'],sizes=sizes,tasks=tasks,busy=self.app.busy(item)))
+                disk=shutil.disk_usage(self.app.root)
+                return self.json_response(dict(jobs=sorted(jobs,key=lambda item:item['created'],reverse=True),free=disk.free,total=disk.total,max_jobs=self.app.max_jobs,retention_days=self.app.retention_days))
+            if path == '/api/preflight' and self.command == 'POST':
+                config=self.body();size=config.get('bytes')
+                if type(size) is not int or size<0 or size>200*1024**3:raise ValueError('Invalid combined upload size')
+                free=shutil.disk_usage(self.app.root).free
+                return self.json_response(dict(free=free,upload_bytes=size,suggested_free_bytes=size*3,can_upload=free>=size+128*1024**2,message='Plan for at least 3× combined input size for uploads, sorting and reports. This estimate is not a reservation or upper bound; many mismatches and analysis indexes need more.'))
+            if path == '/api/profiles' and self.command in ('GET','POST','DELETE'):
+                target=self.container_path().with_name('comparison-profiles.json')
+                with self.app.lock:
+                    profiles=json.loads(target.read_text()) if target.exists() else []
+                    if self.command=='POST':
+                        config=self.body();item=self.app.load(config.get('job_id',''))
+                        if self.server.shared and item.get('owner')!=self.workspace:raise ValueError('Comparison not found')
+                        if item['state'] not in ('ready','complete'):raise ValueError('Configure the comparison before saving a profile')
+                        name=config.get('name','').strip()
+                        if not name or len(name)>100:raise ValueError('Enter a profile name of 1–100 characters')
+                        profile=dict(id=uuid.uuid4().hex,name=name,source_headers=item['source_headers'],column_headers=item['column_headers'],config=item.get('draft',{}) if item['state']=='ready' else {key:item.get(key) for key in ('keys','ignore_columns','ignore_keys','ignore_container_ids','value_overrides','comparison_rules','memory_mb','sort_workers')})
+                        profiles=[p for p in profiles if p['name'].casefold()!=name.casefold()]
+                        if len(profiles)>=100:raise ValueError('Delete an unused profile first (maximum 100)')
+                        profiles.append(profile)
+                    elif self.command=='DELETE':
+                        config=self.body();profiles=[p for p in profiles if p['id']!=config.get('id')]
+                    if self.command!='GET':
+                        encoded=json.dumps(profiles)
+                        if len(encoded.encode('utf-8'))>5*1024**2:raise ValueError('Profile library exceeds 5 MiB; delete an unused profile first')
+                        atomic_write_text(target,encoded)
+                return self.json_response(dict(profiles=profiles))
             if self.command == 'POST' and path == '/api/jobs':
                 return self.json_response(self.app.create(self.body(), self.workspace), 201)
             if self.command == 'GET' and path == '/api/jobs':
@@ -409,6 +511,61 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({'error': 'Comparison not found in this browser workspace'}, 404)
             self.authorized_job = identity
             directory = self.app.directory(identity)
+            if action == 'validate-rules' and self.command == 'POST':
+                config=self.body()
+                return self.json_response(dict(rules=validate_rules(config.get('comparison_rules',[]),job.get('columns',[]),config.get('keys',[]),config.get('ignore_columns',[]))))
+            if action == 'cancel' and self.command == 'POST':
+                return self.json_response(self.app.cancel(identity,self.body().get('kind')))
+            if action == 'diagnostics' and self.command == 'GET':
+                target=directory/'duplicate-keys.json'
+                return self.json_response(json.loads(target.read_text()) if target.exists() else {})
+            if action == 'apply-profile' and self.command == 'POST':
+                config=self.body()
+                with self.app.lock:
+                    job=self.app.load(identity)
+                    if job['state']!='ready':raise ValueError('Profiles can only be applied before comparison')
+                    target=self.container_path().with_name('comparison-profiles.json')
+                    profiles=json.loads(target.read_text()) if target.exists() else []
+                    profile=next((p for p in profiles if p['id']==config.get('id')),None)
+                    if not profile:raise ValueError('Profile not found')
+                    layout={}
+                    for side in ('left','right'):
+                        aliases={old.casefold():new for old,new in zip(profile['source_headers'][side],profile['column_headers'][side])}
+                        layout[side]=[aliases.get(name.casefold(),name) for name in job['source_headers'][side]]
+                    aligned,changes=align_headers(job['source_headers'],layout);common=common_headers(aligned)
+                    draft=profile['config'];keys=draft.get('keys') or []
+                    if not keys or any(k not in common for k in keys):raise ValueError('Profile key columns are missing from these files; update headers or choose another profile')
+                    ignored,_=validate_scope(keys,common,draft.get('ignore_columns') or [],draft.get('ignore_keys') or '')
+                    validate_overrides(draft.get('value_overrides') or [],common,keys,ignored)
+                    validate_rules(draft.get('comparison_rules') or [],common,keys,ignored)
+                    target=self.container_path();containers=json.loads(target.read_text()) if target.exists() else []
+                    if any(cid not in {c['id'] for c in containers} for cid in draft.get('ignore_container_ids') or []):raise ValueError('A profile ignore container is missing')
+                    job.update(column_headers=layout,columns=common,draft=draft,headers_reviewed=True,header_layout_changes=changes)
+                    self.app.save(job)
+                return self.json_response(job)
+            if action == 'annotations' and self.command in ('GET','POST'):
+                if job['state']!='complete':raise ValueError('Complete a comparison before adding analysis notes')
+                target=directory/'report/annotations.json'
+                with self.app.lock:
+                    notes=json.loads(target.read_text()) if target.exists() else []
+                    if self.command=='POST':
+                        current=self.app.load(identity)
+                        if any(e.get('state') in ('queued','running') for e in current.get('exports',{}).values()):raise ValueError('Wait for the active export to finish before editing report notes')
+                        config=self.body();column=config.get('column','');key=config.get('key');comment=config.get('comment','');status=config.get('status')
+                        if column and column not in job['summary']['changed_cells_by_column']:raise ValueError('Choose a compared column')
+                        if key is not None and (not isinstance(key,list) or len(key)!=len(job['keys']) or any(not isinstance(v,str) or len(v)>1000 for v in key)):raise ValueError('Invalid annotation key')
+                        if not column and key is None:raise ValueError('Choose a column or an exact key for this note')
+                        if status not in ('Expected','Needs investigation','Resolved') or not isinstance(comment,str) or len(comment)>2000:raise ValueError('Choose a classification and use at most 2,000 comment characters')
+                        notes=[n for n in notes if (n['column'],n['key'])!=(column,key)]
+                        if len(notes)>=10000:raise ValueError('Maximum 10,000 analysis notes per job')
+                        notes.append(dict(column=column,key=key,status=status,comment=comment,updated=time.time()))
+                        encoded=json.dumps(notes)
+                        if len(encoded.encode('utf-8'))>2*1024**2:raise ValueError('Analysis notes exceed the 2 MiB limit')
+                        atomic_write_text(target,encoded)
+                        for export in current.get('exports',{}).values():
+                            if export.get('state')=='complete':export.update(state='outdated',message='Analysis notes changed. Generate a fresh report.')
+                        self.app.save(current)
+                return self.json_response(dict(notes=notes))
             if self.command == 'DELETE' and action is None:
                 self.app.remove_job(identity, allowed_requests=1)
                 return self.json_response({'deleted': True})
@@ -475,6 +632,7 @@ class Handler(BaseHTTPRequestHandler):
                     for key in ('keys', 'ignore_columns'):
                         draft[key] = [rename.get(n,n) for n in (draft.get(key) or []) if rename.get(n,n) in common]
                     draft['value_overrides'] = [dict(rule, column=rename.get(rule['column'],rule['column'])) for rule in (draft.get('value_overrides') or []) if rename.get(rule['column'],rule['column']) in common]
+                    draft['comparison_rules']=[dict(rule,column=rename.get(rule['column'],rule['column'])) for rule in (draft.get('comparison_rules') or []) if rename.get(rule['column'],rule['column']) in common]
                     job.update(source_headers=source, column_headers=layout, columns=common,
                                header_layout_changes=changes, headers_reviewed=True, draft=draft)
                     self.app.save(job)
@@ -486,7 +644,7 @@ class Handler(BaseHTTPRequestHandler):
                     if job['state'] != 'ready':
                         raise ValueError('Configuration is locked after comparison starts')
                     # Drafts are validated before execution; preserve partially filled forms.
-                    job['draft'] = {key: config.get(key) for key in ('keys', 'ignore_columns', 'ignore_keys', 'memory_mb', 'value_overrides', 'ignore_container_ids', 'sort_workers') if key not in ('ignore_container_ids', 'sort_workers') or key in config}
+                    job['draft'] = {key: config.get(key) for key in ('keys', 'ignore_columns', 'ignore_keys', 'memory_mb', 'comparison_rules', 'value_overrides', 'ignore_container_ids', 'sort_workers') if key not in ('ignore_container_ids', 'sort_workers','comparison_rules') or key in config}
                     self.app.save(job)
                 return self.json_response({'saved': True})
             if self.command == 'PUT' and action in ('files/left', 'files/right'):
@@ -564,7 +722,7 @@ class Handler(BaseHTTPRequestHandler):
                             item['sheet'] = selected
                     job.update(state='preparing', preparation_message='Queued for worksheet import')
                     self.app.save(job)
-                    self.app.pool.submit(self.app.prepare_sheets, identity)
+                    self.app.submit(identity,'import',self.app.prepare_sheets)
                 return self.json_response(job, 202)
             if self.command == 'POST' and action == 'start':
                 config = self.body()
@@ -599,13 +757,14 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError(f"Container {item['name']} expects {item['key_width']} key columns")
                         validate_scope(keys, job['columns'], [], item['values'])
                     overrides, _ = validate_overrides(config.get('value_overrides', []), job['columns'], keys, ignored_columns)
-                    job.update(state='queued', keys=keys, memory_mb=memory, sort_workers=sort_workers,
+                    rules=validate_rules(config.get('comparison_rules',[]),job['columns'],keys,ignored_columns)
+                    job.update(comparison_rules=rules,state='queued', keys=keys, memory_mb=memory, sort_workers=sort_workers,
                                ignore_columns=ignored_columns, ignore_keys=config.get('ignore_keys', ''), value_overrides=overrides,
                                ignore_container_ids=ids, ignore_key_containers=containers)
                     self.app.save(job)
                     with (directory / 'run.log').open('a') as log:
                         log.write(f'{time.strftime("%H:%M:%S")}  Comparison queued\n')
-                    self.app.pool.submit(self.app.run_comparison, identity)
+                    self.app.submit(identity,'comparison',self.app.run_comparison)
                 return self.json_response(job, 202)
             if self.command == 'POST' and action in ('export/excel', 'export/html'):
                 kind = action.split('/')[1]
@@ -616,7 +775,7 @@ class Handler(BaseHTTPRequestHandler):
                     if job['exports'].get(kind, {}).get('state') not in ('queued', 'running', 'complete'):
                         job['exports'][kind] = {'state': 'queued'}
                         self.app.save(job)
-                        self.app.pool.submit(self.app.run_export, identity, kind)
+                        self.app.submit(identity,kind,self.app.run_export,kind)
                 return self.json_response(job, 202)
             if action == 'analysis' and self.command in ('GET','POST'):
                 if job['state'] != 'complete':
@@ -627,7 +786,7 @@ class Handler(BaseHTTPRequestHandler):
                         if job.get('analysis',{}).get('state') not in ('queued','running','complete'):
                             job['analysis']=dict(state='queued',message='Waiting for a server worker…')
                             self.app.save(job)
-                            self.app.pool.submit(self.app.run_analysis,identity)
+                            self.app.submit(identity,'analysis',self.app.run_analysis)
                     return self.json_response(job['analysis'],202)
                 state=job.get('analysis',{'state':'not_started'})
                 if state['state'] != 'complete': return self.json_response(state)

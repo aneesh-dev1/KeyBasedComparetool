@@ -90,6 +90,7 @@ def convert(path, sheet_name, destination, notify=lambda text: None):
                         for index, item in enumerate(elements(stream, 'si')):
                             db.execute('INSERT INTO strings VALUES (?, ?)', (index, text_content(item)))
                             if index % 10000 == 0:
+                                notify(f'Indexing Excel shared strings: {index:,}')
                                 db.commit()
                         db.commit()
                 @lru_cache(maxsize=1024)

@@ -568,3 +568,44 @@ preparation is protected from cleanup, just like comparison and export.
 Export buttons show queued/generating status with an accessible spinner and
 live progress messages. Ignore-key containers and reasons are highlighted in
 HTML summary callouts and the Excel audit sheet, with a link from File Summary.
+
+## Team workflow additions
+
+- **Storage & queue:** workspace-owned jobs grouped by upload, report, analysis,
+  and temporary/metadata bytes; global server free space; queued/running tasks;
+  cancel controls and confirmed job deletion. Refresh to update the snapshot.
+  Upload preflight estimates 3× combined input size and warns when space is tight;
+  this is not a quota, reservation, or worst-case guarantee.
+- **Cancellation:** queued work is removed immediately. Active comparisons,
+  worksheet imports, exports and analysis stop at safe checkpoints, so large
+  sorts or ZIP operations may take time to finish their current operation.
+  Comparison/import cancellation requires a new comparison; cancelled exports
+  and analysis can be generated again. Uploaded files remain until job cleanup.
+- **Profiles:** save/apply/delete named profiles in Keys & scope. They include
+  header aliases by original name, keys, ignored columns/keys/containers, value
+  overrides, optional comparison rules and sort settings. Profiles are private
+  to the browser workspace; saving the same name replaces it. Missing profile
+  columns or containers produce a validation error before comparison.
+- **Analysis notes:** classify a column, key, or key/column pair as Expected,
+  Needs investigation, or Resolved, with comments. Notes do not alter results.
+  Excel includes an Analysis notes sheet and column notes in TOC; HTML includes
+  the full notes table. Changing notes invalidates older exports. Editing notes
+  is blocked while an export runs. Notes are limited to 2 MiB per job.
+- **Duplicate keys:** comparison stops with the first duplicate group's exact
+  count, key, and up to three sampled records (20 compared columns, 500 characters
+  per value). This is a first-error diagnostic, not an exhaustive duplicate scan.
+- **Column rules:** optional whitespace trimming, case folding, absolute decimal
+  tolerance, or explicit per-file date formats. Key values remain exact text.
+  Invalid numeric/date values stay mismatches; exact equal text still matches.
+  Original text is retained in reports. Configured rules and accepted-cell counts
+  are recorded in the summary. Numeric diagnostics are bounded to 1,000-character
+  values and exponents within ±1,000; more extreme unequal values remain mismatches.
+- **Notifications:** opt in under Storage & queue. Browser permission is required,
+  and remote servers generally need HTTPS for desktop notifications. The app
+  polls every 10 seconds while the page is open; closing the page stops alerts.
+  Disable notifications with the adjacent button. Alerts contain task type/status,
+  not source values or filenames.
+
+Profiles are limited to 100 entries / 5 MiB per workspace. Notifications and UI
+logic have automated checks, but browser permissions and performance on your
+Windows/on-prem deployment still need a representative pilot.

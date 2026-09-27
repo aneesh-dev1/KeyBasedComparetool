@@ -6,8 +6,9 @@ import sqlite3
 from pathlib import Path
 
 
-def build_index(report, target, notify):
+def build_index(report, target, notify, cancelled=lambda:False):
     with closing(sqlite3.connect(target)) as db:
+        db.set_progress_handler(lambda: 1 if cancelled() else 0,10000)
         db.executescript('PRAGMA cache_size=-8192; PRAGMA temp_store=FILE; CREATE TABLE cells(key_json TEXT, column_name TEXT, left_value TEXT, right_value TEXT); CREATE TABLE keys(key_json TEXT PRIMARY KEY,status TEXT,changed_cells INTEGER);')
         with (report/'differences.csv').open(encoding='utf-8',newline='') as stream:
             for i,row in enumerate(csv.DictReader(stream),1):

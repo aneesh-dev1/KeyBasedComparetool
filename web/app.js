@@ -15,7 +15,7 @@ let logCursor=0, logText='', logJobId=null;
 let viewingHistoryJob=false;
 let keyContainers=[], selectedContainers=new Set();
 const phaseLabels=['Files','Column headers','Keys & scope','Value overrides','File preview','Pipeline & logs','Results','Analysis'];
-const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',sourcePanel:'navPreview',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs'};
+const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',sourcePanel:'navPreview',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage'};
 const number = value => Number(value).toLocaleString();
 const bytes = value => value >= 1024**3 ? `${(value / 1024**3).toFixed(2)} GB` : value >= 1024**2 ? `${(value / 1024**2).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
 function showError(error) { $('error').textContent = error.message || String(error); $('error').hidden = false; }
@@ -38,8 +38,9 @@ function syncNavigation(){
   $('navScope').disabled=!ready||uploading||job.headers_reviewed===false;
   $('navOverrides').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
   $('navPreview').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
-  $('navPipeline').disabled=!job||!['queued','running','complete','error'].includes(job.state);
+  $('navPipeline').disabled=!job||!['queued','running','complete','error','cancelled'].includes(job.state);
   if(ready&&job.headers_reviewed===false){$('navOverrides').disabled=$('navPreview').disabled=true;}
+  $('cancelComparison').disabled=!['running','queued'].includes(job?.state);
   $('navResults').disabled=$('navAnalysis').disabled=job?.state!=='complete';
   $('navJson').disabled=$('navContainers').disabled=$('navHistory').disabled=$('navNew').disabled=false;
   $('reset').disabled=uploading;
@@ -51,17 +52,17 @@ function panel(name) {
   $('sheetPanel').hidden=name!=='uploadPanel'||!['selecting_sheets','preparing'].includes(job?.state);
   $('reset').hidden=!job;
   const history=currentView==='historyPanel';
-  const library=['containersPanel','jsonPanel','docsPanel'].includes(currentView);
+  const library=['containersPanel','jsonPanel','docsPanel','storagePanel'].includes(currentView);
   $('comparisonFlow').hidden=history||library;
   $('navNew').classList.toggle('active',!history&&!library&&!viewingHistoryJob);
   $('navHistory').classList.toggle('active',history||(!library&&viewingHistoryJob));
-  for(const id of ['navNew','navJson','navContainers','navHistory','navDocs']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
+  for(const id of ['navNew','navJson','navContainers','navHistory','navDocs','navStorage']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
   if(typeof closeSidebarDrawer==='function')closeSidebarDrawer();
   $('flowTitle').textContent=viewingHistoryJob?'Saved comparison':'New comparison';
   const phase=Object.keys(views).indexOf(name);
   if(!history&&!library)$('phaseLabel').textContent=`Step ${phase+1} of 8 · ${phaseLabels[phase]}`;
   for(const [id,control] of Object.entries(views)){
-    if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
+    if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'&&id!=='storagePanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
   }
   syncNavigation();
   if(name==='uploadPanel'&&job&&job.state!=='uploading'){
@@ -72,20 +73,21 @@ function panel(name) {
     $('upload').textContent='Upload & continue →';$('upload').disabled=uploading||!files.left||!files.right;
   }
 }
-function configuration(){return {keys:[...selected],memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules};}
+function configuration(){return {keys:[...selected],memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules};}
 async function saveDraft(){if(job?.state==='ready')await api(endpoint('/config'),configuration());}
 async function goView(name){
   if(uploading&&name!=='uploadPanel'&&!['jsonPanel','containersPanel','historyPanel','docsPanel'].includes(name))return;
   clearError();await saveDraft();
   if(headerDirty&&headerDraftJob===job?.id&&['keysPanel','overridesPanel','sourcePanel'].includes(name))await applyHeaders();
   panel(name);
+  if(name==='storagePanel')await loadStorage();
   if(name==='analysisPanel')await openAnalysis();
   if(name==='headersPanel')renderHeaders();
-  if(name==='keysPanel'){renderKeys();renderIgnoredColumns();await loadContainers();}
+  if(name==='keysPanel'){renderKeys();renderIgnoredColumns();await loadContainers();await loadProfiles();}
   if(name==='containersPanel')await loadContainers();
-  if(name==='overridesPanel'){renderOverrideColumns();renderOverrides();}
+  if(name==='overridesPanel'){renderOverrideColumns();renderOverrides();renderValueRules();}
   if(name==='historyPanel')await loadHistory();
-  if(name==='runningPanel')await refresh();
+  if(name==='runningPanel'){await refresh();await loadDiagnostics();}
   if(name==='results'){renderSummary();renderExports();await preview();}
 }
 for(const [view,nav] of Object.entries(views))$(nav).addEventListener('click',()=>goView(view).catch(showError));
@@ -129,6 +131,9 @@ $('upload').addEventListener('click', async () => {
   $('delimiter').disabled = $('encoding').disabled = true;
   try {
     if (!job) {
+      const space=await api('/api/preflight',{bytes:files.left.size+files.right.size});
+      if(!space.can_upload)throw Error('Insufficient server disk space for the uploaded copies. Use Storage & queue to clean up old jobs.');
+      if(space.free<space.suggested_free_bytes&&!confirm(`${bytes(space.free)} free; at least ${bytes(space.suggested_free_bytes)} is suggested. Reports may need more. Continue uploading?`))return;
       job = await api('/api/jobs',{delimiter:$('delimiter').value==='tab'?'\t':$('delimiter').value,encoding:$('encoding').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))});
       localStorage.setItem('keywise-job',job.id);
     }
@@ -257,6 +262,7 @@ function renderExports() {
   for(const kind of ['excel','html']) {
     const value=job.exports[kind];const button=$(kind);const status=$(`${kind}Status`);
     button.disabled=!!value&&['queued','running'].includes(value.state);
+    $(kind==='excel'?'cancelExcel':'cancelHtml').hidden=!button.disabled;
     button.classList.toggle('export-busy',button.disabled);button.setAttribute('aria-busy',String(button.disabled));
     button.querySelector('strong').textContent=button.disabled?(value.state==='queued'?'Queued — waiting for a worker':'Generating '+(kind==='excel'?'Excel workbook':'HTML report')):(kind==='excel'?'Excel workbook':'HTML report');
     if(!value)status.textContent='';
@@ -330,6 +336,7 @@ function hydrate(){
   selectedContainers=new Set(draft.ignore_container_ids||[]);
   loadContainers().catch(showError);
   overrideRules=Array.isArray(draft.value_overrides)?draft.value_overrides:[];
+  valueRules=Array.isArray(draft.comparison_rules)?draft.comparison_rules:[];
   $('ignoreKeys').value=typeof draft.ignore_keys==='string'?draft.ignore_keys:'';
   $('memory').value=[64,128,256,512,1024,2048,4096,8192].includes(draft.memory_mb)?String(draft.memory_mb):'4096';
   if(Number($('memory').value)>maxSortMb)$('memory').value=String(maxSortMb);
@@ -363,9 +370,9 @@ async function refresh() {
       if(renderedId!==job.id){renderSummary();await preview();renderedId=job.id;}
     } else if(currentView==='runningPanel')await renderPipeline();
     if(Object.values(job.exports).some(value=>['queued','running'].includes(value.state)))pollTimer=setTimeout(()=>refresh().catch(pollError),1500);
-  } else if(job.state==='error'){
-    if(!['historyPanel','containersPanel','jsonPanel','docsPanel','analysisPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);}
-  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','analysisPanel'].includes(currentView)){
+  } else if(['error','cancelled'].includes(job.state)){
+    if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);await loadDiagnostics();}
+  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel'].includes(currentView)){
     panel('uploadPanel');$('delimiter').disabled=$('encoding').disabled=true;$('delimiter').value=job.delimiter==='\t'?'tab':job.delimiter;$('encoding').value=job.encoding;
   }
 }
@@ -375,7 +382,7 @@ $('reset').addEventListener('click',()=>{localStorage.removeItem('keywise-job');
   const id=localStorage.getItem('keywise-job');
   if(id&&/^[a-f0-9]{32}$/.test(id)){
     job={id};
-    try{job=await api(endpoint());currentView=job.state==='complete'?'results':['running','queued','error'].includes(job.state)?'runningPanel':job.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel';panel(currentView);await refresh();if(job.state==='uploading')showError(`Upload not finished. Reselect ${job.files.left.name} and ${job.files.right.name} to resume, or start a new comparison.`);}
+    try{job=await api(endpoint());currentView=job.state==='complete'?'results':['running','queued','error','cancelled'].includes(job.state)?'runningPanel':job.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel';panel(currentView);await refresh();if(job.state==='uploading')showError(`Upload not finished. Reselect ${job.files.left.name} and ${job.files.right.name} to resume, or start a new comparison.`);}
     catch(error){showError(error);$('reset').hidden=false;}
   }
 })();
@@ -443,7 +450,7 @@ async function renderPipeline(){
   if(log.text.length>=60000)pollTimer=setTimeout(()=>refresh().catch(pollError),300);
 }
 async function loadHistory(){
-  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel','analysisPanel'].includes(currentView))return;
+  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel'].includes(currentView))return;
   $('cleanupPolicy').textContent=result.retention_days?`Inactive jobs and all uploaded files, scratch data and reports are automatically deleted after ${result.retention_days} days. Download reports before expiry. Active jobs are protected.`:'Automatic cleanup is disabled. Delete unneeded jobs to reclaim disk space.';
   const table=$('historyTable');table.replaceChildren();
   const header=document.createElement('tr');for(const label of ['Created','Files','Status','Changed cells','Action']){const th=document.createElement('th');th.textContent=label;header.append(th);}const head=document.createElement('thead');head.append(header);table.append(head);
@@ -459,7 +466,7 @@ async function openJob(id){
   $('sourceLeftTable').replaceChildren();$('sourceRightTable').replaceChildren();
   $('sourceLeftTitle').textContent='File 1';$('sourceRightTitle').textContent='File 2';
   $('sourceStatus').textContent='Choose a row limit, then load this comparison’s source preview.';
-  panel(job.state==='complete'?'results':['queued','running','error'].includes(job.state)?'runningPanel':job.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel');
+  panel(job.state==='complete'?'results':['queued','running','error','cancelled'].includes(job.state)?'runningPanel':job.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel');
   await refresh();
   if(job.state==='uploading')showError(`Reselect ${job.files.left.name} and ${job.files.right.name} to resume this upload.`);
 }
@@ -524,7 +531,7 @@ window.addEventListener('resize',hideSidebarTip);
 $('navNew').addEventListener('click',async()=>{
   try{
     if(uploading){panel('uploadPanel');return;}
-    if(['containersPanel','jsonPanel','docsPanel'].includes(currentView)&&!viewingHistoryJob){await goView(job?.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):job?.state==='complete'?'results':job&&['running','queued','error'].includes(job.state)?'runningPanel':'uploadPanel');return;}
+    if(['containersPanel','jsonPanel','docsPanel','storagePanel'].includes(currentView)&&!viewingHistoryJob){await goView(job?.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):job?.state==='complete'?'results':job&&['running','queued','error','cancelled'].includes(job.state)?'runningPanel':'uploadPanel');return;}
     if(currentView==='historyPanel'||viewingHistoryJob){await saveDraft();localStorage.removeItem('keywise-job');location.reload();}
   }catch(error){showError(error);}
 });
@@ -762,7 +769,7 @@ async function openAnalysis(){
   $('analysisKeyLabel').firstChild.textContent=`Exact key (${job.keys.join(', ')}) `;
   const containers=job.summary.ignore_key_containers||[];
   $('analysisExclusions').textContent=containers.length?'Excluded containers: '+containers.map(c=>`${c.name}: ${c.reason} (${c.keys.length} configured keys)`).join(' · '):'No ignored-key containers configured.';
-  await loadAnalysis();
+  await loadAnalysis();await loadNotes();
 }
 async function loadAnalysis(){
   clearTimeout(analysisTimer);const generation=++analysisGeneration,id=job.id;
@@ -781,8 +788,8 @@ async function loadAnalysis(){
       const params=new URLSearchParams({mode:mode==='keys'&&!column&&key===undefined?'keys':'cells',offset:String(analysisOffset),column});if(key!==undefined)params.set('key',JSON.stringify(key));
       $('analysisStatus').textContent='Loading analysis…';$('analysisStatus').classList.add('loading-status');
       const result=await api(`/api/jobs/${id}/analysis?${params}`);if(generation!==analysisGeneration||job?.id!==id||currentView!=='analysisPanel')return;
-      if(result.state!=='complete'){
-        if(result.state==='error'){$('analysisRetry').hidden=false;throw Error(result.message);}
+      if(result.state!=='complete'){$('cancelAnalysis').hidden=false;
+        if(['error','cancelled'].includes(result.state)){$('analysisRetry').hidden=false;throw Error(result.message);}
         if(result.state==='not_started')await api(`/api/jobs/${id}/analysis`,{});
         $('analysisStatus').textContent=result.message||'Preparing analysis…';$('analysisStatus').classList.add('loading-status');
         analysisTimer=setTimeout(()=>{if(currentView==='analysisPanel'&&job?.id===id)loadAnalysis();},1500);return;
@@ -791,7 +798,7 @@ async function loadAnalysis(){
       if(params.get('mode')==='keys'){headers=[...job.keys,'Status','Mismatches','Inspect'];rows=result.rows.map(r=>[...JSON.parse(r[0]),r[1],r[2]]);}
       else{headers=[...job.keys,'Column','File 1 value','File 2 value'];rows=result.rows.map(r=>[...JSON.parse(r[0]),r[1],r[2]+(r[4]>1000?' … [truncated]':''),r[3]+(r[5]>1000?' … [truncated]':'')]);}
     }
-    $('analysisStatus').classList.remove('loading-status');
+    $('analysisStatus').classList.remove('loading-status');$('cancelAnalysis').hidden=true;
     const head=document.createElement('tr');headers.forEach(value=>{const th=document.createElement('th');th.textContent=value;head.append(th);});table.append(head);
     rows.forEach(row=>{const tr=document.createElement('tr');row.forEach(value=>{const td=document.createElement('td');td.textContent=value;tr.append(td);});if(headers.at(-1)==='Inspect'){const td=document.createElement('td'),button=document.createElement('button');button.textContent='Inspect';button.className='subtle';button.addEventListener('click',()=>{if(mode==='columns')$('analysisColumn').value=row[0];else $('analysisKey').value=job.keys.length===1?row[0]:JSON.stringify(row.slice(0,job.keys.length));analysisOffset=0;loadAnalysis();});td.append(button);tr.append(td);}table.append(tr);});
     $('analysisStatus').textContent=total?`${number(total)} results. Percentages use matched keys only.`:keyStatus==='left_only'?'This key exists only in File 1.':keyStatus==='right_only'?'This key exists only in File 2.':'No mismatches for this selection. Equal keys are not indexed.';
@@ -804,3 +811,52 @@ $('analysisPrev').addEventListener('click',()=>{analysisOffset=Math.max(0,analys
 $('analysisNext').addEventListener('click',()=>{analysisOffset+=50;loadAnalysis();});
 
 $('analysisRetry').addEventListener('click',async()=>{try{$('analysisRetry').hidden=true;await api(endpoint('/analysis'),{});await loadAnalysis();}catch(error){showError(error);}});
+
+let valueRules=[];
+$('keysPanel').insertAdjacentHTML('afterbegin',`<section class="feature-box"><h3>Saved comparison profiles</h3><p>Reuse headers, keys, scope, overrides and comparison rules in this workspace.</p><div class="preview-controls"><select id="profileSelect" aria-label="Saved profile"><option value="">Choose profile</option></select><button id="applyProfile" class="subtle">Apply profile</button><input id="profileName" placeholder="Profile name" aria-label="Profile name"><button id="saveProfile" class="subtle">Save current settings</button><button id="deleteProfile" class="subtle">Delete profile</button></div><p id="profileStatus" role="status"></p></section>`);
+$('overridesPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Optional column comparison rules</h3><p>Exact text is the default. Rules never change source values or key matching. Invalid numbers or dates remain mismatches.</p><div class="preview-controls"><label>Column<select id="ruleColumn"></select></label><label><input id="ruleTrim" type="checkbox"> Trim whitespace</label><label><input id="ruleCase" type="checkbox"> Ignore case</label><label>Absolute numeric tolerance<input id="ruleTolerance" placeholder="e.g. 0.01"></label><label>File 1 date format<input id="ruleDateLeft" placeholder="%Y-%m-%d"></label><label>File 2 date format<input id="ruleDateRight" placeholder="%d/%m/%Y"></label><button id="addValueRule" class="subtle">Save column rule</button></div><p>Use Python date formats: %Y year, %m month, %d day, %H hour, %M minute, %S second. Choose tolerance or date formats for a column.</p><div id="valueRuleList"></div></section>`);
+$('analysisPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Classification &amp; comments</h3><p>Notes apply to the selected column, exact key, or both. They document your review; they do not change mismatch counts. Regenerate reports after editing notes.</p><div class="preview-controls"><select id="noteStatus" aria-label="Classification"><option>Needs investigation</option><option>Expected</option><option>Resolved</option></select><textarea id="noteComment" maxlength="2000" aria-label="Analysis comment" placeholder="Describe your finding"></textarea><button id="saveNote" class="subtle">Save analysis note</button></div><div id="analysisNotes"></div></section>`);
+$('uploadPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><button id="checkSpace" class="subtle">Check server disk space before upload</button><p id="preflightStatus" role="status"></p></section>`);
+function renderValueRules(){
+  const editable=job?.state==='ready';$('ruleColumn').replaceChildren();
+  for(const column of job?.columns||[])if(!selected.has(column)&&!ignoredColumns.has(column))$('ruleColumn').add(new Option(column,column));
+  $('addValueRule').disabled=!editable;$('valueRuleList').replaceChildren();
+  for(const rule of valueRules){const row=document.createElement('p'),label=document.createElement('span'),remove=document.createElement('button');label.textContent=rule.column+' · '+[rule.trim?'Trim':'',rule.ignore_case?'Ignore case':'',rule.tolerance!==undefined?'Tolerance '+rule.tolerance:'',rule.left_date_format?'Dates '+rule.left_date_format+' ↔ '+rule.right_date_format:''].filter(Boolean).join(' · ');remove.textContent='Remove';remove.className='subtle';remove.disabled=!editable;remove.addEventListener('click',async()=>{valueRules=valueRules.filter(r=>r.column!==rule.column);renderValueRules();try{await saveDraft();}catch(e){showError(e);}});row.append(label,remove);$('valueRuleList').append(row);}
+}
+$('addValueRule').addEventListener('click',async()=>{try{
+  const rule={column:$('ruleColumn').value,trim:$('ruleTrim').checked,ignore_case:$('ruleCase').checked,left_date_format:$('ruleDateLeft').value,right_date_format:$('ruleDateRight').value};
+  if(!rule.column)throw Error('Choose a compared non-key column.');
+  if($('ruleTolerance').value!=='')rule.tolerance=$('ruleTolerance').value;
+  await api(endpoint('/validate-rules'),{comparison_rules:[rule],keys:[...selected],ignore_columns:[...ignoredColumns]});
+  valueRules=[...valueRules.filter(r=>r.column!==rule.column),rule];await saveDraft();renderValueRules();
+}catch(e){showError(e);}});
+async function loadProfiles(){const result=await api('/api/profiles');$('profileSelect').replaceChildren(new Option('Choose profile',''));result.profiles.forEach(p=>$('profileSelect').add(new Option(p.name,p.id)));}
+$('saveProfile').addEventListener('click',async()=>{try{await saveDraft();await api('/api/profiles',{job_id:job.id,name:$('profileName').value});await loadProfiles();$('profileStatus').textContent='Profile saved. Saving the same name replaces that profile.';}catch(e){showError(e);}});
+$('applyProfile').addEventListener('click',async()=>{try{job=await api(endpoint('/apply-profile'),{id:$('profileSelect').value});hydratedId=null;headerDraftJob=null;hydrate();renderKeys();renderIgnoredColumns();renderOverrides();renderValueRules();$('profileStatus').textContent='Profile applied. Review keys, scope and rules before starting.';}catch(e){showError(e);}});
+$('deleteProfile').addEventListener('click',async()=>{try{if(!confirm('Delete this saved profile? Existing jobs are unaffected.'))return;await api('/api/profiles',{id:$('profileSelect').value},'DELETE');await loadProfiles();}catch(e){showError(e);}});
+$('headerContinue').addEventListener('click',()=>setTimeout(()=>loadProfiles().catch(showError),300));
+async function cancelTask(id,kind){if(!confirm(`Cancel ${kind}? Active work will stop at its next safe checkpoint.`))return;try{const result=await api(`/api/jobs/${id}/cancel`,{kind});$('completionNotice').textContent=result.message;if(job?.id===id)await refresh();}catch(e){showError(e);}}
+$('cancelComparison').addEventListener('click',()=>cancelTask(job.id,'comparison'));
+$('cancelExcel').addEventListener('click',()=>cancelTask(job.id,'excel'));
+$('cancelHtml').addEventListener('click',()=>cancelTask(job.id,'html'));
+$('cancelAnalysis').addEventListener('click',()=>cancelTask(job.id,'analysis'));
+async function loadStorage(){
+  $('storageStatus').textContent='Measuring your workspace files…';$('storageStatus').classList.add('loading-status');
+  try{const data=await api('/api/storage');$('storageStatus').textContent=`${bytes(data.free)} free of ${bytes(data.total)} server disk · ${data.max_jobs} heavy jobs can run at once · ${data.retention_days?data.retention_days+' days retention':'Automatic cleanup disabled'}`;
+    const table=$('storageTable');table.replaceChildren();const head=document.createElement('tr');['Job','State','Uploads','Reports','Analysis','Temporary / metadata','Work queue','Cleanup'].forEach(t=>{const th=document.createElement('th');th.textContent=t;head.append(th);});table.append(head);
+    for(const item of data.jobs){const row=document.createElement('tr');[item.files.left.name+' ↔ '+item.files.right.name,item.state,...['uploads','reports','analysis','temporary'].map(k=>bytes(item.sizes[k]))].forEach(v=>{const td=document.createElement('td');td.textContent=v;row.append(td);});const tasks=document.createElement('td');for(const task of item.tasks){const line=document.createElement('p'),button=document.createElement('button');line.textContent=`${task.kind}: ${task.cancelling?'Cancelling':task.state} `;button.textContent='Cancel';button.disabled=task.cancelling;button.addEventListener('click',async()=>{await cancelTask(item.id,task.kind);await loadStorage();});line.append(button);tasks.append(line);}row.append(tasks);const td=document.createElement('td'),button=document.createElement('button');button.textContent='Delete job';button.disabled=item.busy;button.addEventListener('click',async()=>{if(!confirm('Permanently delete this job, uploads and all reports?'))return;try{await api(`/api/jobs/${item.id}`,undefined,'DELETE');if(job?.id===item.id){localStorage.removeItem('keywise-job');location.reload();return;}await loadStorage();}catch(e){showError(e);}});td.append(button);row.append(td);table.append(row);}
+  }catch(e){showError(e);$('storageStatus').textContent='Unable to measure storage.';}finally{$('storageStatus').classList.remove('loading-status');}
+}
+$('storageRefresh').addEventListener('click',loadStorage);
+$('checkSpace').addEventListener('click',async()=>{try{if(!files.left||!files.right)throw Error('Choose both files first.');const data=await api('/api/preflight',{bytes:files.left.size+files.right.size});$('preflightStatus').textContent=`${bytes(data.free)} free · ${bytes(data.upload_bytes)} upload · suggested free space ${bytes(data.suggested_free_bytes)}. ${data.can_upload?data.message:'Not enough space for the uploaded copies. Clean up old jobs.'}`;}catch(e){showError(e);}});
+async function loadDiagnostics(){const result=await api(endpoint('/diagnostics'));const box=$('duplicateDiagnostics');box.hidden=!result.key;box.replaceChildren();if(result.key){const title=document.createElement('h3'),detail=document.createElement('p'),scroll=document.createElement('div'),table=document.createElement('table');title.textContent=`Duplicate key in ${result.side} file · ${number(result.count)} rows`;detail.textContent=JSON.stringify(result.key)+' · '+result.note;scroll.className='table-scroll';table.id='duplicateSampleTable';scroll.append(table);box.append(title,detail,scroll);drawTable('duplicateSampleTable',result.sample_columns,result.samples);}}
+async function loadNotes(){const result=await api(endpoint('/annotations'));$('analysisNotes').replaceChildren();for(const note of result.notes.slice(0,100)){const p=document.createElement('p');p.textContent=`${note.column||'All columns'} · ${note.key?JSON.stringify(note.key):'All keys'} · ${note.status}: ${note.comment}`;$('analysisNotes').append(p);}if(result.notes.length>100){const p=document.createElement('p');p.textContent=`Showing 100 of ${result.notes.length} notes; all notes are included in exports.`;$('analysisNotes').append(p);}}
+$('saveNote').addEventListener('click',async()=>{try{const text=$('analysisKey').value,key=text===''?null:job.keys.length===1?[text]:JSON.parse(text);await api(endpoint('/annotations'),{column:$('analysisColumn').value,key,status:$('noteStatus').value,comment:$('noteComment').value});await loadNotes();job=await api(endpoint());renderExports();}catch(e){showError(e);}});
+let notificationSnapshot=null,notificationPolling=false,notificationSince=Date.now()/1000;
+$('enableNotifications').addEventListener('click',async()=>{if(!('Notification' in window)){showError('This browser does not support desktop notifications.');return;}try{const permission=await Notification.requestPermission();localStorage.setItem('comparison-notifications',permission==='granted'?'on':'off');$('notificationStatus').textContent=permission==='granted'?'Enabled while this page remains open.':'Notifications were not enabled. Check your browser permissions.';notificationSnapshot=null;notificationSince=Date.now()/1000;pollNotifications();}catch(e){showError(e);}});
+$('disableNotifications').addEventListener('click',()=>{localStorage.setItem('comparison-notifications','off');notificationSnapshot=null;$('notificationStatus').textContent='Notifications disabled.';});
+async function pollNotifications(){
+ if(notificationPolling||localStorage.getItem('comparison-notifications')!=='on')return;notificationPolling=true;
+ try{const result=await api('/api/activity'),next=new Map();for(const item of result.activities){const id=item.id+':'+item.kind;next.set(id,item.state);const old=notificationSnapshot?.get(id);if(notificationSnapshot&&old!==item.state&&(old||item.changed_at>=notificationSince)&&['complete','error','cancelled'].includes(item.state)){const message=`${item.kind}: ${item.state==='complete'?'Completed':item.state==='error'?'Failed':'Cancelled'}`;$('completionNotice').textContent=message;if('Notification' in window&&Notification.permission==='granted')new Notification('Comparison tool',{body:message,tag:id});}}notificationSnapshot=next;}catch(e){/* Transient network failure; retry on the next interval. */}finally{notificationPolling=false;}
+}
+setInterval(pollNotifications,10000);pollNotifications();

@@ -9,6 +9,7 @@ if __name__ == '__main__':
     directory = Path(sys.argv[1])
     job = json.loads((directory / 'job.json').read_text())
     args = SimpleNamespace(left=directory / 'left.csv', right=directory / 'right.csv',
+                           comparison_rules=job.get('comparison_rules',[]), cancel_file=directory/'cancel-comparison', diagnostics_file=directory/'duplicate-keys.json',
                            keys=job['keys'], output=directory / 'report',
                            memory_mb=job['memory_mb'], temp_dir=directory,
                            delimiter=job['delimiter'], encoding=job['encoding'],
