@@ -92,7 +92,25 @@ plus the original files if stored on this server, scratch space, imported Excel
 CSVs, and reports. Heavy jobs can produce enormous mismatch output. Watch free
 disk and RSS during a representative pilot. The app checks free space before each
 upload chunk, but does not reserve disk space or enforce per-user quotas.
-Historical files are retained; there is no automated retention policy.
+Automatic cleanup runs at startup and hourly, deleting jobs after 7 days of
+inactivity by default. Configure `RETENTION_DAYS=7` in deploy.env, or pass
+`--retention-days 7` to server.py directly. Set 0 to disable automatic expiry.
+This applies to existing jobs too: review/download old results before upgrading.
+Upload/configuration activity and newly generated exports reset the retention
+clock; simply viewing a job does not. Incomplete uploads and unused drafts also
+expire. Running/queued comparisons, imports, exports and active HTTP requests
+are protected. Cleanup retries interrupted deletions after a restart.
+
+Users can also **Delete** an unneeded job in Job history after confirming. This
+permanently removes its uploaded CSV/Excel copies, imported CSVs, scratch data,
+logs, mismatch records and generated reports. Download reports you need first.
+Deleting a job does not affect original client files, other browser workspaces,
+or reusable ignore-key containers. It removes the job from history. There is no
+undo, and files in transit may cause deletion to be deferred on Windows.
+
+For two 6 GB inputs, the uploaded copies account for 12 GB; deleting that job
+reclaims those copies plus any remaining scratch/output data. Cleanup is not a
+disk quota and cannot guarantee enough free space for a new comparison.
 
 ## Stop, restart and update
 

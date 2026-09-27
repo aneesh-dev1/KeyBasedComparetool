@@ -509,3 +509,14 @@ Open **Docs & FAQ** under Help in the sidebar for six workflow guides and
 expand automatically. This page is bundled with the app, works without internet,
 and stays accessible during uploads and comparisons. Clear the search to restore
 all topics and use the topic links to jump to a section.
+
+## Data cleanup
+
+Job history includes a Delete action to remove a job and all uploaded copies,
+scratch files, logs and reports. Original client files are unaffected. Automatic
+cleanup runs at startup and hourly with a default retention of 7 inactive days,
+including old uploads and drafts. Running/queued work and active file transfers
+are protected. Download reports before expiry. Set `RETENTION_DAYS` in
+`deploy.env` (or `--retention-days` when launching server.py); use 0 to disable
+automatic expiry. This policy applies to existing jobs after upgrading. See
+[deployment and retention details](DEPLOYMENT.md).

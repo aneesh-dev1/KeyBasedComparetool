@@ -15,6 +15,7 @@ DATA_DIR="${DATA_DIR:-$APP_DIR/data}"
 RUN_DIR="${RUN_DIR:-$APP_DIR/run}"
 MAX_JOBS="${MAX_JOBS:-1}"
 MAX_SORT_MB="${MAX_SORT_MB:-4096}"
+RETENTION_DAYS="${RETENTION_DAYS:-7}"
 mkdir -p -- "$RUN_DIR" "$DATA_DIR"
 DATA_DIR="$(cd -- "$DATA_DIR" && pwd)"
 RUN_DIR="$(cd -- "$RUN_DIR" && pwd)"
@@ -66,7 +67,7 @@ if read_pid; then echo "Already running (PID $SERVER_PID)."; exit 0; fi
 # Close the launcher lock in the server child; the server takes its own data lock.
 nohup "$PYTHON_BIN" -u "$APP_DIR/server.py" --host "$BIND_HOST" --port "$PORT" \
   --public-url "$PUBLIC_URL" --data-dir "$DATA_DIR" --max-jobs "$MAX_JOBS" \
-  --max-sort-mb "$MAX_SORT_MB" >>"$LOG_FILE" 2>&1 < /dev/null 9>&- &
+  --max-sort-mb "$MAX_SORT_MB" --retention-days "$RETENTION_DAYS" >>"$LOG_FILE" 2>&1 < /dev/null 9>&- &
 SERVER_PID=$!
 printf '%s\n' "$SERVER_PID" > "$PID_FILE"
 if "$PYTHON_BIN" - "$PORT" "$SERVER_PID" <<'PY'

@@ -39,10 +39,15 @@ class Application:
         self.token = secrets.token_urlsafe(32)
         self.lock = threading.RLock()
         self.file_locks = {}
+        self.requests = {}
+        self.cleanup_lock = threading.Lock()
+        self.retention_days = 7
         self.pool = ThreadPoolExecutor(max_workers=max_jobs)  # Shared, bounded queue across sessions.
         self.json_lock = threading.Lock()
         csv.field_size_limit(64 * 1024 * 1024)
         for path in self.root.glob('*/job.json'):
+            if not re.fullmatch(r'[a-f0-9]{32}', path.parent.name):
+                continue
             job = json.loads(path.read_text())
             changed = False
             if job['state'] in ('queued', 'running', 'preparing'):
@@ -103,6 +108,56 @@ class Application:
         job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, exports={})
         self.save(job)
         return job
+
+    def busy(self, job):
+        return job['state'] in ('queued', 'running', 'preparing') or any(
+            export.get('state') in ('queued', 'running') for export in job.get('exports', {}).values())
+
+    def remove_job(self, identity, allowed_requests=0):
+        with self.cleanup_lock:
+            self._remove_job(identity, allowed_requests)
+
+    def _remove_job(self, identity, allowed_requests=0):
+        with self.lock:
+            job = self.load(identity)
+            if self.busy(job) or self.requests.get(identity, 0) > allowed_requests:
+                raise ValueError('Job is in use. Wait for uploads, downloads, comparison and exports to finish.')
+            source = self.directory(identity)
+            trash = self.root / ('.deleting-' + identity)
+            source.rename(trash)
+        # Rename atomically removes the job from history before reclaiming large files.
+        shutil.rmtree(trash)
+
+    def cleanup(self, now=None):
+        with self.cleanup_lock:
+            self._cleanup(now)
+
+    def _cleanup(self, now=None):
+        now = time.time() if now is None else now
+        if self.retention_days:
+            for path in list(self.root.glob('*/job.json')):
+                if not re.fullmatch(r'[a-f0-9]{32}', path.parent.name):
+                    continue
+                try:
+                    with self.lock:
+                        job = self.load(path.parent.name)
+                        age_from = max(job.get('finished', job['created']), path.stat().st_mtime)
+                        if now - age_from < self.retention_days * 86400 or self.busy(job) or self.requests.get(job['id'], 0):
+                            continue
+                        # Hold the lock through rename so a new request cannot acquire this job.
+                        trash = self.root / ('.deleting-' + job['id'])
+                        self.directory(job['id']).rename(trash)
+                    shutil.rmtree(trash)
+                    print(f"Cleanup removed expired job {job['id']}", flush=True)
+                except (ValueError, OSError) as error:
+                    print(f'Cleanup deferred: {error}', flush=True)
+        # Retry deletions interrupted by a restart or temporary file lock.
+        for trash in self.root.glob('.deleting-*'):
+            if re.fullmatch(r'.deleting-[a-f0-9]{32}', trash.name) and not trash.is_symlink():
+                try:
+                    shutil.rmtree(trash)
+                except OSError as error:
+                    print(f'Cleanup deferred: {error}', flush=True)
 
     def upload_path(self, job, side):
         return self.directory(job['id']) / (f'{side}.xlsx' if job['files'][side].get('format') == 'excel' else f'{side}.csv')
@@ -319,10 +374,10 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     summary = item.get('summary', {})
                     records.append(dict(id=item['id'], created=item['created'], state=item['state'],
-                        files=item['files'], keys=item.get('keys', []), changed_cells=summary.get('changed_cells'),
+                        files=item['files'], busy=self.app.busy(item), keys=item.get('keys', []), changed_cells=summary.get('changed_cells'),
                         changed_rows=summary.get('changed_rows'), elapsed_seconds=summary.get('elapsed_seconds')))
                 records.sort(key=lambda item: item['created'], reverse=True)
-                return self.json_response(dict(jobs=records[offset:offset+25], total=len(records), offset=offset))
+                return self.json_response(dict(jobs=records[offset:offset+25], total=len(records), offset=offset, retention_days=self.app.retention_days))
             match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})(?:/(.*))?', path)
             if not match:
                 return self.json_response({'error': 'Not found'}, 404)
@@ -330,7 +385,11 @@ class Handler(BaseHTTPRequestHandler):
             job = self.app.load(identity)
             if self.server.shared and job.get('owner') != self.workspace:
                 return self.json_response({'error': 'Comparison not found in this browser workspace'}, 404)
+            self.authorized_job = identity
             directory = self.app.directory(identity)
+            if self.command == 'DELETE' and action is None:
+                self.app.remove_job(identity, allowed_requests=1)
+                return self.json_response({'deleted': True})
             if self.command == 'GET' and action is None:
                 if 'source_headers' not in job and job['state'] in ('ready', 'queued', 'running', 'complete'):
                     job['source_headers'] = {side: header(directory / f'{side}.csv', job['delimiter'], job['encoding']) for side in ('left', 'right')}
@@ -588,9 +647,30 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as error:
             self.json_response({'error': 'Unexpected server error: ' + str(error)}, 500)
 
-    do_GET = dispatch
-    do_POST = dispatch
-    do_PUT = dispatch
+    def guarded_dispatch(self):
+        self.authorized_job = None
+        match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})(?:/.*)?', urlsplit(self.path).path)
+        identity = match.group(1) if match else None
+        if identity:
+            with self.app.lock:
+                self.app.requests[identity] = self.app.requests.get(identity, 0) + 1
+        try:
+            self.dispatch()
+        finally:
+            if identity:
+                with self.app.lock:
+                    self.app.requests[identity] -= 1
+                    if not self.app.requests[identity]:
+                        del self.app.requests[identity]
+                    # Recent upload/configuration activity protects abandoned drafts from expiry.
+                    path = self.app.directory(identity) / 'job.json'
+                    if getattr(self, 'authorized_job', None) == identity and self.command in ('POST', 'PUT') and path.exists():
+                        os.utime(path, None)
+
+    do_GET = guarded_dispatch
+    do_POST = guarded_dispatch
+    do_PUT = guarded_dispatch
+    do_DELETE = guarded_dispatch
 
 
 def make_server(root, port=8765, host='127.0.0.1', public_url=None, max_jobs=1, max_sort_mb=8192):
@@ -642,10 +722,21 @@ if __name__ == '__main__':
     parser.add_argument('--max-jobs', type=int, default=1, help='Maximum simultaneous comparisons/imports/exports; other jobs queue')
     parser.add_argument('--max-sort-mb', type=int, default=4096, help='Maximum sort budget for each comparison')
     parser.add_argument('--data-dir', default=str(BASE / 'data'), help='Upload, scratch and report storage; use a fast SSD')
+    parser.add_argument('--retention-days', type=int, default=7, help='Delete inactive jobs after this many days; 0 disables automatic cleanup')
     parser.add_argument('--open', action='store_true', help='Open the UI in your default browser')
     args = parser.parse_args()
+    if args.retention_days < 0:
+        parser.error('--retention-days must be zero or positive')
     data_lock = lock_data_directory(args.data_dir)
     server = make_server(args.data_dir, args.port, args.host, args.public_url, args.max_jobs, args.max_sort_mb)
+    server.app.retention_days = args.retention_days
+    cleanup_stop = threading.Event()
+    def cleanup_loop():
+        while not cleanup_stop.is_set():
+            server.app.cleanup()
+            cleanup_stop.wait(3600)
+    cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True)
+    cleanup_thread.start()
     url = args.public_url or f'http://127.0.0.1:{server.server_address[1]}'
     print(f'CSV Compare is ready at {url}', flush=True)
     print(f'Data directory: {server.app.root}', flush=True)
@@ -665,6 +756,8 @@ if __name__ == '__main__':
     try:
         server.serve_forever()
     finally:
+        cleanup_stop.set()
+        cleanup_thread.join()
         server.server_close()
         server.app.pool.shutdown(wait=True)
         data_lock.close()
