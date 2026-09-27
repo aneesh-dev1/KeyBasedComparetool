@@ -41,6 +41,12 @@ class TeamServerTests(unittest.TestCase):
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
     def tearDown(self):
         self.server.shutdown();self.server.server_close();self.server.app.pool.shutdown();self.temp.cleanup()
+    def test_json_array_discovery_endpoint(self):
+        client = Client(self.server)
+        arrays = client.request('/api/json-arrays', dict(left='{"students":[{"id":"A1"},{"id":"A2"}]}', right='{"students":[{"id":"A2"},{"id":"A1"}]}'))['arrays']
+        self.assertEqual(arrays[0]['path'], '$.students')
+        self.assertEqual(arrays[0]['fields'], ['id'])
+
     def test_five_users_isolated_uploads_queue_results_exports_and_containers(self):
         clients=[Client(self.server) for _ in range(5)]
         gate=threading.Event();active=[0,0];lock=threading.Lock()

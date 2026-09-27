@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 import webbrowser
 
-from json_compare import compare_json
+from json_compare import compare_json, discover_arrays
 from excel_input import sheets as excel_sheets, convert as convert_excel
 from file_io import atomic_write_text, replace_retry
 from compare import align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
@@ -331,12 +331,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
-            if path == '/api/json-compare' and self.command == 'POST':
+            if path in ('/api/json-compare', '/api/json-arrays') and self.command == 'POST':
                 config = self.body(64 * 1024 * 1024)
                 if not self.app.json_lock.acquire(blocking=False):
                     return self.json_response({'error': 'Another JSON comparison is running. Try again shortly.'}, 429)
                 try:
-                    result = compare_json(config.get('left'), config.get('right'), config.get('default_order', 'ordered'), config.get('rules', []), True)
+                    result = discover_arrays(config.get('left'), config.get('right')) if path == '/api/json-arrays' else compare_json(config.get('left'), config.get('right'), config.get('default_order', 'ordered'), config.get('rules', []), True)
                     return self.json_response(result)
                 finally:
                     self.app.json_lock.release()

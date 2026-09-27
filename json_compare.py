@@ -74,6 +74,60 @@ def property_path(path,key):
     return path+'.'+key if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',key) else path+'['+json.dumps(key,ensure_ascii=False)+']'
 
 
+def discover_arrays(left_text, right_text):
+    """Find per-array direct scalar keys valid in every occurrence on either side."""
+    groups = {}
+    def atom(value):
+        if isinstance(value, Number):
+            try:
+                return ('number', Decimal(value))
+            except InvalidOperation as error:
+                raise ValueError('JSON numeric exponent is too large') from error
+        return (type(value).__name__, value)
+    def walk(value, path, side):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                walk(child, property_path(path, key), side)
+        elif isinstance(value, list):
+            if path not in groups:
+                if len(groups) >= 100:
+                    raise ValueError('Array discovery supports up to 100 distinct array paths. Use advanced rules for this document.')
+                groups[path] = dict(path=path, left_items=0, right_items=0, candidates=None)
+            group = groups[path]
+            group[side + '_items'] += len(value)
+            if value:
+                candidates = set(value[0]) if isinstance(value[0], dict) else set()
+                for item in value:
+                    if not isinstance(item, dict):
+                        candidates.clear(); break
+                    candidates.intersection_update(item)
+                valid = set()
+                for field in candidates:
+                    if not field:
+                        continue
+                    seen = set()
+                    for item in value:
+                        val = item[field]
+                        if val is None or isinstance(val, (dict, list)):
+                            break
+                        key = atom(val)
+                        if key in seen:
+                            break
+                        seen.add(key)
+                    else:
+                        valid.add(field)
+                group['candidates'] = valid if group['candidates'] is None else group['candidates'] & valid
+            for child in value:
+                walk(child, path + '[*]', side)
+    walk(parse(left_text, 'File 1'), '$', 'left')
+    walk(parse(right_text, 'File 2'), '$', 'right')
+    result = []
+    for group in groups.values():
+        fields = sorted(group.pop('candidates') or set(), key=lambda key: (key.lower() != 'id', key))
+        result.append(dict(**group, fields=fields))
+    return dict(arrays=result)
+
+
 def compare_json(left_text, right_text, default='ordered', rules=None, include_view=False):
     if default not in ('ordered','unordered'): raise ValueError('Choose preserve or ignore array order')
     rules=[] if rules is None else rules

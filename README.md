@@ -520,3 +520,17 @@ are protected. Download reports before expiry. Set `RETENTION_DAYS` in
 `deploy.env` (or `--retention-days` when launching server.py); use 0 to disable
 automatic expiry. This policy applies to existing jobs after upgrading. See
 [deployment and retention details](DEPLOYMENT.md).
+
+## Choosing JSON array keys
+
+Paste or upload both JSON versions, click **Find arrays & choose keys**, and choose
+a field for each array that may arrive in a different order. For example, choose
+`id` for `students`: A1/A2/A3 and A1/A3/A2 then match, while changed marks are
+still reported. Nested arrays can use independent keys such as
+`students[*].subjects` → `code`. Arrays without a selected key retain pasted order
+with the default settings. Advanced order rules remain available.
+
+Only direct scalar fields present, non-null and unique in every occurrence of
+an array on both sides are offered. No key is selected automatically. Editing
+inputs keeps existing rules; find arrays again to review keys, or remove rules
+in Advanced array rules. Discovery supports up to 100 distinct array paths.

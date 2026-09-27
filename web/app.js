@@ -567,15 +567,57 @@ $('prepareSheets').addEventListener('click',async()=>{
   try{job=await api(endpoint('/select-sheets'),{left:$('leftSheet').value,right:$('rightSheet').value});await refresh();}catch(error){showError(error);$('prepareSheets').disabled=false;}
 });
 
-let jsonRules=[], jsonResult=null, jsonBusy=false;
+let jsonRules=[], jsonResult=null, jsonBusy=false, jsonArrays=[];
+function resetJsonDiscovery(){jsonArrays=[];$('jsonArrayChoices').replaceChildren();$('jsonArrayStatus').textContent='Inputs changed. Find arrays again to review available keys. Existing rules remain in Advanced array rules.';}
+for(const id of ['jsonLeft','jsonRight'])$(id).addEventListener('input',resetJsonDiscovery);
 function invalidateJson(){jsonResult=null;$('jsonResult').hidden=true;$('jsonStatus').textContent='';}
 for(const id of ['jsonLeft','jsonRight','jsonDefault'])$(id).addEventListener('input',invalidateJson);
+$('jsonDefault').addEventListener('change',()=>renderJsonArrayChoices());
 for(const side of ['Left','Right'])$('json'+side+'File').addEventListener('change',async event=>{
-  const file=event.target.files[0];if(!file)return;clearError();invalidateJson();
+  const file=event.target.files[0];if(!file)return;clearError();invalidateJson();resetJsonDiscovery();
   try{if(file.size>5*1024*1024)throw new Error('Each JSON input must be at most 5 MiB.');$('json'+side).value=new TextDecoder('utf-8',{fatal:true}).decode(await file.arrayBuffer());}catch(error){showError(error);}finally{event.target.value='';}
+});
+function renderJsonArrayChoices(){
+  const container=$('jsonArrayChoices');container.replaceChildren();
+  for(const array of jsonArrays){
+    const row=document.createElement('div');row.className='json-array-choice';
+    const info=document.createElement('div');const title=document.createElement('strong');title.textContent=array.path==='$'?'Root array':array.path.replace(/^\$\./,'');
+    const count=document.createElement('small');count.textContent=`${array.left_items} items in file 1 · ${array.right_items} in file 2`;
+    info.append(title,count);
+    const label=document.createElement('label');label.textContent='Match using';const select=document.createElement('select');select.setAttribute('aria-label',`Match key for ${array.path}`);
+    select.add(new Option('Pasted order (no key)', 'ordered'));
+    array.fields.forEach((field,index)=>select.add(new Option(field, String(index))));
+    const rule=jsonRules.find(rule=>rule.path===array.path);
+    if(rule?.mode==='keyed'&&array.fields.includes(rule.field))select.value=String(array.fields.indexOf(rule.field));
+    else if(rule && rule.mode!=='ordered'){select.add(new Option('Advanced rule — review below','advanced'));select.value='advanced';}
+    else if(!rule&&$('jsonDefault').value==='unordered'){select.add(new Option('Advanced default: ignore order','advanced'));select.value='advanced';}
+    select.disabled=jsonBusy;
+    select.addEventListener('change',()=>{
+      if(select.value==='advanced')return;
+      const remaining=jsonRules.filter(rule=>rule.path!==array.path);
+      if(remaining.length>=100){showError('Use up to 100 array rules. Remove an advanced rule first.');renderJsonArrayChoices();return;}
+      jsonRules=[...remaining,{path:array.path,mode:select.value==='ordered'?'ordered':'keyed',field:select.value==='ordered'?'':array.fields[Number(select.value)]}];
+      invalidateJson();renderJsonRules();
+    });
+    label.append(select);row.append(info,label);
+    if(!array.fields.length){const note=document.createElement('small');note.textContent='No unique, non-null scalar field is available across these array items. Keep pasted order.';row.append(note);}
+    container.append(row);
+  }
+}
+$('jsonDiscover').addEventListener('click',async()=>{
+  clearError();jsonBusy=true;$('jsonDiscover').disabled=true;$('jsonCompare').disabled=true;renderJsonRules();
+  const left=$('jsonLeft').value,right=$('jsonRight').value;$('jsonArrayStatus').textContent='Finding arrays and checking unique keys…';
+  try{
+    const result=await api('/api/json-arrays',{left,right});
+    if(left!==$('jsonLeft').value||right!==$('jsonRight').value){resetJsonDiscovery();return;}
+    jsonArrays=result.arrays;
+    $('jsonArrayStatus').textContent=jsonArrays.length?`${jsonArrays.length} array paths found. Choose a key only where order should be ignored. Keys must be unique within each array. Nested array rules apply to every parent item.`:'No arrays found. Object property order is already ignored.';
+  }catch(error){resetJsonDiscovery();$('jsonArrayStatus').textContent='Unable to inspect arrays. Check both JSON inputs.';showError(error);}
+  finally{jsonBusy=false;$('jsonDiscover').disabled=false;$('jsonCompare').disabled=false;renderJsonRules();}
 });
 $('jsonRuleMode').addEventListener('change',()=>{$('jsonRuleField').disabled=$('jsonRuleMode').value!=='keyed';});
 function renderJsonRules(){
+  renderJsonArrayChoices();
   $('jsonRules').replaceChildren();
   jsonRules.forEach((rule,index)=>{const row=document.createElement('div');row.className='container-option';const label=document.createElement('span');label.textContent=rule.path+' · '+({ordered:'Preserve order',unordered:'Ignore order',keyed:'Match by field'}[rule.mode])+(rule.mode==='keyed'?' · '+rule.field:'');const remove=document.createElement('button');remove.className='subtle';remove.textContent='Remove';remove.setAttribute('aria-label','Remove array rule '+rule.path);remove.disabled=jsonBusy;remove.addEventListener('click',()=>{jsonRules.splice(index,1);invalidateJson();renderJsonRules();});row.append(label,remove);$('jsonRules').append(row);});
 }
@@ -587,7 +629,7 @@ $('jsonAddRule').addEventListener('click',()=>{
 });
 $('jsonCompare').addEventListener('click',async()=>{
   clearError();invalidateJson();jsonBusy=true;
-  const controls=['jsonLeft','jsonRight','jsonLeftFile','jsonRightFile','jsonDefault','jsonRulePath','jsonRuleMode','jsonRuleField','jsonAddRule','jsonCompare'];
+  const controls=['jsonDiscover','jsonLeft','jsonRight','jsonLeftFile','jsonRightFile','jsonDefault','jsonRulePath','jsonRuleMode','jsonRuleField','jsonAddRule','jsonCompare'];
   controls.forEach(id=>$(id).disabled=true);renderJsonRules();$('jsonStatus').textContent='Comparing JSON…';
   try{
     for(const id of ['jsonLeft','jsonRight'])if(new Blob([$(id).value]).size>5*1024*1024)throw new Error('Each JSON input must be at most 5 MiB.');
