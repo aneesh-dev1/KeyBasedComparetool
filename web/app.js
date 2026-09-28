@@ -768,18 +768,46 @@ filterDocs();
 
 let analysisOffset=0, analysisTimer=null, analysisGeneration=0;
 $('openAnalysis').addEventListener('click',()=>goView('analysisPanel').catch(showError));
+function analysisKeyValues(){return job.keys.map((_,i)=>$('analysisKeyPart'+i).value);}
+function selectAnalysisKey(values){
+  job.keys.forEach((_,i)=>$('analysisKeyPart'+i).value=values?.[i]||'');
+  $('analysisKey').value=values?(job.keys.length===1?values[0]:JSON.stringify(values)):'';
+}
+function analysisColumns(){
+  const chosen=$('analysisColumn').value,query=$('analysisColumnSearch').value.toLowerCase();
+  $('analysisColumn').replaceChildren(new Option('All mismatching columns',''));
+  for(const [name,count] of Object.entries(job.summary.changed_cells_by_column).filter(([n,c])=>c>0&&(n===chosen||n.toLowerCase().includes(query))).sort((a,b)=>b[1]-a[1]))$('analysisColumn').add(new Option(`${name} · ${number(count)} mismatches`,name));
+  $('analysisColumn').value=chosen;
+}
+function analysisContext(){
+  const mode=$('analysisMode').value,column=$('analysisColumn').value,key=$('analysisKey').value;
+  $('analysisByColumn').setAttribute('aria-pressed',String(mode==='columns'));$('analysisByKey').setAttribute('aria-pressed',String(mode==='keys'));
+  $('analysisColumnControls').hidden=mode==='keys'&&!column;
+  $('analysisHeading').textContent=key?'Differences for this key':column?`Mismatches in ${column}`:mode==='keys'?'Records to review':'Columns with differences';
+  const activeKey=key?(job.keys.length===1?[key]:JSON.parse(key)):[];
+  const keyLabel=key?job.keys.map((name,i)=>`${name}: ${activeKey[i]}`).join(' · '):'';
+  $('analysisSelection').textContent=[column?'Column: '+column:'All mismatching columns',keyLabel||'All keys'].join(' · ');
+  $('analysisReset').hidden=!column&&!key;$('analysisReset').textContent=mode==='keys'?'Back to all keys':'Back to all columns';
+  if($('noteScope'))$('noteScope').textContent=column||key?'This note applies to '+$('analysisSelection').textContent+'.':'Choose a column or key above before saving a finding.';
+  $('saveNote').disabled=!column&&!key;
+}
+async function resetAnalysis(mode){
+  $('analysisMode').value=mode;$('analysisColumn').value='';$('analysisColumnSearch').value='';selectAnalysisKey(null);analysisOffset=0;analysisColumns();await loadAnalysis();
+}
 async function openAnalysis(){
   clearTimeout(analysisTimer);analysisGeneration++;analysisOffset=0;
-  $('analysisRetry').hidden=true;
-  $('analysisKey').value='';$('analysisColumn').replaceChildren(new Option('All columns',''));
-  for(const [name,count] of Object.entries(job.summary.changed_cells_by_column))$('analysisColumn').add(new Option(`${name} (${number(count)})`,name));
-  $('analysisKeyLabel').firstChild.textContent=`Exact key (${job.keys.join(', ')}) `;
+  $('analysisRetry').hidden=true;$('noteComment').value='';$('analysisMode').value='columns';$('analysisKey').value='';$('analysisColumn').value='';$('analysisColumnSearch').value='';
+  $('analysisKeyFields').replaceChildren();
+  job.keys.forEach((name,i)=>{const label=document.createElement('label'),input=document.createElement('input');label.textContent=name;input.id='analysisKeyPart'+i;input.placeholder='Exact '+name;input.addEventListener('keydown',event=>{if(event.key==='Enter')$('analysisSearch').click();});label.append(input);$('analysisKeyFields').append(label);});
+  analysisColumns();$('analysisOverview').replaceChildren();
+  for(const [label,value] of [['Columns with differences',Object.values(job.summary.changed_cells_by_column).filter(n=>n>0).length],['Changed keys',job.summary.changed_rows],['Mismatched cells',job.summary.changed_cells],['Keys in one file only',job.summary.left_only+job.summary.right_only]]){const card=document.createElement('div'),title=document.createElement('span'),count=document.createElement('strong');title.textContent=label;count.textContent=number(value||0);card.append(title,count);$('analysisOverview').append(card);}
   const containers=job.summary.ignore_key_containers||[];
   $('analysisExclusions').textContent=containers.length?'Excluded containers: '+containers.map(c=>`${c.name}: ${c.reason} (${c.keys.length} configured keys)`).join(' · '):'No ignored-key containers configured.';
   await loadAnalysis();await loadNotes();
 }
 async function loadAnalysis(){
   clearTimeout(analysisTimer);const generation=++analysisGeneration,id=job.id;
+  analysisContext();
   const column=$('analysisColumn').value,keyText=$('analysisKey').value,mode=$('analysisMode').value;
   const table=$('analysisTable');table.replaceChildren();$('analysisStatus').classList.remove('loading-status');$('analysisRange').textContent='';clearError();
   $('analysisPrev').disabled=$('analysisNext').disabled=true;
@@ -788,7 +816,7 @@ async function loadAnalysis(){
     if(keyText!==''){key=job.keys.length===1?[keyText]:JSON.parse(keyText);if(!Array.isArray(key)||key.length!==job.keys.length||key.some(v=>typeof v!=='string'))throw Error('Enter a JSON array with one text value for each key column.');}
     let rows,headers,total,keyStatus;
     if(mode==='columns'&&!column&&key===undefined){
-      const entries=Object.entries(job.summary.changed_cells_by_column).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));total=entries.length;
+      const entries=Object.entries(job.summary.changed_cells_by_column).filter(([name,count])=>count>0&&name.toLowerCase().includes($('analysisColumnSearch').value.toLowerCase())).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));total=entries.length;
       headers=['Column','Mismatches','Mismatch %','Match %','Inspect'];
       rows=entries.slice(analysisOffset,analysisOffset+50).map(([name,count])=>[name,count,job.summary.matched_keys?(100*count/job.summary.matched_keys).toFixed(4):'N/A',job.summary.matched_keys?(100*(1-count/job.summary.matched_keys)).toFixed(4):'N/A']);
     }else{
@@ -802,18 +830,31 @@ async function loadAnalysis(){
         analysisTimer=setTimeout(()=>{if(currentView==='analysisPanel'&&job?.id===id)loadAnalysis();},1500);return;
       }
       total=result.total;keyStatus=result.key_status;
-      if(params.get('mode')==='keys'){headers=[...job.keys,'Status','Mismatches','Inspect'];rows=result.rows.map(r=>[...JSON.parse(r[0]),r[1],r[2]]);}
+      if(params.get('mode')==='keys'){headers=[...job.keys,'Status','Mismatches','Inspect'];rows=result.rows.map(r=>[...JSON.parse(r[0]),({changed:'Values differ',left_only:'Only in File 1',right_only:'Only in File 2'}[r[1]]||r[1]),r[2]]);}
       else{headers=[...job.keys,'Column','File 1 value','File 2 value'];rows=result.rows.map(r=>[...JSON.parse(r[0]),r[1],r[2]+(r[4]>1000?' … [truncated]':''),r[3]+(r[5]>1000?' … [truncated]':'')]);}
     }
     $('analysisStatus').classList.remove('loading-status');$('cancelAnalysis').hidden=true;
     const head=document.createElement('tr');headers.forEach(value=>{const th=document.createElement('th');th.textContent=value;head.append(th);});table.append(head);
-    rows.forEach(row=>{const tr=document.createElement('tr');row.forEach(value=>{const td=document.createElement('td');td.textContent=value;tr.append(td);});if(headers.at(-1)==='Inspect'){const td=document.createElement('td'),button=document.createElement('button');button.textContent='Inspect';button.className='subtle';button.addEventListener('click',()=>{if(mode==='columns')$('analysisColumn').value=row[0];else $('analysisKey').value=job.keys.length===1?row[0]:JSON.stringify(row.slice(0,job.keys.length));analysisOffset=0;loadAnalysis();});td.append(button);tr.append(td);}table.append(tr);});
-    $('analysisStatus').textContent=total?`${number(total)} results. Percentages use matched keys only.`:keyStatus==='left_only'?'This key exists only in File 1.':keyStatus==='right_only'?'This key exists only in File 2.':'No mismatches for this selection. Equal keys are not indexed.';
+    rows.forEach(row=>{
+      const tr=document.createElement('tr'),isDetails=headers.at(-1)!=='Inspect';
+      row.forEach((value,i)=>{const td=document.createElement('td');td.textContent=isDetails&&i>=row.length-2&&value===''?'(empty)':value;if(isDetails&&i===row.length-2)td.className='analysis-before';if(isDetails&&i===row.length-1)td.className='analysis-after';tr.append(td);});
+      const td=document.createElement('td'),button=document.createElement('button');button.className='subtle';
+      if(!isDetails){button.textContent=mode==='columns'?'View mismatching keys':'View this key';button.addEventListener('click',()=>{if(mode==='columns')$('analysisColumn').value=row[0];else selectAnalysisKey(row.slice(0,job.keys.length));analysisOffset=0;loadAnalysis();});}
+      else{button.textContent='All changes for this key';button.addEventListener('click',()=>{$('analysisMode').value='keys';$('analysisColumn').value='';selectAnalysisKey(row.slice(0,job.keys.length));analysisOffset=0;loadAnalysis();});}
+      td.append(button);tr.append(td);table.append(tr);
+    });
+    if(headers.at(-1)!=='Inspect'){const th=document.createElement('th');th.textContent='Explore record';head.append(th);}
+    $('analysisStatus').textContent=total?`${number(total)} ${headers.at(-1)==='Inspect'?(mode==='columns'?'columns':'keys'):'mismatched cells'}. ${headers.at(-1)==='Inspect'?'Choose a result below to review it.':'File 1 values are shaded red; File 2 values are shaded green.'}`:keyStatus==='left_only'?'This key exists only in File 1.':keyStatus==='right_only'?'This key exists only in File 2.':keyText?'No recorded differences for this key. It may be equal, excluded, or absent from both files.':column?'No mismatches in this column.':'No results for this view. Try a different column search or switch views.';
     $('analysisRange').textContent=total?`${analysisOffset+1}–${Math.min(analysisOffset+50,total)} of ${number(total)}`:'0 results';
     $('analysisPrev').disabled=!analysisOffset;$('analysisNext').disabled=analysisOffset+50>=total;
   }catch(error){$('analysisStatus').classList.remove('loading-status');$('analysisStatus').textContent=error.message;showError(error);}
 }
-for(const id of ['analysisSearch','analysisMode','analysisColumn'])$(id).addEventListener(id==='analysisSearch'?'click':'change',()=>{if(id==='analysisMode')$('analysisColumn').value='';analysisOffset=0;loadAnalysis();});
+$('analysisByColumn').addEventListener('click',()=>resetAnalysis('columns'));
+$('analysisByKey').addEventListener('click',()=>resetAnalysis('keys'));
+$('analysisReset').addEventListener('click',()=>resetAnalysis($('analysisMode').value));
+$('analysisSearch').addEventListener('click',()=>{const values=analysisKeyValues();if(values.some(v=>v==='')){showError('Enter a value for each key field. To browse instead, choose By column or By key.');return;}selectAnalysisKey(values);analysisOffset=0;loadAnalysis();});
+$('analysisColumn').addEventListener('change',()=>{analysisOffset=0;loadAnalysis();});
+$('analysisColumnSearch').addEventListener('input',()=>{analysisColumns();if(!$('analysisColumn').value&&!$('analysisKey').value){analysisOffset=0;loadAnalysis();}});
 $('analysisPrev').addEventListener('click',()=>{analysisOffset=Math.max(0,analysisOffset-50);loadAnalysis();});
 $('analysisNext').addEventListener('click',()=>{analysisOffset+=50;loadAnalysis();});
 
@@ -822,7 +863,7 @@ $('analysisRetry').addEventListener('click',async()=>{try{$('analysisRetry').hid
 let valueRules=[];
 $('keysPanel').insertAdjacentHTML('afterbegin',`<section class="feature-box"><h3>Saved comparison profiles</h3><p>Reuse headers, keys, scope, overrides and comparison rules in this workspace.</p><div class="preview-controls"><select id="profileSelect" aria-label="Saved profile"><option value="">Choose profile</option></select><button id="applyProfile" class="subtle">Apply profile</button><input id="profileName" placeholder="Profile name" aria-label="Profile name"><button id="saveProfile" class="subtle">Save current settings</button><button id="deleteProfile" class="subtle">Delete profile</button></div><p id="profileStatus" role="status"></p></section>`);
 $('overridesPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Optional column comparison rules</h3><p>Exact text is the default. Rules never change source values or key matching. Invalid numbers or dates remain mismatches.</p><div class="preview-controls"><label>Column<select id="ruleColumn"></select></label><label><input id="ruleTrim" type="checkbox"> Trim whitespace</label><label><input id="ruleCase" type="checkbox"> Ignore case</label><label>Absolute numeric tolerance<input id="ruleTolerance" placeholder="e.g. 0.01"></label><label>File 1 date format<input id="ruleDateLeft" placeholder="%Y-%m-%d"></label><label>File 2 date format<input id="ruleDateRight" placeholder="%d/%m/%Y"></label><button id="addValueRule" class="subtle">Save column rule</button></div><p>Use Python date formats: %Y year, %m month, %d day, %H hour, %M minute, %S second. Choose tolerance or date formats for a column.</p><div id="valueRuleList"></div></section>`);
-$('analysisPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Classification &amp; comments</h3><p>Notes apply to the selected column, exact key, or both. They document your review; they do not change mismatch counts. Regenerate reports after editing notes.</p><div class="preview-controls"><select id="noteStatus" aria-label="Classification"><option>Needs investigation</option><option>Expected</option><option>Resolved</option></select><textarea id="noteComment" maxlength="2000" aria-label="Analysis comment" placeholder="Describe your finding"></textarea><button id="saveNote" class="subtle">Save analysis note</button></div><div id="analysisNotes"></div></section>`);
+$('analysisPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Record your finding</h3><p id="noteScope" class="analysis-note-scope"></p><p>Notes apply to the selected column, exact key, or both. They document your review; they do not change mismatch counts. Regenerate reports after editing notes.</p><div class="preview-controls"><select id="noteStatus" aria-label="Classification"><option>Needs investigation</option><option>Expected</option><option>Resolved</option></select><textarea id="noteComment" maxlength="2000" aria-label="Analysis comment" placeholder="Describe your finding"></textarea><button id="saveNote" class="subtle">Save analysis note</button></div><div id="analysisNotes"></div></section>`);
 $('uploadPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><button id="checkSpace" class="subtle">Check server disk space before upload</button><p id="preflightStatus" role="status"></p></section>`);
 function renderValueRules(){
   const editable=job?.state==='ready';$('ruleColumn').replaceChildren();

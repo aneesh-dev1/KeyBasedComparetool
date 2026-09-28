@@ -616,3 +616,16 @@ Windows/on-prem deployment still need a representative pilot.
 ### Batch settings and duplicate handling
 
 Keys & scope offers read/sort batch rows (default 100,000), comparison batch keys (default 10,000), and first/last source occurrence for duplicates. CLI equivalents: `--read-batch-size`, `--compare-batch-size`, `--duplicate-policy`. Batch sizes accept integers from 1 to 1,000,000. Sorting flushes at the row cap or memory budget, whichever comes first. Comparison remains streaming; its batch setting controls progress reporting. Duplicate counts and skipped rows are shown in Results and exports. Match percentages use only retained rows.
+
+### Guided Analysis view
+
+Use **By column** to search mismatching columns and open their key-level details.
+Use **By key** to browse changed/one-sided records or enter a value in each key
+field; composite keys do not require JSON. From any mismatch, choose **All changes
+for this key** to review the record across columns. Back clears the selection.
+File 1 and File 2 values are shaded separately, and blank values show `(empty)`.
+Review notes identify the selected column/key scope before saving.
+
+Run `node test_analysis_ui.cjs` for the guided navigation interaction checks,
+in addition to the Python analysis API tests. These are DOM simulation checks,
+not a browser rendering test.
