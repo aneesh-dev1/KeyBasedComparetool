@@ -48,6 +48,7 @@ function syncNavigation(){
 function panel(name) {
   if(currentView!==name)window.scrollTo(0,0);
   currentView=name;
+  $('mainWorkspace').classList.toggle('docs-view',name==='docsPanel');
   for (const [id,nav] of Object.entries(views)){ $(id).hidden=id!==name; $(nav).classList.toggle('active',id===name); }
   $('sheetPanel').hidden=name!=='uploadPanel'||!['selecting_sheets','preparing'].includes(job?.state);
   $('reset').hidden=!job;
