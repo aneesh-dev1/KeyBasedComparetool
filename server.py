@@ -28,7 +28,7 @@ from analysis import build_index, query_index
 from json_compare import compare_json, discover_arrays
 from excel_input import sheets as excel_sheets, convert as convert_excel
 from file_io import atomic_write_text, replace_retry
-from compare import common_headers, align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
+from compare import execution_settings, common_headers, align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
 from reports import export_excel, export_html, make_summary_html, REPORT_VERSION
 
 BASE = Path(__file__).resolve().parent
@@ -473,7 +473,7 @@ class Handler(BaseHTTPRequestHandler):
                         if item['state'] not in ('ready','complete'):raise ValueError('Configure the comparison before saving a profile')
                         name=config.get('name','').strip()
                         if not name or len(name)>100:raise ValueError('Enter a profile name of 1–100 characters')
-                        profile=dict(id=uuid.uuid4().hex,name=name,source_headers=item['source_headers'],column_headers=item['column_headers'],config=item.get('draft',{}) if item['state']=='ready' else {key:item.get(key) for key in ('keys','ignore_columns','ignore_keys','ignore_container_ids','value_overrides','comparison_rules','memory_mb','sort_workers')})
+                        profile=dict(id=uuid.uuid4().hex,name=name,source_headers=item['source_headers'],column_headers=item['column_headers'],config=item.get('draft',{}) if item['state']=='ready' else {key:item.get(key) for key in ('keys','ignore_columns','ignore_keys','ignore_container_ids','value_overrides','comparison_rules','memory_mb','sort_workers','read_batch_size','compare_batch_size','duplicate_policy')})
                         profiles=[p for p in profiles if p['name'].casefold()!=name.casefold()]
                         if len(profiles)>=100:raise ValueError('Delete an unused profile first (maximum 100)')
                         profiles.append(profile)
@@ -644,7 +644,7 @@ class Handler(BaseHTTPRequestHandler):
                     if job['state'] != 'ready':
                         raise ValueError('Configuration is locked after comparison starts')
                     # Drafts are validated before execution; preserve partially filled forms.
-                    job['draft'] = {key: config.get(key) for key in ('keys', 'ignore_columns', 'ignore_keys', 'memory_mb', 'comparison_rules', 'value_overrides', 'ignore_container_ids', 'sort_workers') if key not in ('ignore_container_ids', 'sort_workers','comparison_rules') or key in config}
+                    job['draft'] = {key: config.get(key) for key in ('keys', 'ignore_columns', 'ignore_keys', 'memory_mb', 'comparison_rules', 'value_overrides', 'ignore_container_ids', 'sort_workers', 'read_batch_size', 'compare_batch_size', 'duplicate_policy') if key not in ('ignore_container_ids', 'sort_workers','comparison_rules','read_batch_size','compare_batch_size','duplicate_policy') or key in config}
                     self.app.save(job)
                 return self.json_response({'saved': True})
             if self.command == 'PUT' and action in ('files/left', 'files/right'):
@@ -758,7 +758,7 @@ class Handler(BaseHTTPRequestHandler):
                         validate_scope(keys, job['columns'], [], item['values'])
                     overrides, _ = validate_overrides(config.get('value_overrides', []), job['columns'], keys, ignored_columns)
                     rules=validate_rules(config.get('comparison_rules',[]),job['columns'],keys,ignored_columns)
-                    job.update(comparison_rules=rules,state='queued', keys=keys, memory_mb=memory, sort_workers=sort_workers,
+                    job.update(**execution_settings(config),comparison_rules=rules,state='queued', keys=keys, memory_mb=memory, sort_workers=sort_workers,
                                ignore_columns=ignored_columns, ignore_keys=config.get('ignore_keys', ''), value_overrides=overrides,
                                ignore_container_ids=ids, ignore_key_containers=containers)
                     self.app.save(job)
@@ -825,7 +825,7 @@ class Handler(BaseHTTPRequestHandler):
                     target = directory / name
                 elif kind and job['exports'].get(kind, {}).get('state') == 'complete':
                     target = directory / name
-                elif name in ('differences.csv', 'left_only.csv', 'right_only.csv', 'summary.html', 'summary.json'):
+                elif name in ('duplicate_keys.csv', 'differences.csv', 'left_only.csv', 'right_only.csv', 'summary.html', 'summary.json'):
                     target = directory / 'report' / name
                 else:
                     raise ValueError('Report not available yet')

@@ -31,13 +31,16 @@ class FeatureTests(unittest.TestCase):
     def test_profile_storage_and_isolation(self):
         path=self.upload();job=self.client.request(path)
         self.client.request(path+'/headers',dict(column_headers=job['column_headers']))
-        self.client.request(path+'/config',dict(keys=['id'],memory_mb=64,ignore_columns=[],ignore_keys='',value_overrides=[],comparison_rules=[dict(column='v',trim=True)]))
+        self.client.request(path+'/config',dict(keys=['id'],memory_mb=64,ignore_columns=[],ignore_keys='',value_overrides=[],read_batch_size=7,compare_batch_size=3,duplicate_policy='last',comparison_rules=[dict(column='v',trim=True)]))
         profile=self.client.request('/api/profiles',dict(job_id=job['id'],name='Team profile'))['profiles'][0]
         self.assertEqual(self.other.request('/api/profiles')['profiles'],[])
         target=self.upload(b'v,id\nold,001\n',b'id,v\n001,new\n')
         applied=self.client.request(target+'/apply-profile',dict(id=profile['id']))
         self.assertEqual(applied['draft']['comparison_rules'][0]['trim'],True)
         self.assertEqual(applied['columns'],['v','id'])
+        self.assertEqual(applied['draft']['read_batch_size'],7)
+        self.assertEqual(applied['draft']['compare_batch_size'],3)
+        self.assertEqual(applied['draft']['duplicate_policy'],'last')
         with self.assertRaises(HTTPError):self.other.request(target+'/apply-profile',dict(id=profile['id']))
         storage=self.client.request('/api/storage');self.assertEqual(len(storage['jobs']),2)
         self.assertGreater(storage['jobs'][0]['sizes']['uploads'],0)
@@ -70,8 +73,29 @@ class FeatureTests(unittest.TestCase):
         path=self.upload(b'id,v\n001,a\n001,b\n001,c\n',b'id,v\n001,a\n')
         self.client.request(path+'/start',dict(keys=['id'],memory_mb=64,sort_workers=1))
         job=self.client.wait(path,lambda j:j['state'] in ('complete','error'))
-        self.assertEqual(job['state'],'error')
+        self.assertEqual(job['state'],'complete')
+        self.assertEqual(job['summary']['left_duplicate_rows_skipped'],2)
         diag=self.client.request(path+'/diagnostics');self.assertEqual(diag['count'],3);self.assertEqual(diag['key'],['001']);self.assertEqual(len(diag['samples']),3)
+    def test_duplicate_exports_and_batch_settings(self):
+        path=self.upload(b'id,v\n001,a\n001,b\n',b'id,v\n001,b\n')
+        for config in (dict(read_batch_size=0),dict(compare_batch_size=True),dict(duplicate_policy='all')):
+            with self.assertRaises(HTTPError):
+                self.client.request(path+'/start',dict(keys=['id'],memory_mb=64,**config))
+        job=self.complete(path,read_batch_size=1,compare_batch_size=1,duplicate_policy='last')
+        self.assertEqual(job['summary']['changed_cells'],0)
+        self.assertEqual(job['summary']['read_batch_size'],1)
+        audit=self.client.request(path+'/download/duplicate_keys.csv')
+        self.assertIn(b'kept_occurrence',audit)
+        for kind in ('excel','html'):
+            self.client.request(path+'/export/'+kind,{})
+            ready=self.client.wait(path,lambda j:j['exports'][kind]['state'] in ('complete','error'))
+            self.assertEqual(ready['exports'][kind]['state'],'complete',ready)
+        with zipfile.ZipFile(io.BytesIO(self.client.request(path+'/download/mismatches.xlsx'))) as book:
+            self.assertIn('Duplicate keys',book.read('xl/workbook.xml').decode())
+            self.assertIn('WARNING: duplicate keys',book.read('xl/worksheets/sheet1.xml').decode())
+        with zipfile.ZipFile(io.BytesIO(self.client.request(path+'/download/html.zip'))) as book:
+            self.assertEqual(book.read('duplicate_keys.csv'),audit)
+            self.assertIn('Warning: duplicate keys',book.read('index.html').decode())
     def test_cancel_queued_and_running_tasks(self):
         path=self.upload();job=self.client.request(path);started=threading.Event()
         def wait_for_cancel(identity):

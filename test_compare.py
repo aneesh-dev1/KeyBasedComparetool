@@ -37,12 +37,14 @@ class ComparisonTests(unittest.TestCase):
             rows = list(csv.DictReader(stream))
         self.assertEqual(rows, [dict(key_json='["a","x"]', column='value', left_value='01', right_value='1')])
 
-    def test_duplicate_rejected_even_when_missing(self):
+    def test_duplicate_warned_even_when_missing(self):
         left = self.write('a.csv', ['id', 'v'], [['a', 'x'], ['a', 'y']])
         right = self.write('b.csv', ['id', 'v'], [])
-        with self.assertRaisesRegex(ValueError, 'duplicate key'):
-            self.run_comparison(left, right)
-        self.assertFalse((self.root / 'report/summary.json').exists())
+        result=self.run_comparison(left, right)
+        self.assertEqual(result['left_only'],1)
+        self.assertEqual(result['left_duplicate_keys'],1)
+        self.assertEqual(result['left_duplicate_rows_skipped'],1)
+        self.assertTrue((self.root / 'report/duplicate_keys.csv').exists())
 
     def test_empty_files_with_headers(self):
         left = self.write('a.csv', ['id'], [])
@@ -128,3 +130,32 @@ class ComparisonTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class DuplicateBatchTests(unittest.TestCase):
+    setUp = ComparisonTests.setUp
+    write = ComparisonTests.write
+    def test_occurrences_across_runs(self):
+        left=self.write('left.csv',['id','v'],[['a','first'],['b','same'],['a','middle'],['c','same'],['a','last'],['b','same']])
+        right=self.write('right.csv',['id','v'],[['a','last'],['b','same'],['c','same'],['a','last']])
+        for policy in ('first','last'):
+            for workers in (1,2):
+                output=self.root/f'{policy}{workers}'
+                args=parser().parse_args([str(left),str(right),'--keys','id','--output',str(output),'--read-batch-size','1','--compare-batch-size','2','--fan-in','2','--sort-workers',str(workers),'--duplicate-policy',policy])
+                import contextlib, io
+                log=io.StringIO()
+                with contextlib.redirect_stdout(log): result=compare(args)
+                self.assertEqual(log.getvalue().count('Comparison batch complete'),2)
+                self.assertIn('left sort batch complete | batch=6 | batch_rows=1',log.getvalue())
+                self.assertEqual(result['changed_cells'],int(policy=='first'))
+                self.assertEqual(result['matched_keys'],3)
+                self.assertEqual(result['left_compared_rows'],3)
+                self.assertEqual(result['left_duplicate_keys'],2)
+                self.assertEqual(result['left_duplicate_rows_skipped'],3)
+                self.assertEqual(result['right_duplicate_rows_skipped'],1)
+                with (output/'duplicate_keys.csv').open() as stream:
+                    self.assertEqual(len(list(csv.DictReader(stream))),3)
+    def test_invalid_settings(self):
+        from compare import execution_settings
+        for field in ('read_batch_size','compare_batch_size'):
+            for value in (0,-1,1.5,True,1000001,'100'):
+                with self.assertRaises(ValueError):execution_settings({field:value})

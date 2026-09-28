@@ -74,7 +74,7 @@ function panel(name) {
     $('upload').textContent='Upload & continue →';$('upload').disabled=uploading||!files.left||!files.right;
   }
 }
-function configuration(){return {keys:[...selected],memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules};}
+function configuration(){return {read_batch_size:Number($('readBatchSize').value),compare_batch_size:Number($('compareBatchSize').value),duplicate_policy:$('duplicatePolicy').value,keys:[...selected],memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules};}
 async function saveDraft(){if(job?.state==='ready')await api(endpoint('/config'),configuration());}
 async function goView(name){
   if(uploading&&name!=='uploadPanel'&&!['jsonPanel','containersPanel','historyPanel','docsPanel'].includes(name))return;
@@ -233,6 +233,9 @@ function renderSummary() {
   $('resultTitle').textContent=s.changed_rows||s.left_only||s.right_only?'Your comparison is ready.':'Both files match within the selected scope.';
   $('resultSubtitle').textContent=`${number(s.left_rows)} left rows · ${number(s.right_rows)} right rows · Keys: ${s.keys.join(', ')}`;
   $('scopeSummary').textContent=`${number(s.ignored_columns?.length||0)} columns ignored · ${number(s.left_excluded_rows||0)} left rows and ${number(s.right_excluded_rows||0)} right rows excluded by key. ${number(s.value_overrides?.length||0)} value overrides; ${number(s.override_equivalent_cells||0)} unequal cells accepted by rules. Counts refer to the selected scope.`;
+  const duplicates=(s.left_duplicate_rows_skipped||0)+(s.right_duplicate_rows_skipped||0);
+  $('duplicateDownload').hidden=!duplicates;$('duplicateDownload').href=downloadUrl('duplicate_keys.csv');
+  if(duplicates){$('resultTitle').textContent='Comparison complete — duplicate keys found';$('scopeSummary').textContent+=` Warning: ${number(s.left_duplicate_rows_skipped||0)} file 1 rows and ${number(s.right_duplicate_rows_skipped||0)} file 2 rows skipped as duplicates. Kept the ${s.duplicate_policy||'first'} source occurrence per key. Download the duplicate audit for details.`;}
   $('duration').textContent=`${s.elapsed_seconds.toFixed(s.elapsed_seconds<1?3:1)} seconds`;
   $('metrics').replaceChildren();
   for(const [label,value,style] of [['Equal rows',s.equal_rows,'accent'],['Changed rows',s.changed_rows,'amber'],['Changed cells',s.changed_cells,'amber'],['Left-only keys',s.left_only,''],['Right-only keys',s.right_only,'']]) {
@@ -341,6 +344,9 @@ function hydrate(){
   $('ignoreKeys').value=typeof draft.ignore_keys==='string'?draft.ignore_keys:'';
   $('memory').value=[64,128,256,512,1024,2048,4096,8192].includes(draft.memory_mb)?String(draft.memory_mb):'4096';
   if(Number($('memory').value)>maxSortMb)$('memory').value=String(maxSortMb);
+  $('readBatchSize').value=draft.read_batch_size||100000;
+  $('compareBatchSize').value=draft.compare_batch_size||10000;
+  $('duplicatePolicy').value=draft.duplicate_policy||'first';
   $('sortWorkers').value=[1,2].includes(draft.sort_workers)?String(draft.sort_workers):job.state==='ready'?'2':'1';
   keyPage=ignorePage=sourceColumnOffset=0;hydratedId=job.id;
 }

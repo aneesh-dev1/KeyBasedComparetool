@@ -248,7 +248,7 @@ def sort_csv(path, names, canonical, keys, temp, prefix, args):
             # Includes byte objects, tuple, list pointer and sorting headroom.
             size += len(item[0]) + len(item[1]) + 192
             chunk.append(item)
-            if size >= budget:
+            if size >= budget or len(chunk) >= getattr(args, 'read_batch_size', 100000):
                 flush()
     if chunk or not paths:
         flush()
@@ -340,27 +340,52 @@ def sort_inputs(args, left_names, right_names, canonical, temp):
         events.join_thread()
 
 
-def unique(rows, label, diagnostics=None, args=None):
-    """Report the first duplicate group with its full count and bounded samples."""
+def execution_settings(config):
+    settings = {}
+    for name, default in [('read_batch_size', 100000), ('compare_batch_size', 10000)]:
+        value = config.get(name, default)
+        if type(value) is not int or not 1 <= value <= 1000000:
+            raise ValueError(f'{name} must be an integer between 1 and 1,000,000')
+        settings[name] = value
+    policy = config.get('duplicate_policy', 'first')
+    if policy not in ('first', 'last'):
+        raise ValueError('Duplicate handling must be first or last')
+    return dict(settings, duplicate_policy=policy)
+
+
+def unique(rows, label, diagnostics=None, args=None, stats=None, audit=None):
+    """Keep one source occurrence per key; stream all duplicate groups to the audit."""
     import itertools
-    for key,group in itertools.groupby(rows,key=lambda row:row[0]):
-        first=next(group);count=1;samples=[]
+    capture_sample = bool(diagnostics and not Path(diagnostics).exists())
+    policy = getattr(args, 'duplicate_policy', 'first')
+    for key, group in itertools.groupby(rows, key=lambda row: row[0]):
+        first = selected = next(group)
+        count = 1
+        samples = []
         for item in group:
-            count+=1
-            if count%10000==0: check_cancel(getattr(args,'cancel_file',None))
-            if count==2:samples.append(unpack_values(first[1]))
-            if len(samples)<3:samples.append(unpack_values(item[1]))
-        if count>1:
-            if diagnostics:
-                atomic_write_text(diagnostics,json.dumps(dict(side=label,key=json.loads(key),count=count,
-                    sample_columns=getattr(args,'diagnostic_columns',[])[:20],samples=[[v[:500] for v in row[:20]] for row in samples],
-                    note='First duplicate key group encountered. Samples show up to 20 compared columns and 500 characters per value. Correct duplicates and rerun.')))
-            raise ValueError(f'{label}: duplicate key {key.decode("utf-8")}; {count} rows share this key; keys must be unique')
-        yield first
+            count += 1
+            if count % 10000 == 0: check_cancel(getattr(args, 'cancel_file', None))
+            if capture_sample:
+                if count == 2: samples.append(unpack_values(first[1]))
+                if len(samples) < 3: samples.append(unpack_values(item[1]))
+            if policy == 'last': selected = item
+        if count > 1:
+            if stats is not None:
+                stats[label + '_duplicate_keys'] += 1
+                stats[label + '_duplicate_rows_skipped'] += count - 1
+            if audit: audit.writerow([label, key.decode('utf-8'), count, count - 1, policy])
+            if capture_sample and not Path(diagnostics).exists():
+                atomic_write_text(diagnostics, json.dumps(dict(side=label, key=json.loads(key), count=count,
+                    sample_columns=getattr(args, 'diagnostic_columns', [])[:20], samples=[[v[:500] for v in row[:20]] for row in samples],
+                    note=f'Comparison continues using the {policy} source occurrence per key. Extra rows are skipped. This is the first duplicate group; download the duplicate audit for all keys.')))
+            capture_sample = False
+        yield selected
 
 
 def compare(args):
     started = time.monotonic()
+    settings = execution_settings(vars(args))
+    for name, value in settings.items(): setattr(args, name, value)
     progress(args, 'Validating configuration')
     # CSV cells can exceed Python's small default field limit.
     csv.field_size_limit(args.max_field_mb * 1024 * 1024)
@@ -397,6 +422,7 @@ def compare(args):
     (out / 'INCOMPLETE').write_text('Reports are incomplete until summary.json is present.\n')
     stats = dict(left_rows=0, right_rows=0, matched_keys=0, equal_rows=0,
                  changed_rows=0, changed_cells=0, left_only=0, right_only=0, override_equivalent_cells=0, rule_equivalent_cells=0)
+    stats.update({side + suffix: 0 for side in ('left', 'right') for suffix in ('_duplicate_keys', '_duplicate_rows_skipped')})
     columns = {name: 0 for name in canonical if name not in args.keys}
     with tempfile.TemporaryDirectory(prefix='csv-compare-', dir=args.temp_dir) as work:
         temp = Path(work)
@@ -407,17 +433,18 @@ def compare(args):
         with contextlib.ExitStack() as stack:
             writers = {}
             for name, fields in [('differences', ['key_json', 'column', 'left_value', 'right_value']),
-                                 ('left_only', args.keys), ('right_only', args.keys)]:
+                                 ('left_only', args.keys), ('right_only', args.keys),
+                                 ('duplicate_keys', ['side', 'key_json', 'occurrences', 'skipped_rows', 'kept_occurrence'])]:
                 stream = stack.enter_context(open(out / f'{name}.csv', 'w', encoding='utf-8', newline=''))
                 writers[name] = csv.writer(stream)
                 writers[name].writerow(fields)
             left_merge = stack.enter_context(contextlib.closing(merge(left_paths)))
             right_merge = stack.enter_context(contextlib.closing(merge(right_paths)))
-            left = unique(left_merge, 'left',getattr(args,'diagnostics_file',None),args)
-            right = unique(right_merge, 'right',getattr(args,'diagnostics_file',None),args)
+            left = unique(left_merge, 'left',getattr(args,'diagnostics_file',None),args,stats,writers['duplicate_keys'])
+            right = unique(right_merge, 'right',getattr(args,'diagnostics_file',None),args,stats,writers['duplicate_keys'])
             a, b = next(left, None), next(right, None)
             processed = 0
-            batch_size = 10000
+            batch_size = args.compare_batch_size
             batch_start = time.monotonic()
             while a is not None or b is not None:
                 if processed % batch_size == 0:
@@ -455,14 +482,17 @@ def compare(args):
                 if processed % batch_size == 0 or (a is None and b is None):
                     progress(args, 'Comparison batch complete', stage='compare', batch=(processed-1)//batch_size+1, batch_keys=(processed-1)%batch_size+1, rows=processed, changed_cells=stats['changed_cells'], status='completed', elapsed_seconds=round(time.monotonic()-batch_start, 3))
             progress(args, 'Comparing keys', stage='compare', rows=processed, completed_batches=(processed+batch_size-1)//batch_size, status='completed')
+    if stats['left_duplicate_keys'] or stats['right_duplicate_keys']:
+        progress(args, 'WARNING: duplicate keys found; extra rows skipped', policy=args.duplicate_policy, left_skipped=stats['left_duplicate_rows_skipped'], right_skipped=stats['right_duplicate_rows_skipped'])
     progress(args, 'Writing reports')
+    stats.update(settings)
     stats.update(comparison_rules=rules, unmatched_columns=unmatched_columns, keys=args.keys, comparison='exact text with configured rules and/or overrides' if rules or overrides else 'exact text', changed_cells_by_column=columns,
                  value_overrides=overrides, ignore_key_containers=exclusion_audit,
                  column_headers=aligned, header_layout_changes=layout_changes,
                  header_changes=[dict(side=side, **change) for side, changes in (("left", left_header_changes), ("right", right_header_changes)) for change in changes],
                  ignored_columns=ignored_columns, ignored_keys_count=len(args.excluded_keys),
-                 left_compared_rows=stats['left_rows']-stats['left_excluded_rows'],
-                 right_compared_rows=stats['right_rows']-stats['right_excluded_rows'],
+                 left_compared_rows=stats['left_rows']-stats['left_excluded_rows']-stats['left_duplicate_rows_skipped'],
+                 right_compared_rows=stats['right_rows']-stats['right_excluded_rows']-stats['right_duplicate_rows_skipped'],
                  elapsed_seconds=round(time.monotonic() - started, 3))
     atomic_write_text(out / 'summary.json', json.dumps(stats, indent=2))
     (out / 'INCOMPLETE').unlink()
@@ -477,6 +507,9 @@ def parser():
     p.add_argument('--output', required=True, help='New report directory; must not exist')
     p.add_argument('--memory-mb', type=int, default=256, help='Sort chunk budget, not total process RSS')
     p.add_argument('--sort-workers', type=int, choices=(1,2), default=1, help='Parallel file-sorting processes; memory-mb is split between them')
+    p.add_argument('--read-batch-size', type=int, default=100000)
+    p.add_argument('--compare-batch-size', type=int, default=10000)
+    p.add_argument('--duplicate-policy', choices=('first', 'last'), default='first')
     p.add_argument('--temp-dir', help='Scratch directory, preferably on a fast local SSD')
     p.add_argument('--fan-in', type=int, default=16, help='Maximum sorted streams per merge')
     p.add_argument('--delimiter', default=',')

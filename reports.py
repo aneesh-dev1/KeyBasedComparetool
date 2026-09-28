@@ -12,7 +12,7 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 4
+REPORT_VERSION = 5
 
 TABLES = ('differences', 'left_only', 'right_only')
 TITLES = {'differences': 'Changed cells', 'left_only': 'Keys only in left file', 'right_only': 'Keys only in right file'}
@@ -104,6 +104,8 @@ def make_summary_html(summary, links=None, previews=None):
     for title, value in [('Rows matched', f'{matched:,}'), ('Overall cell match rate', percent(overall)), ('Columns with differences', f'{len(changed):,} of {len(stats):,}'), ('Total cell differences', f'{summary["changed_cells"]:,}')]:
         out += '<div class="card"><small>'+title+'</small><strong>'+value+'</strong></div>'
     out += '</section><p class="row-counts">Rows in both files: '+f'{matched:,} · Only in File 1: {summary.get("left_only",0):,} · Only in File 2: {summary.get("right_only",0):,}'+'</p><p class="muted">Rates use matched keys and compared non-key columns, after exclusions and value overrides. Keys found in only one file are reported separately. N/A means no comparable cells. Percentages are rounded to four decimal places.</p>'
+    if summary.get('left_duplicate_keys') or summary.get('right_duplicate_keys'):
+        out += '<section class="report-section" style="background:#fff8d9;border-left:6px solid #e2ae00"><h2>Warning: duplicate keys</h2><p>' + html.escape(f"Kept the {summary.get('duplicate_policy','first')} source occurrence per key. File 1 skipped rows: {summary.get('left_duplicate_rows_skipped',0):,}; File 2 skipped rows: {summary.get('right_duplicate_rows_skipped',0):,}. Match rates exclude skipped duplicates. The full HTML ZIP includes duplicate_keys.csv.") + '</p></section>'
     if summary.get('ignore_key_containers'):
         out += '<section class="report-section" style="background:#fff8d9;border-left:6px solid #e2ae00"><h2>Ignored key containers — excluded from comparison</h2><p>'+f"File 1 excluded rows: {summary.get('left_excluded_rows',0):,} · File 2 excluded rows: {summary.get('right_excluded_rows',0):,}"+'</p>'
         for item in summary['ignore_key_containers']:
@@ -265,7 +267,8 @@ def export_excel(report, destination, notify=lambda message: None):
     columns = [name for name,count,_,_ in stats if count]
     if any(summary['changed_cells_by_column'][name] > 1048574 for name in columns):
         raise ValueError('One column has more than 1,048,574 mismatches and cannot fit in one Excel sheet. Download HTML or CSV instead.')
-    reserved = ['File Summary', 'TOC'] + (['Ignored key containers'] if summary.get('ignore_key_containers') else []) + (['Analysis notes'] if summary.get('analysis_notes') else [])
+    has_duplicates = bool(summary.get('left_duplicate_keys') or summary.get('right_duplicate_keys'))
+    reserved = ['File Summary', 'TOC'] + (['Duplicate keys'] if has_duplicates else []) + (['Ignored key containers'] if summary.get('ignore_key_containers') else []) + (['Analysis notes'] if summary.get('analysis_notes') else [])
     names = sheet_names(reserved + columns)
     mapped = dict(zip(columns, names[len(reserved):]))
     column_notes={n['column']:n['status']+': '+n['comment'] for n in summary.get('analysis_notes',[]) if n['key'] is None}
@@ -289,6 +292,8 @@ def export_excel(report, destination, notify=lambda message: None):
             yield ['Excluded rows — File 2',summary.get('right_excluded_rows',0)]
             for item in summary['ignore_key_containers']:
                 yield [item['name'],item['reason']]
+        if has_duplicates:
+            yield ['WARNING: duplicate keys',Link('Review skipped rows; kept '+summary.get('duplicate_policy','first')+' source occurrence','Duplicate keys')]
         yield ['Contents',Link('Open TOC','TOC')]
         for row in itertools.islice(summary_rows(summary),1,None):
             value=row[1]
@@ -298,11 +303,16 @@ def export_excel(report, destination, notify=lambda message: None):
             else:
                 yield row
     sheets = [('File Summary',summary_sheet()), ('TOC',toc())]
+    if has_duplicates:
+        def duplicate_rows():
+            with (report / 'duplicate_keys.csv').open(encoding='utf-8', newline='') as stream:
+                yield from csv.reader(stream)
+        sheets.append(('Duplicate keys', duplicate_rows()))
     if summary.get('ignore_key_containers'):
         sheets.append(('Ignored key containers',exclusion_rows(summary)))
     if summary.get('analysis_notes'):
         sheets.append(('Analysis notes',note_rows(summary)))
-    options = {name: {'header_rows':1} for name in ['File Summary','TOC','Analysis notes']+list(mapped.values())}
+    options = {name: {'header_rows':1} for name in ['File Summary','TOC','Analysis notes','Duplicate keys']+list(mapped.values())}
     if summary.get('ignore_key_containers'):
         options['Ignored key containers']={'header_rows':2,'audit':True}
     for name in mapped.values():
@@ -371,6 +381,13 @@ def export_html(report, destination, notify=lambda message: None, page_size=1000
                             write('</table>'+nav+'</body></html>')
         index = make_summary_html(summary,links,previews).replace('</main>', '<section class="report-section"><h2>All result records</h2><p>Every result is included. Per-column previews show up to five rows, with values limited to 500 characters and a 1 MiB overall preview budget. Column pages below contain full values.</p>')
         index = index.replace('</div></body></html>', '')
+        if (report / 'duplicate_keys.csv').exists():
+            notify('Writing duplicate key audit')
+            with (report / 'duplicate_keys.csv').open('rb') as source, bundle.open('duplicate_keys.csv','w',force_zip64=True) as target:
+                while block := source.read(1024*1024):
+                    notify('Writing duplicate key audit')
+                    target.write(block)
+            index += '<p><a href="duplicate_keys.csv">Download complete duplicate-key audit CSV</a></p>'
         for table in TABLES:
             pages = (counts[table] + page_size - 1) // page_size
             index += f'<p>{TITLES[table]}: {counts[table]:,} records'

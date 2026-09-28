@@ -124,7 +124,7 @@ must not exist. Inputs are never modified. Progress appears every 100,000 rows.
 
 ## Comparison rules
 
-- Keys must be unique in each input. Composite keys are encoded unambiguously.
+- Duplicate keys generate warnings. The first source row is retained by default; select last occurrence to change this. Extra rows are skipped and audited in duplicate_keys.csv and exports. Composite keys are encoded unambiguously.
 - Values are compared as parsed CSV text: `01` differs from `1`; spaces and
   case matter. CSV quoting style and record line endings do not matter.
 - Empty fields are empty strings; `NULL` is literal text. No type inference.
@@ -591,9 +591,9 @@ HTML summary callouts and the Excel audit sheet, with a link from File Summary.
   Excel includes an Analysis notes sheet and column notes in TOC; HTML includes
   the full notes table. Changing notes invalidates older exports. Editing notes
   is blocked while an export runs. Notes are limited to 2 MiB per job.
-- **Duplicate keys:** comparison stops with the first duplicate group's exact
+- **Duplicate keys:** comparison continues and reports the first duplicate group's exact
   count, key, and up to three sampled records (20 compared columns, 500 characters
-  per value). This is a first-error diagnostic, not an exhaustive duplicate scan.
+  per value). The bounded diagnostic is supplemented by a full duplicate-key CSV audit.
 - **Column rules:** optional whitespace trimming, case folding, absolute decimal
   tolerance, or explicit per-file date formats. Key values remain exact text.
   Invalid numeric/date values stay mismatches; exact equal text still matches.
@@ -609,3 +609,7 @@ HTML summary callouts and the Excel audit sheet, with a link from File Summary.
 Profiles are limited to 100 entries / 5 MiB per workspace. Notifications and UI
 logic have automated checks, but browser permissions and performance on your
 Windows/on-prem deployment still need a representative pilot.
+
+### Batch settings and duplicate handling
+
+Keys & scope offers read/sort batch rows (default 100,000), comparison batch keys (default 10,000), and first/last source occurrence for duplicates. CLI equivalents: `--read-batch-size`, `--compare-batch-size`, `--duplicate-policy`. Batch sizes accept integers from 1 to 1,000,000. Sorting flushes at the row cap or memory budget, whichever comes first. Comparison remains streaming; its batch setting controls progress reporting. Duplicate counts and skipped rows are shown in Results and exports. Match percentages use only retained rows.
