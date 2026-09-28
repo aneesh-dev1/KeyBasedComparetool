@@ -58,10 +58,10 @@ class ScopeTests(unittest.TestCase):
         with zipfile.ZipFile(self.root/'result.xlsx') as book:
             self.assertIn('name="keep"',book.read('xl/workbook.xml').decode())
             self.assertNotIn('name="skip"',book.read('xl/workbook.xml').decode())
-        export_html(self.root/'result',self.root/'report.zip')
-        with zipfile.ZipFile(self.root/'report.zip') as book:
-            self.assertIn('Ignored columns',book.read('index.html').decode())
-            self.assertNotIn('<td>skip</td>',book.read('differences_00001.html').decode())
+        export_html(self.root/'result',self.root/'report.html')
+        text=(self.root/'report.html').read_text()
+        self.assertIn('Ignored columns: skip',text)
+        self.assertNotIn('<td>skip</td>',text)
 
 
 class ScopeAPITests(ServerTests):

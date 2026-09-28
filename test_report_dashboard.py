@@ -33,15 +33,29 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(detail.find('s:autoFilter',NS).attrib['ref'],'A1:H2')
             for name in z.namelist():
                 if name.endswith('.xml'): ET.fromstring(z.read(name))
-    def test_dashboard_links_escape_and_all_column_pages(self):
-        target=self.root/'report.zip';export_html(self.root,target,page_size=1)
-        with zipfile.ZipFile(target) as z:
-            index=z.read('index.html').decode()
-            for value in ['columnSearch','Attributes with 100% match','66.6667%','50.0000%','before.csv','&lt;script&gt;']: self.assertIn(value,index)
-            self.assertNotIn('<script>x</script>',index)
-            self.assertEqual(index.count('</main>'),1)
-            self.assertEqual(index.count('</body>'),1)
-            for name in ['column_00001_00001.html','column_00002_00001.html','differences_00002.html','left_only_00001.html']: self.assertIn(name,z.namelist())
+    def test_single_report_all_columns_and_no_mismatch_scan(self):
+        from unittest.mock import patch
+        target=self.root/'report.html'
+        with patch('reports.partition_columns',side_effect=AssertionError('Should not scan mismatches')):
+            export_html(self.root,target)
+        text=target.read_text()
+        for value in ['columnSearch','Attributes with 100% match','66.6667%','50.0000%','before.csv','equal',"a&#x27;b",'Column match distribution','data:image/svg+xml;base64,']:
+            self.assertIn(value,text)
+        self.assertEqual(text.count('</main>'),1)
+        self.assertEqual(text.count('</body>'),1)
+        self.assertNotIn('.zip',text)
+        self.assertNotIn('src="http',text)
+        self.assertNotIn('column_00001',text)
+    def test_exact_bands_and_escape(self):
+        from reports import match_bands
+        self.summary.update(matched_keys=1000000,changed_cells_by_column={'perfect':0,'rounded':1,'99':10000,'below99':10001,'95':50000,'below95':50001})
+        self.assertEqual([b[1] for b in match_bands(self.summary)],[1,2,2,1])
+        self.summary['changed_cells_by_column']['<script>column</script>']=1
+        text=make_summary_html(self.summary)
+        self.assertIn('&lt;script&gt;column&lt;/script&gt;',text)
+        self.assertNotIn('<script>column</script>',text)
+        self.summary['matched_keys']=0
+        self.assertEqual(sum(b[1] for b in match_bands(self.summary)),0)
     def test_no_matched_rows_not_reported_as_full_match(self):
         self.summary.update(matched_keys=0,changed_cells=0,changed_cells_by_column={'value':0})
         text=make_summary_html(self.summary)

@@ -277,7 +277,7 @@ function renderExports() {
 }
 for(const kind of ['excel','html']) $(kind).addEventListener('click',async()=>{
   clearError();
-  if(job.exports[kind]?.state==='complete')return download(kind==='excel'?'mismatches.xlsx':'html.zip');
+  if(job.exports[kind]?.state==='complete')return download(kind==='excel'?'mismatches.xlsx':'comparison-report.html');
   $(kind).disabled=true;
   try{await api(endpoint(`/export/${kind}`),{});await refresh();}catch(error){showError(error);$(kind).disabled=false;}
 });

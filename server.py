@@ -285,7 +285,7 @@ class Application:
                 job['exports'][kind] = dict(state=state, updated=time.time(), **values)
                 self.save(job)
         directory = self.directory(identity)
-        target = directory / ('mismatches.xlsx' if kind == 'excel' else 'html.zip')
+        target = directory / ('mismatches.xlsx' if kind == 'excel' else 'comparison-report.html')
         temporary = target.with_suffix(target.suffix + '.part')
         last_update = [0.0]
         def notify(message):
@@ -451,7 +451,7 @@ class Handler(BaseHTTPRequestHandler):
                             if target.is_symlink():continue
                             try:size=target.stat().st_size
                             except FileNotFoundError:continue
-                            category='analysis' if name.startswith('analysis') else 'reports' if 'report' in target.relative_to(file.parent).parts or name in ('mismatches.xlsx','html.zip') else 'uploads' if name in ('left.csv','right.csv','left.xlsx','right.xlsx','left.source.csv','right.source.csv') else 'temporary'
+                            category='analysis' if name.startswith('analysis') else 'reports' if 'report' in target.relative_to(file.parent).parts or name in ('mismatches.xlsx','comparison-report.html') else 'uploads' if name in ('left.csv','right.csv','left.xlsx','right.xlsx','left.source.csv','right.source.csv') else 'temporary'
                             sizes[category]+=size
                     with self.app.lock:
                         tasks=[dict(kind=kind,state='running' if entry['future'].running() else 'queued',queued_at=entry['queued_at'],cancelling=(file.parent/('cancel-'+kind)).exists()) for (identity,kind),entry in self.app.tasks.items() if identity==item['id']]
@@ -820,7 +820,7 @@ class Handler(BaseHTTPRequestHandler):
                 name = action.split('/')[1]
                 if job['state'] != 'complete' and name != 'run.log':
                     raise ValueError('Results are not ready')
-                kind = {'mismatches.xlsx': 'excel', 'html.zip': 'html'}.get(name)
+                kind = {'mismatches.xlsx': 'excel', 'comparison-report.html': 'html'}.get(name)
                 if name == 'run.log' and (directory / name).exists():
                     target = directory / name
                 elif kind and job['exports'].get(kind, {}).get('state') == 'complete':

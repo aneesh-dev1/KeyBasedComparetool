@@ -58,8 +58,7 @@ class FeatureTests(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(self.client.request(path+'/download/mismatches.xlsx'))) as book:
             self.assertIn('Analysis notes',book.read('xl/workbook.xml').decode())
             self.assertIn('Expected: Known &lt;difference&gt;',book.read('xl/worksheets/sheet2.xml').decode())
-        with zipfile.ZipFile(io.BytesIO(self.client.request(path+'/download/html.zip'))) as book:
-            self.assertIn('Known &lt;difference&gt;',book.read('index.html').decode())
+        self.assertIn('Known &lt;difference&gt;',self.client.request(path+'/download/comparison-report.html').decode())
         self.client.request(path+'/annotations',dict(column='v',key=None,status='Resolved',comment='Reviewed'))
         self.assertEqual(self.client.request(path)['exports']['excel']['state'],'outdated')
         self.assertTrue(self.client.request('/api/activity')['activities'])
@@ -93,9 +92,7 @@ class FeatureTests(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(self.client.request(path+'/download/mismatches.xlsx'))) as book:
             self.assertIn('Duplicate keys',book.read('xl/workbook.xml').decode())
             self.assertIn('WARNING: duplicate keys',book.read('xl/worksheets/sheet1.xml').decode())
-        with zipfile.ZipFile(io.BytesIO(self.client.request(path+'/download/html.zip'))) as book:
-            self.assertEqual(book.read('duplicate_keys.csv'),audit)
-            self.assertIn('Warning: duplicate keys',book.read('index.html').decode())
+        self.assertIn('Warning: duplicate keys',self.client.request(path+'/download/comparison-report.html').decode())
     def test_cancel_queued_and_running_tasks(self):
         path=self.upload();job=self.client.request(path);started=threading.Event()
         def wait_for_cancel(identity):

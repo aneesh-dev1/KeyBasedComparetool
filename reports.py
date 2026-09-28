@@ -12,10 +12,8 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 5
+REPORT_VERSION = 6
 
-TABLES = ('differences', 'left_only', 'right_only')
-TITLES = {'differences': 'Changed cells', 'left_only': 'Keys only in left file', 'right_only': 'Keys only in right file'}
 STYLE = '''body{font:15px system-ui,sans-serif;color:#004364;background:#f7f9fa;margin:40px auto;max-width:1200px;padding:0 24px}h1{font-size:32px}a{color:#007b99}table{border-collapse:collapse;width:100%;background:white;margin:20px 0}th,td{padding:12px;border:1px solid #dce5eb;text-align:left;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}th{background:#e6f6fa}nav{display:flex;gap:24px}p{line-height:1.6}'''
 
 
@@ -46,14 +44,6 @@ def exclusion_rows(summary):
     for item in summary.get('ignore_key_containers', []):
         for key in item['keys']:
             yield [item['name'], item['reason']] + key
-
-
-def exclusion_html(summary):
-    if not summary.get('ignore_key_containers'):
-        return ''
-    rows = iter(exclusion_rows(summary))
-    title = next(rows)[0]
-    return '<h2>Ignored key containers</h2><p>' + html.escape(title) + '</p><table>' + html_row(next(rows), True) + ''.join(html_row(row) for row in rows) + '</table>'
 
 
 def report_summary(report):
@@ -87,56 +77,96 @@ def source_labels(summary):
             for side, fallback in [('left', 'File 1'), ('right', 'File 2')]]
 
 
-DASH_STYLE = """body{max-width:none;margin:0;padding:0;background:#f3f7f9}body>header,body>h1{display:none}.report-head{background:#004364;color:white;padding:20px 28px;display:flex;gap:24px;align-items:center}.report-head p{margin:0;overflow-wrap:anywhere}.report-grid{display:grid;grid-template-columns:220px minmax(0,1fr)}.report-side{background:#004364;padding:24px;min-height:100vh}.report-side a{display:block;color:white;padding:12px 0;text-decoration:none}.report-main{padding:28px;min-width:0}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}.card,.report-section{background:white;border:1px solid #dce5eb;border-radius:8px;padding:18px;margin-bottom:20px}.card{border-top:4px solid #00a6ca}.card strong{display:block;font-size:28px;margin-top:8px}.card small{display:block;color:#526c7b}.report-section h2{font-size:18px;margin:0 0 18px}.table-wrap{overflow:auto}th{background:#004364;color:white}td.before{background:#fff0ee;color:#9b3025}td.after{background:#eaf7ec;color:#256238}.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{background:#eaf7ec;color:#256238;padding:6px 10px;border-radius:4px}summary{cursor:pointer;padding:12px 0;font-weight:600}input[type=search]{padding:10px;max-width:100%;border:1px solid #9cbac5;border-radius:4px}.muted{color:#526c7b}.row-counts{margin:12px 0 24px}nav{flex-wrap:wrap} @media(max-width:900px){.report-grid{grid-template-columns:1fr}.report-side{min-height:0;display:flex;gap:18px;flex-wrap:wrap;padding:8px 20px}.report-main{padding:16px}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}"""
-
-
-def make_summary_html(summary, links=None, previews=None):
-    links, previews = links or {}, previews or {}
-    stats = column_stats(summary)
-    changed = [row for row in stats if row[1]]
-    equal = [row[0] for row in stats if not row[1]]
+def match_bands(summary):
+    """Classify by exact counts, so a rounded 100% never enters the perfect band."""
+    bands = [['100% match', 0, '#007b99'], ['99% to <100%', 0, '#69cbd8'],
+             ['95% to <99%', 0, '#f0c82e'], ['Below 95%', 0, '#ce6256']]
     matched = summary.get('matched_keys', 0)
-    overall = 100 * (1-summary['changed_cells']/(matched*len(stats))) if matched and stats else None
-    labels = source_labels(summary)
-    out = html_start('Comparison report') + '<style>' + DASH_STYLE + '</style>'
-    out += '<div class="report-head"><strong>Comparison Report</strong><p>' + html.escape(' vs '.join(labels)) + '</p></div><div class="report-grid"><aside class="report-side"><a href="#summary">Summary</a><a href="#statistics">Column Statistics</a><a href="#differences">Column Differences</a><a href="#matching">100% Match</a><a href="#scope">Scope &amp; exclusions</a></aside><main class="report-main">'
-    out += '<section id="summary" class="cards">'
-    for title, value in [('Rows matched', f'{matched:,}'), ('Overall cell match rate', percent(overall)), ('Columns with differences', f'{len(changed):,} of {len(stats):,}'), ('Total cell differences', f'{summary["changed_cells"]:,}')]:
-        out += '<div class="card"><small>'+title+'</small><strong>'+value+'</strong></div>'
-    out += '</section><p class="row-counts">Rows in both files: '+f'{matched:,} · Only in File 1: {summary.get("left_only",0):,} · Only in File 2: {summary.get("right_only",0):,}'+'</p><p class="muted">Rates use matched keys and compared non-key columns, after exclusions and value overrides. Keys found in only one file are reported separately. N/A means no comparable cells. Percentages are rounded to four decimal places.</p>'
+    if matched:
+        for count in summary['changed_cells_by_column'].values():
+            index = 0 if count == 0 else 1 if count * 100 <= matched else 2 if count * 100 <= matched * 5 else 3
+            bands[index][1] += 1
+    return bands
+
+
+LEADERSHIP_STYLE = '''
+body{max-width:1240px;margin:0 auto;background:#f4f7f9;padding:36px;color:#004364;font:14px system-ui,sans-serif}
+body>header{display:flex;align-items:center;justify-content:space-between;background:white;padding:22px!important;margin-bottom:24px!important;border-radius:12px}body>h1{display:none}
+.hero{background:#004364;color:white;border-radius:12px;padding:30px;border-bottom:5px solid #fcd800;margin-bottom:22px}.hero h1{font-size:34px;margin:8px 0}.hero p{color:#d6edf4}.eyebrow{text-transform:uppercase;letter-spacing:2px;font-size:11px;font-weight:700}
+.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:24px 0}.card,section{background:white;border:1px solid #dce5eb;border-radius:12px;padding:22px;margin-bottom:22px}.card{margin:0;border-top:4px solid #00a6ca}.card strong{display:block;font-size:30px;margin:10px 0}.card small,.muted{color:#59717d}
+h2{font-size:21px;margin:0 0 15px}h3{font-size:16px}.overview{display:grid;grid-template-columns:1fr 1fr;gap:24px}.chart-wrap{display:flex;align-items:center;gap:26px;flex-wrap:wrap}.pie{width:220px;max-width:100%;height:auto}.legend{list-style:none;padding:0;flex:1}.legend li{padding:10px 0;border-bottom:1px solid #e5edf0;display:flex;gap:10px;align-items:center}.swatch{width:12px;height:12px;border-radius:50%;flex-shrink:0}.legend strong{margin-left:auto}.source{overflow-wrap:anywhere;padding:10px 0}.source strong{display:block}.callout{background:#fff9df;border-left:5px solid #e5bd25}.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{background:#e9f6f7;border:1px solid #c7e8eb;padding:7px 10px;border-radius:6px;color:#006779}.table-wrap{overflow:auto}table{margin:12px 0;font-size:13px}th{background:#004364;color:white;white-space:normal}td{border-width:0 0 1px;padding:11px}tr:nth-child(even){background:#f6fafb}.count{font-variant-numeric:tabular-nums}.container{border:1px solid #e5d79c;background:#fffdf3;border-radius:9px;padding:18px;margin:12px 0}.container summary{cursor:pointer;font-weight:650}input{font:inherit;border:1px solid #afc8d2;border-radius:6px;padding:10px;width:300px;max-width:100%}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}.print{background:#007b99;color:white;border:0;border-radius:6px;padding:10px 18px;cursor:pointer}footer{padding:12px 0 30px;font-size:12px;color:#59717d}.rate-note{font-size:12px}.badge{font-size:12px;border-radius:5px;padding:5px 9px;background:#e9f6f7;display:inline-block}
+@media(max-width:850px){body{padding:16px}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.overview{grid-template-columns:1fr}.hero h1{font-size:28px}}
+@media print{body{background:white;padding:0;font-size:11px}.print,input,.search-label{display:none!important}.hero,th,.swatch,.chip{-webkit-print-color-adjust:exact;print-color-adjust:exact}section{break-inside:auto}.card,.container,.hero{break-inside:avoid}.cards{gap:8px}.card{padding:12px}.card strong{font-size:23px}.table-wrap{overflow:visible}tr{break-inside:avoid}thead{display:table-header-group}[hidden]{display:table-row!important}details>*{display:block!important}a{color:inherit;text-decoration:none}}
+'''
+
+
+def make_summary_html(summary):
+    import math
+    from datetime import datetime, timezone
+    esc = lambda value: html.escape(str(value))
+    stats = column_stats(summary)
+    matched = summary.get('matched_keys', 0)
+    changed = [row for row in stats if row[1]]
+    equal = [row for row in stats if not row[1]] if matched else []
+    total = len(stats)
+    overall = 100 * (1-summary['changed_cells']/(matched*total)) if matched and total else None
+    generated = datetime.now(timezone.utc).strftime('%d %b %Y · %H:%M UTC')
+    out = html_start('TransUnion | Data comparison report') + '<style>'+LEADERSHIP_STYLE+'</style>'
+    out += '<main><div class="hero"><div class="eyebrow">TransUnion · Data quality &amp; comparison</div><h1>Data comparison report</h1><p>Leadership summary · '+generated+'</p><span class="badge">'+('Differences identified' if changed or summary.get('left_only') or summary.get('right_only') else 'No differences within selected scope' if matched and total else 'Insufficient comparable data')+'</span></div>'
+    out += '<div class="toolbar"><p>Complete column coverage. Match rates reflect the configured comparison scope.</p><button class="print" onclick="window.print()">Print / save as PDF</button></div><div class="cards">'
+    for title, value, note in [('Overall cell match',percent(overall),'Across matched keys and compared columns'),('Fully matching columns',f'{len(equal):,} / {total:,}','Exactly zero mismatched cells'),('Columns with differences',f'{len(changed):,}','All listed below'),('Mismatched cells',f'{summary["changed_cells"]:,}','After configured exclusions and rules')]:
+        out += '<div class="card"><small>'+title+'</small><strong>'+value+'</strong><small>'+note+'</small></div>'
+    out += '</div><div class="overview"><section><h2>Column match distribution</h2><p class="muted">Number of columns in each match-rate band.</p><div class="chart-wrap">'
+    bands = match_bands(summary)
+    if matched and total:
+        out += '<svg class="pie" viewBox="0 0 240 240" role="img" aria-label="Column match-rate distribution"><title>'+esc('; '.join(f'{name}: {count} columns' for name,count,_ in bands))+'</title>'
+        start = -math.pi/2
+        for name,count,color in bands:
+            if not count: continue
+            if count == total:
+                out += f'<circle cx="120" cy="120" r="110" fill="{color}" />'
+            else:
+                end = start + 2*math.pi*count/total
+                x1,y1=120+110*math.cos(start),120+110*math.sin(start)
+                x2,y2=120+110*math.cos(end),120+110*math.sin(end)
+                out += f'<path d="M120 120 L{x1:.4f} {y1:.4f} A110 110 0 {int(count>total/2)} 1 {x2:.4f} {y2:.4f} Z" fill="{color}" stroke="white" stroke-width="2"><title>{esc(name)}: {count}</title></path>'
+                start=end
+        out += '</svg><ul class="legend">'
+        for name,count,color in bands:
+            out += f'<li><span class="swatch" style="background:{color}"></span>{esc(name)}<strong>{count:,}</strong></li>'
+        out += '</ul>'
+    else:
+        out += '<p>No matched rows; match rates cannot be calculated.</p>' if not matched else '<p>No non-key columns in comparison scope.</p>'
+    out += '</div><p class="rate-note">100% means zero mismatches. Other bands use exact counts before display rounding; bands do not overlap.</p></section><section><h2>Comparison coverage</h2>'
+    for label,source in zip(('File 1','File 2'),source_labels(summary)):
+        out += '<div class="source"><strong>'+label+'</strong>'+esc(source)+'</div>'
+    for title,value in [('Matched keys',matched),('Keys only in File 1',summary.get('left_only',0)),('Keys only in File 2',summary.get('right_only',0)),('Source rows · File 1',summary.get('left_rows','N/A')),('Source rows · File 2',summary.get('right_rows','N/A'))]:
+        out += '<p>'+title+': <strong>'+esc(f'{value:,}' if isinstance(value,int) else value)+'</strong></p>'
+    out += '<p>Key columns: <strong>'+esc(', '.join(summary['keys']))+'</strong></p></section></div>'
     if summary.get('left_duplicate_keys') or summary.get('right_duplicate_keys'):
-        out += '<section class="report-section" style="background:#fff8d9;border-left:6px solid #e2ae00"><h2>Warning: duplicate keys</h2><p>' + html.escape(f"Kept the {summary.get('duplicate_policy','first')} source occurrence per key. File 1 skipped rows: {summary.get('left_duplicate_rows_skipped',0):,}; File 2 skipped rows: {summary.get('right_duplicate_rows_skipped',0):,}. Match rates exclude skipped duplicates. The full HTML ZIP includes duplicate_keys.csv.") + '</p></section>'
-    if summary.get('ignore_key_containers'):
-        out += '<section class="report-section" style="background:#fff8d9;border-left:6px solid #e2ae00"><h2>Ignored key containers — excluded from comparison</h2><p>'+f"File 1 excluded rows: {summary.get('left_excluded_rows',0):,} · File 2 excluded rows: {summary.get('right_excluded_rows',0):,}"+'</p>'
-        for item in summary['ignore_key_containers']:
-            out += '<p><strong>'+html.escape(item['name'])+'</strong> — '+html.escape(item['reason'])+f" · {len(item['keys']):,} configured keys"+'</p>'
-        out += '<a href="#scope">View all configured ignored keys</a></section>'
-    out += '<section id="statistics" class="report-section"><h2>Column Statistics</h2><input type="search" id="columnSearch" placeholder="Search columns…" aria-label="Search column statistics"><div class="table-wrap"><table id="columnStats">'+html_row(['Column','Differences','Mismatch %','Match %','View'],True)
-    for i,(name,count,mismatch,match) in enumerate(stats):
-        link = '<a href="#column-'+str(i)+'">View</a>' if count else 'No differences' if matched else 'No matched rows'
-        out += '<tr>'+''.join('<td>'+html.escape(str(v))+'</td>' for v in [name,count,percent(mismatch),percent(match)])+'<td>'+link+'</td></tr>'
-    out += '</table></div></section><section id="differences" class="report-section"><h2>Column Differences</h2>'
-    for i,(name,count,_,_) in enumerate(stats):
-        if not count: continue
-        out += '<details id="column-'+str(i)+'"><summary>'+html.escape(name)+f' · {count:,} differences</summary>'
-        if name in previews:
-            out += '<div class="table-wrap"><table>'+html_row(summary['keys']+labels,True)
-            for row in previews[name]:
-                out += '<tr>'+''.join('<td>'+html.escape(str(v))+'</td>' for v in row[:-2])+'<td class="before">'+html.escape(row[-2])+'</td><td class="after">'+html.escape(row[-1])+'</td></tr>'
-            out += '</table></div>'
-        if name in links:
-            out += '<a href="'+html.escape(links[name],quote=True)+'">View all differences for this column</a>'
-        else:
-            out += '<p>Generate the full HTML export to browse this column’s mismatches.</p>'
-        out += '</details>'
-    out += '</section><section id="matching" class="report-section"><h2>Attributes with 100% match</h2><div class="chips">'
-    out += ''.join('<span class="chip">'+html.escape(name)+'</span>' for name in equal) if matched else '<p>No matched rows; match rates cannot be calculated.</p>'
-    out += '</div></section><section id="scope" class="report-section"><h2>Scope &amp; exclusions</h2><details><summary>Comparison settings and metrics</summary><div class="table-wrap"><table>'
-    out += ''.join(html_row(row, i==0) for i,row in enumerate(summary_rows(summary)))+'</table></div></details>'+exclusion_html(summary)+'</section>'
+        out += '<section class="callout"><h2>Warning: duplicate keys</h2><p>'+esc(f"Kept the {summary.get('duplicate_policy','first')} source occurrence per key. File 1: {summary.get('left_duplicate_keys',0):,} duplicate keys / {summary.get('left_duplicate_rows_skipped',0):,} skipped rows. File 2: {summary.get('right_duplicate_keys',0):,} duplicate keys / {summary.get('right_duplicate_rows_skipped',0):,} skipped rows.")+'</p><p>Skipped duplicates are outside the match-rate denominator. The detailed duplicate audit remains available in the app and Excel workbook.</p></section>'
+    notes={n['column']:n['status']+': '+n['comment'] for n in summary.get('analysis_notes',[]) if n['key'] is None}
+    out += '<section id="statistics"><div class="toolbar"><h2>All mismatching columns ('+str(len(changed))+')</h2><label class="search-label">Find a column <input id="columnSearch" type="search" placeholder="Column name"></label></div><p class="muted">Largest difference counts first. Percentages use '+f'{matched:,}'+' matched keys.</p><div class="table-wrap"><table id="columnStats"><thead>'+html_row(['Column','Mismatched cells','Matching cells','Mismatch %','Match %','Review notes'],True)+'</thead><tbody>'
+    for name,count,mismatch,match in changed:
+        out += html_row([name,f'{count:,}',f'{max(0,matched-count):,}',percent(mismatch),percent(match),notes.get(name,'')])
+    out += '</tbody></table></div>'
+    if not changed: out += '<p>No mismatching columns in the selected scope.</p>'
+    out += '</section><section id="matching"><h2>Attributes with 100% match ('+str(len(equal))+')</h2><p>Each listed column has '+f'{matched:,}'+' matched cells and zero mismatches.</p><div class="chips">'+''.join('<span class="chip">'+esc(row[0])+'</span>' for row in equal)+'</div></section>'
+    out += '<section id="scope" class="callout"><h2>Ignored key containers — excluded from comparison</h2><p>File 1 excluded rows: <strong>'+f"{summary.get('left_excluded_rows',0):,}"+'</strong> · File 2 excluded rows: <strong>'+f"{summary.get('right_excluded_rows',0):,}"+'</strong></p><p>Configured keys can overlap across containers or be absent from source files. Container counts are not additive; excluded-row counts reflect actual input rows.</p>'
+    for item in summary.get('ignore_key_containers',[]):
+        out += '<div class="container"><h3>'+esc(item['name'])+'</h3><p>'+esc(item['reason'])+'</p><details><summary>'+f'{len(item["keys"]):,}'+' configured keys · view details</summary><div class="table-wrap"><table><thead>'+html_row(summary['keys'],True)+'</thead><tbody>'+''.join(html_row(key) for key in item['keys'])+'</tbody></table></div></details></div>'
+    if not summary.get('ignore_key_containers'): out += '<p>No ignored key containers configured.</p>'
+    out += '</section><section><h2>Scope &amp; interpretation</h2><p>Match rate = matching cells ÷ compared cells for retained keys present in both files. One-sided keys, ignored rows, skipped duplicates, ignored columns and non-common headers are excluded. A perfect column match does not imply identical source files.</p><p>Ignored columns: '+esc(', '.join(summary.get('ignored_columns',[])) or 'None')+'</p>'
+    for side,label in [('left','File 1'),('right','File 2')]:
+        out += '<p>Non-common columns · '+label+': '+esc(', '.join(summary.get('unmatched_columns',{}).get(side,[])) or 'None')+'</p>'
+    out += '<p>Comparison: '+esc(summary.get('comparison','exact text'))+'. Accepted override cells: '+esc(summary.get('override_equivalent_cells',0))+'. Accepted rule cells: '+esc(summary.get('rule_equivalent_cells',0))+'.</p><p>This single-file report includes every compared column and every configured ignored key. Individual cell mismatches and one-sided key records remain available in the Excel/CSV downloads and Analysis view.</p></section>'
     if summary.get('analysis_notes'):
-        out += '<section class="report-section"><h2>Analysis classifications &amp; comments</h2><div class="table-wrap"><table>'+''.join(html_row(row,i==0) for i,row in enumerate(note_rows(summary)))+'</table></div></section>'
-    out += """<script>document.getElementById('columnSearch').addEventListener('input',function(){const q=this.value.toLowerCase();document.querySelectorAll('#columnStats tr').forEach((r,i)=>{if(i)r.hidden=!r.cells[0].textContent.toLowerCase().includes(q);});});document.querySelectorAll('a[href^="#column-"]').forEach(a=>a.addEventListener('click',()=>{document.querySelector(a.getAttribute('href')).open=true;}));</script>"""
-    return out+'</main></div></body></html>'
+        out += '<section><h2>Analysis classifications &amp; comments</h2><div class="table-wrap"><table>'+''.join(html_row(row,i==0) for i,row in enumerate(note_rows(summary)))+'</table></div></section>'
+    out += '''<footer>TransUnion · Data comparison report · Generated by the comparison tool</footer></main><script>
+const search=document.getElementById('columnSearch');search.addEventListener('input',()=>{document.querySelectorAll('#columnStats tbody tr').forEach(r=>r.hidden=!r.cells[0].textContent.toLowerCase().includes(search.value.toLowerCase()));});
+let opened=[];window.addEventListener('beforeprint',()=>{opened=[...document.querySelectorAll('details:not([open])')];opened.forEach(d=>d.open=true);});window.addEventListener('afterprint',()=>opened.forEach(d=>d.open=false));
+</script></body></html>'''
+    return out
 
 
 @dataclass
@@ -157,7 +187,7 @@ def column_letter(number):
 def xml_text(value):
     value = str(value)
     if len(value.encode('utf-16-le')) // 2 > 32767:
-        raise ValueError('A value exceeds Excel’s 32,767-character cell limit. Download the HTML or CSV results to preserve the full value.')
+        raise ValueError('A value exceeds Excel’s 32,767-character cell limit. Download the CSV results to preserve the full value.')
     # Preserve literal Excel escape sequences, then encode XML-forbidden controls.
     value = re.sub(r'_x[0-9A-Fa-f]{4}_', lambda m: '_x005F_' + m.group()[1:], value)
     value = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]', lambda m: f'_x{ord(m.group()):04X}_', value)
@@ -205,7 +235,7 @@ def write_xlsx(path, sheets, options=None, notify=lambda message:None):
                 for number, row in enumerate(rows, 1):
                     if number%10000==0: notify(f'Writing {name}: {number:,} rows')
                     if number > 1048576 or len(row) > 16384:
-                        raise ValueError('A column exceeds Excel worksheet capacity. Download HTML or CSV results instead.')
+                        raise ValueError('A column exceeds Excel worksheet capacity. Download CSV results instead.')
                     max_columns = max(max_columns, len(row))
                     cells = []
                     for col, value in enumerate(row, 1):
@@ -266,7 +296,7 @@ def export_excel(report, destination, notify=lambda message: None):
     stats = column_stats(summary)
     columns = [name for name,count,_,_ in stats if count]
     if any(summary['changed_cells_by_column'][name] > 1048574 for name in columns):
-        raise ValueError('One column has more than 1,048,574 mismatches and cannot fit in one Excel sheet. Download HTML or CSV instead.')
+        raise ValueError('One column has more than 1,048,574 mismatches and cannot fit in one Excel sheet. Download CSV instead.')
     has_duplicates = bool(summary.get('left_duplicate_keys') or summary.get('right_duplicate_keys'))
     reserved = ['File Summary', 'TOC'] + (['Duplicate keys'] if has_duplicates else []) + (['Ignored key containers'] if summary.get('ignore_key_containers') else []) + (['Analysis notes'] if summary.get('analysis_notes') else [])
     names = sheet_names(reserved + columns)
@@ -347,70 +377,14 @@ def numeric_difference(left, right):
         return ''
 
 
-def export_html(report, destination, notify=lambda message: None, page_size=1000):
+def export_html(report, destination, notify=lambda message: None):
+    """One self-contained leadership report; no scan of the cell mismatch dataset."""
+    notify('Preparing leadership summary and column match distribution…')
     summary = report_summary(report)
-    counts = {'differences': summary['changed_cells'], 'left_only': summary['left_only'], 'right_only': summary['right_only']}
-    with zipfile.ZipFile(destination, 'w', zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as bundle:
-        columns = [name for name,count,_,_ in column_stats(summary) if count]
-        links, previews = {}, {}
-        preview_bytes = 0
-        with partition_columns(report, columns, destination.parent, notify) as paths:
-            for number, column in enumerate(columns,1):
-                pages=(summary['changed_cells_by_column'][column]+page_size-1)//page_size
-                links[column]=f'column_{number:05d}_00001.html'
-                with paths[column].open(encoding='utf-8') as source:
-                    previews[column]=[]
-                    for page in range(1,pages+1):
-                        notify(f'Writing {column}, page {page} of {pages}')
-                        with bundle.open(f'column_{number:05d}_{page:05d}.html','w',force_zip64=True) as output:
-                            def write(text): output.write(text.encode('utf-8'))
-                            nav='<nav><a href="index.html#differences">Summary</a>'
-                            if page>1: nav+=f'<a href="column_{number:05d}_{page-1:05d}.html">Previous</a>'
-                            if page<pages: nav+=f'<a href="column_{number:05d}_{page+1:05d}.html">Next</a>'
-                            nav+=f'<span>Page {page} of {pages}</span></nav>'
-                            write(html_start(column)+'<style>td:nth-last-child(2){background:#fff0ee;color:#9b3025}td:last-child{background:#eaf7ec;color:#256238}</style>'+nav+'<table>'+html_row(summary['keys']+source_labels(summary),True))
-                            for line in itertools.islice(source,page_size):
-                                row=json.loads(line)
-                                if len(previews[column])<5 and preview_bytes<1024*1024:
-                                    preview=[v[:500] for v in row]
-                                    size=sum(len(v.encode('utf-8')) for v in preview)
-                                    if preview_bytes+size<=1024*1024:
-                                        previews[column].append(preview)
-                                        preview_bytes+=size
-                                write(html_row(row))
-                            write('</table>'+nav+'</body></html>')
-        index = make_summary_html(summary,links,previews).replace('</main>', '<section class="report-section"><h2>All result records</h2><p>Every result is included. Per-column previews show up to five rows, with values limited to 500 characters and a 1 MiB overall preview budget. Column pages below contain full values.</p>')
-        index = index.replace('</div></body></html>', '')
-        if (report / 'duplicate_keys.csv').exists():
-            notify('Writing duplicate key audit')
-            with (report / 'duplicate_keys.csv').open('rb') as source, bundle.open('duplicate_keys.csv','w',force_zip64=True) as target:
-                while block := source.read(1024*1024):
-                    notify('Writing duplicate key audit')
-                    target.write(block)
-            index += '<p><a href="duplicate_keys.csv">Download complete duplicate-key audit CSV</a></p>'
-        for table in TABLES:
-            pages = (counts[table] + page_size - 1) // page_size
-            index += f'<p>{TITLES[table]}: {counts[table]:,} records'
-            if pages:
-                index += f' — <a href="{table}_00001.html">Open results ({pages:,} pages)</a>'
-            index += '</p>'
-            with (report / f'{table}.csv').open(encoding='utf-8', newline='') as stream:
-                rows = csv.reader(stream)
-                headers = next(rows)
-                for page in range(1, pages + 1):
-                    notify(f'Writing {TITLES[table].lower()}, page {page} of {pages}')
-                    with bundle.open(f'{table}_{page:05d}.html', 'w', force_zip64=True) as output:
-                        def write(text):
-                            output.write(text.encode('utf-8'))
-                        write(html_start(TITLES[table]))
-                        nav = '<nav><a href="index.html">Summary</a>'
-                        if page > 1:
-                            nav += f'<a href="{table}_{page-1:05d}.html">Previous</a>'
-                        if page < pages:
-                            nav += f'<a href="{table}_{page+1:05d}.html">Next</a>'
-                        nav += f'<span>Page {page:,} of {pages:,}</span></nav>'
-                        write(nav + '<table>' + html_row(headers, True))
-                        for row in itertools.islice(rows, page_size):
-                            write(html_row(row))
-                        write('</table>' + nav + '</body></html>')
-        bundle.writestr('index.html', index + '</section></main></div></body></html>')
+    notify('Rendering all columns and ignored-key containers…')
+    document = make_summary_html(summary)
+    notify('Writing single-file HTML report…')
+    with destination.open('w', encoding='utf-8') as output:
+        for offset in range(0, len(document), 1024*1024):
+            notify('Writing single-file HTML report…')
+            output.write(document[offset:offset+1024*1024])

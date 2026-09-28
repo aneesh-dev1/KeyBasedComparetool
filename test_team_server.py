@@ -93,11 +93,14 @@ class TeamServerTests(unittest.TestCase):
             result=c.wait(paths[i],lambda j:j['state'] in ('complete','error'))
             self.assertEqual(result['state'],'complete',result)
             self.assertEqual(c.request(paths[i]+'/preview')['rows'],[[f'{i:03}','AT01S',f'old-{i}',f'new-{i}']])
-            for kind,name in [('excel','mismatches.xlsx'),('html','html.zip')]:
+            for kind,name in [('excel','mismatches.xlsx'),('html','comparison-report.html')]:
                 c.request(paths[i]+'/export/'+kind,{})
                 done=c.wait(paths[i],lambda j:j['exports'][kind]['state'] in ('complete','error'))
                 self.assertEqual(done['exports'][kind]['state'],'complete',done)
-                with zipfile.ZipFile(io.BytesIO(c.request(paths[i]+'/download/'+name))) as archive:self.assertIsNone(archive.testzip())
+                payload=c.request(paths[i]+'/download/'+name)
+                if kind=='html':self.assertTrue(payload.startswith(b'<!doctype html>'))
+                else:
+                    with zipfile.ZipFile(io.BytesIO(payload)) as archive:self.assertIsNone(archive.testzip())
         self.assertEqual(active[1],1)
         self.assertEqual(len(Client(self.server).request('/api/jobs')['jobs']),0)
     def test_allowed_host_origin_memory_and_json_capacity(self):

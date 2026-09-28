@@ -62,14 +62,17 @@ rows with unique keys. If a column or cell exceeds those limits, the Excel
 export fails with a clear message; it never truncates records. HTML/CSV remain
 available. See [Microsoft's Excel limits](https://support.microsoft.com/en-us/excel/excel-specifications-and-limits).
 
-Keys found on only one side are not cell mismatches: they have separate CSV
-downloads and are also included in the HTML report.
+Keys found on only one side are not cell mismatches: their counts appear in
+HTML, and their complete records have separate CSV downloads.
 
-**HTML report:** a ZIP containing `index.html` with the summary, and linked
-result pages with 1,000 records per page. Extract the ZIP and open `index.html`.
-It works offline and includes all changed cells and unmatched keys. A standalone
-summary HTML download is also available. Large values appear in full in reports;
-only the UI preview limits values to 1,000 characters.
+**HTML report:** one self-contained `comparison-report.html`, styled with the
+local TransUnion logo and colors. It includes leadership metrics, a pie chart of
+column match bands (exact 100%, 99–<100%, 95–<99%, below 95%), every mismatching
+column with counts and rates, every fully matching column, ignored containers
+with reasons and all configured keys, duplicate warnings, and review notes.
+Open it directly offline or use Print / save as PDF. No ZIP or supporting files
+are required. Individual cell mismatches remain in Excel/CSV and Analysis;
+HTML generation reads summary data, not the potentially huge mismatch CSV.
 
 Report generation is asynchronous. Click Excel or HTML once to generate it,
 then click again when it says “Ready to download.” Comparison and export jobs
@@ -202,7 +205,7 @@ rows, schema mismatches and 2,000-column inputs with multiple external merge pas
 UI/backend tests cover chunked upload and offset validation, comparison execution,
 preview and downloads, exactly ten sheets for ten changed columns, per-column
 row grouping, sheet-name collisions, text/formula safety, oversized-cell errors,
-HTML escaping and pagination. Full 6 GB performance has not been benchmarked.
+HTML escaping, exact match-rate bands, and single-file exports. Full 6 GB performance has not been benchmarked.
 
 ## Visual theme
 
@@ -325,7 +328,7 @@ from comparison, with each classification retained in the audit. Container
 creation reads no uploaded CSV data. Saved containers persist in the local data
 directory and have unique names; editing/deleting them is not currently offered.
 
-HTML summaries and full HTML reports include container names, reasons and keys.
+HTML summaries and leadership HTML reports include container names, reasons and keys.
 Excel adds an **Ignored key containers** sheet (including when there are no
 mismatches). A conflicting mismatch column sheet gets a unique suffix. The audit
 lists configured exclusions, including keys absent from either source; aggregate
@@ -536,10 +539,10 @@ in Advanced array rules. Discovery supports up to 100 distinct array paths.
 
 ## Comparison reports
 
-HTML ZIP exports now include a sidebar dashboard with matched-row and cell-match
-metrics, searchable column statistics, expandable per-column previews, and fully
-matching attributes. Full column results are paginated; extract the ZIP and open
-index.html. Preview content is capped at 1 MiB; full result pages retain all values.
+HTML exports are single-file leadership reports. Rates are based on retained
+matched keys and compared columns; one-sided keys and exclusions are called out
+separately. Exact counts determine chart bands before percentage rounding.
+Configured ignored keys are expandable on screen and expanded when printing.
 
 Excel exports include File Summary and TOC sheets with difference counts, match
 percentages, internal View links, and an editable Comments column. Each changed

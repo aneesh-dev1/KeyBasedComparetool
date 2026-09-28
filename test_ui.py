@@ -35,15 +35,14 @@ class ReportTests(unittest.TestCase):
             for index,keys in [(3,['01','02']),(4,['01','03'])]:
                 rows=ET.fromstring(book.read(f'xl/worksheets/sheet{index}.xml')).findall('s:sheetData/s:row',NS)[1:]
                 self.assertEqual([r[0].find('s:is/s:t',NS).text for r in rows],keys)
-    def test_text_safety_and_html_pagination(self):
+    def test_text_safety_and_single_html(self):
         report=self.report(['value'],[['001','=1+1'],['002','<script>alert(1)</script>']],[['001','01'],['002','&']])
         target=self.root/'result.xlsx';export_excel(report,target)
         with zipfile.ZipFile(target) as book:
             root=ET.fromstring(book.read('xl/worksheets/sheet3.xml'))
             self.assertFalse(root.findall('.//s:f',NS));self.assertIn('=1+1',[e.text for e in root.findall('.//s:t',NS)])
-        target=self.root/'html.zip';export_html(report,target,page_size=1)
-        with zipfile.ZipFile(target) as book:
-            text=book.read('differences_00002.html').decode();self.assertNotIn('<script>',text);self.assertIn('&lt;script&gt;',text)
+        target=self.root/'comparison-report.html';export_html(report,target)
+        text=target.read_text();self.assertIn('All mismatching columns',text);self.assertNotIn('<script>alert(1)</script>',text)
     def test_sheet_names(self):
         names=sheet_names(['a/b','a?b','a'*40,'a'*39+'b',"'hello'",'History','NAME','name'])
         self.assertEqual(names[:2],['a_b','a_b (2)']);self.assertEqual(len(names),len(set(s.casefold() for s in names)));self.assertTrue(all(len(s)<=31 for s in names))
@@ -93,11 +92,14 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request(path+'/finalize',{})['state'],'ready');self.request(path+'/start',{'keys':['id'],'memory_mb':64})
         result=self.wait(path,lambda j:j['state'] in ('complete','error'));self.assertEqual(result['state'],'complete',result);self.assertEqual(result['summary']['changed_cells'],2)
         self.assertEqual(len(self.request(path+'/preview?category=differences')['rows']),2)
-        for kind,filename in [('excel','mismatches.xlsx'),('html','html.zip')]:
+        for kind,filename in [('excel','mismatches.xlsx'),('html','comparison-report.html')]:
             self.request(path+'/export/'+kind,{});result=self.wait(path,lambda j:j['exports'][kind]['state'] in ('complete','error'));self.assertEqual(result['exports'][kind]['state'],'complete',result)
-            with zipfile.ZipFile(io.BytesIO(self.request(path+'/download/'+filename))) as archive:
-                self.assertIsNone(archive.testzip())
-                if kind=='excel':self.assertEqual([s.attrib['name'] for s in ET.fromstring(archive.read('xl/workbook.xml')).findall('s:sheets/s:sheet',NS)],['File Summary','TOC','price','status'])
+            payload=self.request(path+'/download/'+filename)
+            if kind=='html':self.assertTrue(payload.startswith(b'<!doctype html>'))
+            else:
+                with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                    self.assertIsNone(archive.testzip())
+                    self.assertEqual([s.attrib['name'] for s in ET.fromstring(archive.read('xl/workbook.xml')).findall('s:sheets/s:sheet',NS)],['File Summary','TOC','price','status'])
         self.assertIn(b'003',self.request(path+'/download/left_only.csv'));self.assertIn(b'004',self.request(path+'/download/right_only.csv'))
     def test_auth_required(self):
         with self.assertRaises(HTTPError):self.request('/api/jobs',{},auth=False)
