@@ -12,7 +12,7 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 6
+REPORT_VERSION = 7
 
 STYLE = '''body{font:15px system-ui,sans-serif;color:#004364;background:#f7f9fa;margin:40px auto;max-width:1200px;padding:0 24px}h1{font-size:32px}a{color:#007b99}table{border-collapse:collapse;width:100%;background:white;margin:20px 0}th,td{padding:12px;border:1px solid #dce5eb;text-align:left;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}th{background:#e6f6fa}nav{display:flex;gap:24px}p{line-height:1.6}'''
 
@@ -94,13 +94,14 @@ body{max-width:1240px;margin:0 auto;background:#f4f7f9;padding:36px;color:#00436
 body>header{display:flex;align-items:center;justify-content:space-between;background:white;padding:22px!important;margin-bottom:24px!important;border-radius:12px}body>h1{display:none}
 .hero{background:#004364;color:white;border-radius:12px;padding:30px;border-bottom:5px solid #fcd800;margin-bottom:22px}.hero h1{font-size:34px;margin:8px 0}.hero p{color:#d6edf4}.eyebrow{text-transform:uppercase;letter-spacing:2px;font-size:11px;font-weight:700}
 .cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:24px 0}.card,section{background:white;border:1px solid #dce5eb;border-radius:12px;padding:22px;margin-bottom:22px}.card{margin:0;border-top:4px solid #00a6ca}.card strong{display:block;font-size:30px;margin:10px 0}.card small,.muted{color:#59717d}
-h2{font-size:21px;margin:0 0 15px}h3{font-size:16px}.overview{display:grid;grid-template-columns:1fr 1fr;gap:24px}.chart-wrap{display:flex;align-items:center;gap:26px;flex-wrap:wrap}.pie{width:220px;max-width:100%;height:auto}.legend{list-style:none;padding:0;flex:1}.legend li{padding:10px 0;border-bottom:1px solid #e5edf0;display:flex;gap:10px;align-items:center}.swatch{width:12px;height:12px;border-radius:50%;flex-shrink:0}.legend strong{margin-left:auto}.source{overflow-wrap:anywhere;padding:10px 0}.source strong{display:block}.callout{background:#fff9df;border-left:5px solid #e5bd25}.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{background:#e9f6f7;border:1px solid #c7e8eb;padding:7px 10px;border-radius:6px;color:#006779}.table-wrap{overflow:auto}table{margin:12px 0;font-size:13px}th{background:#004364;color:white;white-space:normal}td{border-width:0 0 1px;padding:11px}tr:nth-child(even){background:#f6fafb}.count{font-variant-numeric:tabular-nums}.container{border:1px solid #e5d79c;background:#fffdf3;border-radius:9px;padding:18px;margin:12px 0}.container summary{cursor:pointer;font-weight:650}input{font:inherit;border:1px solid #afc8d2;border-radius:6px;padding:10px;width:300px;max-width:100%}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}.print{background:#007b99;color:white;border:0;border-radius:6px;padding:10px 18px;cursor:pointer}footer{padding:12px 0 30px;font-size:12px;color:#59717d}.rate-note{font-size:12px}.badge{font-size:12px;border-radius:5px;padding:5px 9px;background:#e9f6f7;display:inline-block}
+h2{font-size:21px;margin:0 0 15px}h3{font-size:16px}.overview{display:grid;grid-template-columns:1fr 1fr;gap:24px}.chart-wrap{display:flex;align-items:center;gap:26px;flex-wrap:wrap}.pie{width:220px;max-width:100%;height:auto}.legend{list-style:none;padding:0;flex:1}.legend li{padding:10px 0;border-bottom:1px solid #e5edf0;display:flex;gap:10px;align-items:center}.swatch{width:12px;height:12px;border-radius:50%;flex-shrink:0}.legend strong{margin-left:auto}.source{overflow-wrap:anywhere;padding:10px 0}.source strong{display:block}.callout{background:#fff9df;border-left:5px solid #e5bd25}.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{background:#e9f6f7;border:1px solid #c7e8eb;padding:7px 10px;border-radius:6px;color:#006779}.table-wrap{overflow:auto}table{margin:12px 0;font-size:13px}th{background:#004364;color:white;white-space:normal}td{border-width:0 0 1px;padding:11px}tr:nth-child(even){background:#f6fafb}.count{font-variant-numeric:tabular-nums}.container{border:1px solid #e5d79c;background:#fffdf3;border-radius:9px;padding:18px;margin:12px 0}.container summary{cursor:pointer;font-weight:650}input{font:inherit;border:1px solid #afc8d2;border-radius:6px;padding:10px;width:300px;max-width:100%}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}.print{background:#007b99;color:white;border:0;border-radius:6px;padding:10px 18px;cursor:pointer}footer{padding:12px 0 30px;font-size:12px;color:#59717d}.rate-note{font-size:12px}.mismatch-sample{border:1px solid #dce5eb;border-radius:8px;margin:10px 0;padding:14px}.mismatch-sample summary{cursor:pointer;font-weight:650;overflow-wrap:anywhere}.sample-before{background:#fff0ed}.sample-after{background:#eaf7f3}.badge{font-size:12px;border-radius:5px;padding:5px 9px;background:#e9f6f7;display:inline-block}
 @media(max-width:850px){body{padding:16px}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.overview{grid-template-columns:1fr}.hero h1{font-size:28px}}
-@media print{body{background:white;padding:0;font-size:11px}.print,input,.search-label{display:none!important}.hero,th,.swatch,.chip{-webkit-print-color-adjust:exact;print-color-adjust:exact}section{break-inside:auto}.card,.container,.hero{break-inside:avoid}.cards{gap:8px}.card{padding:12px}.card strong{font-size:23px}.table-wrap{overflow:visible}tr{break-inside:avoid}thead{display:table-header-group}[hidden]{display:table-row!important}details>*{display:block!important}a{color:inherit;text-decoration:none}}
+@media print{body{background:white;padding:0;font-size:11px}.print,input,.search-label{display:none!important}.hero,th,.swatch,.chip{-webkit-print-color-adjust:exact;print-color-adjust:exact}section{break-inside:auto}.card,.container,.hero{break-inside:avoid}.cards{gap:8px}.card{padding:12px}.card strong{font-size:23px}.table-wrap{overflow:visible}tr{break-inside:avoid}thead{display:table-header-group}[hidden]{display:table-row!important}a{color:inherit;text-decoration:none}}
 '''
 
 
-def make_summary_html(summary):
+def make_summary_html(summary, samples=None):
+    samples = samples or {}
     import math
     from datetime import datetime, timezone
     esc = lambda value: html.escape(str(value))
@@ -146,11 +147,21 @@ def make_summary_html(summary):
     if summary.get('left_duplicate_keys') or summary.get('right_duplicate_keys'):
         out += '<section class="callout"><h2>Warning: duplicate keys</h2><p>'+esc(f"Kept the {summary.get('duplicate_policy','first')} source occurrence per key. File 1: {summary.get('left_duplicate_keys',0):,} duplicate keys / {summary.get('left_duplicate_rows_skipped',0):,} skipped rows. File 2: {summary.get('right_duplicate_keys',0):,} duplicate keys / {summary.get('right_duplicate_rows_skipped',0):,} skipped rows.")+'</p><p>Skipped duplicates are outside the match-rate denominator. The detailed duplicate audit remains available in the app and Excel workbook.</p></section>'
     notes={n['column']:n['status']+': '+n['comment'] for n in summary.get('analysis_notes',[]) if n['key'] is None}
-    out += '<section id="statistics"><div class="toolbar"><h2>All mismatching columns ('+str(len(changed))+')</h2><label class="search-label">Find a column <input id="columnSearch" type="search" placeholder="Column name"></label></div><p class="muted">Largest difference counts first. Percentages use '+f'{matched:,}'+' matched keys.</p><div class="table-wrap"><table id="columnStats"><thead>'+html_row(['Column','Mismatched cells','Matching cells','Mismatch %','Match %','Review notes'],True)+'</thead><tbody>'
-    for name,count,mismatch,match in changed:
-        out += html_row([name,f'{count:,}',f'{max(0,matched-count):,}',percent(mismatch),percent(match),notes.get(name,'')])
+    out += '<section id="statistics"><div class="toolbar"><h2>All mismatching columns ('+str(len(changed))+')</h2><label class="search-label">Find a column <input id="columnSearch" type="search" placeholder="Column name"></label></div><p class="muted">Largest difference counts first. Percentages use '+f'{matched:,}'+' matched keys.</p><div class="table-wrap"><table id="columnStats"><thead>'+html_row(['Column','Mismatched cells','Matching cells','Mismatch %','Match %','Review notes','Samples'],True)+'</thead><tbody>'
+    for index,(name,count,mismatch,match) in enumerate(changed):
+        row = html_row([name,f'{count:,}',f'{max(0,matched-count):,}',percent(mismatch),percent(match),notes.get(name,'')]).rstrip()
+        out += row[:-5] + (f'<td><a href="#sample-{index}" class="sample-link">View {len(samples[name])} keys</a></td></tr>' if samples.get(name) else '<td>Generate HTML report to include samples</td></tr>')
     out += '</tbody></table></div>'
     if not changed: out += '<p>No mismatching columns in the selected scope.</p>'
+    if samples:
+        out += '</section><section id="samples"><h2>Mismatch key samples</h2><p>Expand a column to review up to 20 mismatching keys in comparison order. This is a sample, not a random selection. Values longer than 1,000 characters are shortened and marked; full values remain in Excel/CSV and Analysis.</p>'
+        for index,(name,count,_,_) in enumerate(changed):
+            rows = samples.get(name, [])
+            if not rows: continue
+            out += f'<details class="mismatch-sample" id="sample-{index}"><summary>'+esc(name)+f' · {len(rows):,} sample keys of {count:,} mismatches</summary><div class="table-wrap"><table><thead>'+html_row(summary['keys']+['File 1 value','File 2 value'],True)+'</thead><tbody>'
+            for row in rows:
+                out += '<tr>'+''.join('<td>'+esc(value)+'</td>' for value in row[:-2])+'<td class="sample-before">'+esc(row[-2])+'</td><td class="sample-after">'+esc(row[-1])+'</td></tr>'
+            out += '</tbody></table></div></details>'
     out += '</section><section id="matching"><h2>Attributes with 100% match ('+str(len(equal))+')</h2><p>Each listed column has '+f'{matched:,}'+' matched cells and zero mismatches.</p><div class="chips">'+''.join('<span class="chip">'+esc(row[0])+'</span>' for row in equal)+'</div></section>'
     out += '<section id="scope" class="callout"><h2>Ignored key containers — excluded from comparison</h2><p>File 1 excluded rows: <strong>'+f"{summary.get('left_excluded_rows',0):,}"+'</strong> · File 2 excluded rows: <strong>'+f"{summary.get('right_excluded_rows',0):,}"+'</strong></p><p>Configured keys can overlap across containers or be absent from source files. Container counts are not additive; excluded-row counts reflect actual input rows.</p>'
     for item in summary.get('ignore_key_containers',[]):
@@ -164,7 +175,8 @@ def make_summary_html(summary):
         out += '<section><h2>Analysis classifications &amp; comments</h2><div class="table-wrap"><table>'+''.join(html_row(row,i==0) for i,row in enumerate(note_rows(summary)))+'</table></div></section>'
     out += '''<footer>TransUnion · Data comparison report · Generated by the comparison tool</footer></main><script>
 const search=document.getElementById('columnSearch');search.addEventListener('input',()=>{document.querySelectorAll('#columnStats tbody tr').forEach(r=>r.hidden=!r.cells[0].textContent.toLowerCase().includes(search.value.toLowerCase()));});
-let opened=[];window.addEventListener('beforeprint',()=>{opened=[...document.querySelectorAll('details:not([open])')];opened.forEach(d=>d.open=true);});window.addEventListener('afterprint',()=>opened.forEach(d=>d.open=false));
+document.querySelectorAll('.sample-link').forEach(a=>a.addEventListener('click',()=>{document.querySelector(a.getAttribute('href')).open=true;}));
+let opened=[];window.addEventListener('beforeprint',()=>{opened=[...document.querySelectorAll('.container details:not([open])')];opened.forEach(d=>d.open=true);});window.addEventListener('afterprint',()=>opened.forEach(d=>d.open=false));
 </script></body></html>'''
     return out
 
@@ -377,12 +389,36 @@ def numeric_difference(left, right):
         return ''
 
 
+def mismatch_samples(report, summary, notify=lambda message: None):
+    """Single streaming pass; stop when every changed column has its sample quota."""
+    pending = {name: min(20, count) for name, count in summary['changed_cells_by_column'].items() if count}
+    samples = {name: [] for name in pending}
+    if not pending: return samples
+    csv.field_size_limit(64 * 1024 * 1024)
+    def short(value):
+        return value if len(value) <= 1000 else value[:1000] + ' … [truncated]'
+    notify('Collecting up to 20 mismatch keys per column…')
+    with (report / 'differences.csv').open(encoding='utf-8', newline='') as source:
+        for index, row in enumerate(csv.DictReader(source), 1):
+            name = row['column']
+            if name in pending:
+                samples[name].append(json.loads(row['key_json']) + [short(row['left_value']), short(row['right_value'])])
+                if len(samples[name]) >= pending[name]: del pending[name]
+            if index % 10000 == 0:
+                notify(f'Collecting mismatch samples: {index:,} records scanned; {len(pending):,} columns remaining')
+            if not pending: break
+    if pending:
+        raise ValueError('Mismatch data is incomplete; unable to collect the expected column samples')
+    return samples
+
+
 def export_html(report, destination, notify=lambda message: None):
-    """One self-contained leadership report; no scan of the cell mismatch dataset."""
+    """One self-contained leadership report with bounded per-column samples."""
     notify('Preparing leadership summary and column match distribution…')
     summary = report_summary(report)
-    notify('Rendering all columns and ignored-key containers…')
-    document = make_summary_html(summary)
+    samples = mismatch_samples(report, summary, notify)
+    notify('Rendering all columns, mismatch samples and ignored-key containers…')
+    document = make_summary_html(summary, samples)
     notify('Writing single-file HTML report…')
     with destination.open('w', encoding='utf-8') as output:
         for offset in range(0, len(document), 1024*1024):

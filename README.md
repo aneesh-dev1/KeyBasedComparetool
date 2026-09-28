@@ -72,7 +72,7 @@ column with counts and rates, every fully matching column, ignored containers
 with reasons and all configured keys, duplicate warnings, and review notes.
 Open it directly offline or use Print / save as PDF. No ZIP or supporting files
 are required. Individual cell mismatches remain in Excel/CSV and Analysis;
-HTML generation reads summary data, not the potentially huge mismatch CSV.
+HTML generation streams the mismatch CSV once, stopping when every changed column has up to 20 sample keys. Expand a column to see its keys and both values. Values over 1,000 characters are marked as truncated; the detailed downloads retain full values.
 
 Report generation is asynchronous. Click Excel or HTML once to generate it,
 then click again when it says “Ready to download.” Comparison and export jobs

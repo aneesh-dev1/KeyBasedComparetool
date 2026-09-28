@@ -33,10 +33,10 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(detail.find('s:autoFilter',NS).attrib['ref'],'A1:H2')
             for name in z.namelist():
                 if name.endswith('.xml'): ET.fromstring(z.read(name))
-    def test_single_report_all_columns_and_no_mismatch_scan(self):
+    def test_single_report_all_columns_and_streamed_samples(self):
         from unittest.mock import patch
         target=self.root/'report.html'
-        with patch('reports.partition_columns',side_effect=AssertionError('Should not scan mismatches')):
+        with patch('reports.partition_columns',side_effect=AssertionError('Should not partition all mismatches')):
             export_html(self.root,target)
         text=target.read_text()
         for value in ['columnSearch','Attributes with 100% match','66.6667%','50.0000%','before.csv','equal',"a&#x27;b",'Column match distribution','data:image/svg+xml;base64,']:
@@ -46,6 +46,10 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn('.zip',text)
         self.assertNotIn('src="http',text)
         self.assertNotIn('column_00001',text)
+        self.assertIn('1 sample keys of 1 mismatches',text)
+        self.assertIn('&lt;script&gt;x&lt;/script&gt;',text)
+        self.assertNotIn('<script>x</script>',text)
+        self.assertIn('id="sample-0"',text)
     def test_exact_bands_and_escape(self):
         from reports import match_bands
         self.summary.update(matched_keys=1000000,changed_cells_by_column={'perfect':0,'rounded':1,'99':10000,'below99':10001,'95':50000,'below95':50001})
@@ -79,3 +83,35 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(numeric_difference('001','1'),'0')
         self.assertEqual(numeric_difference('0.3','0.2'),'0.1')
         for a in ['None','Infinity','NaN','1e99999999']: self.assertEqual(numeric_difference(a,'1'),'')
+
+class SampleTests(unittest.TestCase):
+    def test_twenty_per_column_composite_keys_and_truncation(self):
+        from reports import mismatch_samples
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with (root/'differences.csv').open('w',newline='') as stream:
+                writer=csv.writer(stream);writer.writerow(['key_json','column','left_value','right_value'])
+                for i in range(25):writer.writerow([json.dumps([f'{i:03}', 'part,one']),'many','x'*1200,'new'])
+                for i in range(3):writer.writerow([json.dumps([str(i),'part,two']),'few','old','new'])
+            result=mismatch_samples(root,dict(changed_cells_by_column={'many':25,'few':3,'equal':0}))
+            self.assertEqual(len(result['many']),20);self.assertEqual(len(result['few']),3)
+            self.assertEqual(result['many'][0][:2],['000','part,one'])
+            self.assertEqual(result['many'][-1][0],'019')
+            self.assertTrue(result['many'][0][2].endswith('[truncated]'))
+            self.assertNotIn('equal',result)
+    def test_stops_at_quota_and_empty_scope_does_not_read(self):
+        from reports import mismatch_samples
+        from unittest.mock import patch
+        import io
+        data='key_json,column,left_value,right_value\n'+''.join(f'"[""{i}""]",v,old,new\n' for i in range(20))+'invalid,row\n'
+        with patch.object(Path,'open',return_value=io.StringIO(data)):
+            self.assertEqual(len(mismatch_samples(Path('.'),dict(changed_cells_by_column={'v':100}))['v']),20)
+        with patch.object(Path,'open',side_effect=AssertionError('No read expected')):
+            self.assertEqual(mismatch_samples(Path('.'),dict(changed_cells_by_column={'equal':0})),{})
+    def test_missing_sample_records_fail_explicitly(self):
+        from reports import mismatch_samples
+        from unittest.mock import patch
+        import io
+        with patch.object(Path,'open',return_value=io.StringIO('key_json,column,left_value,right_value\n')):
+            with self.assertRaisesRegex(ValueError,'incomplete'):
+                mismatch_samples(Path('.'),dict(changed_cells_by_column={'v':1}))
