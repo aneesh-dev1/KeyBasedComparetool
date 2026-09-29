@@ -201,9 +201,19 @@ def write_run(path, rows, args=None):
             stream.write(FRAME.pack(len(key), len(payload)))
             stream.write(key)
             stream.write(payload)
+        if getattr(args,'checkpoint_dir',None): stream.flush();os.fsync(stream.fileno())
 
 
 def sort_csv(path, names, canonical, keys, temp, prefix, args):
+    if getattr(args,'checkpoint_dir',None):
+        from checkpoints import lock
+        # A spawned sorter can outlive a forcibly stopped parent process.
+        with lock(Path(temp)/('lock-'+prefix)):
+            return _sort_csv(path,names,canonical,keys,temp,prefix,args)
+    return _sort_csv(path,names,canonical,keys,temp,prefix,args)
+
+
+def _sort_csv(path, names, canonical, keys, temp, prefix, args):
     progress(args, f'Reading {prefix} file', rows=0)
     order = [names.index(name) for name in canonical]
     key_positions = [names.index(name) for name in keys]
@@ -212,6 +222,18 @@ def sort_csv(path, names, canonical, keys, temp, prefix, args):
     paths, chunk = [], []
     size = count = serial = excluded = 0
     budget = args.memory_mb * 1024 * 1024
+    checkpoint = None
+    position = 0
+    reading_complete = False
+    if getattr(args, 'checkpoint_dir', None):
+        from checkpoints import SortCheckpoint
+        progress(args, f'Validating {prefix} saved sort batches')
+        checkpoint = SortCheckpoint(temp, prefix, args)
+        if checkpoint.state:
+            saved = checkpoint.state
+            paths = [temp/item['name'] for item in saved['runs']]
+            count, excluded, serial, position, reading_complete = (saved[k] for k in ('count','excluded','serial','position','complete'))
+            progress(args, f'Resuming {prefix} from saved sort batches', rows=count, batches=len(paths))
 
     def flush():
         nonlocal chunk, size, serial
@@ -222,36 +244,44 @@ def sort_csv(path, names, canonical, keys, temp, prefix, args):
         serial += 1
         write_run(target, chunk, args)
         paths.append(target)
+        if checkpoint: checkpoint.save(paths,count,excluded,serial,position,False)
         progress(args, f'{prefix} sort batch complete', batch=serial, batch_rows=len(chunk), rows=count, status='completed', elapsed_seconds=round(time.monotonic()-batch_started, 3))
         chunk, size = [], 0
 
-    with open(path, encoding=args.encoding, newline='', buffering=1024*1024) as stream:
-        reader = csv.reader(stream, delimiter=args.delimiter, strict=True)
-        next(reader)
-        for row in reader:
-            count += 1
-            if len(row) != len(names):
-                raise ValueError(f'{path}: record {count}: expected {len(names)} fields, got {len(row)}')
-            key = [row[i] for i in key_positions]
-            if count % 10000 == 0:
-                progress(args, f'Reading {prefix} file', rows=count, excluded=excluded, batch=serial+1, batch_rows=len(chunk), status='ongoing')
-            encoded_key = encode(key)
-            if encoded_key in args.excluded_keys:
-                excluded += 1
-                continue
-            if not args.allow_empty_keys and any(value == '' for value in key):
-                raise ValueError(f'{path}: record {count}: empty key component')
-            if not chunk:
-                progress(args, f'{prefix} sort batch started', batch=serial+1, rows=count-1, status='ongoing')
-            values = row if same_order else project(row) if project is not None else [row[order[0]]]
-            item = (encoded_key, pack_values(values))
-            # Includes byte objects, tuple, list pointer and sorting headroom.
-            size += len(item[0]) + len(item[1]) + 192
-            chunk.append(item)
-            if size >= budget or len(chunk) >= getattr(args, 'read_batch_size', 100000):
-                flush()
-    if chunk or not paths:
-        flush()
+    if not reading_complete:
+        with open(path, encoding=args.encoding, newline='', buffering=1024*1024) as stream:
+            reader = csv.reader(iter(stream.readline, '') if checkpoint else stream, delimiter=args.delimiter, strict=True)
+            if position: stream.seek(position)
+            else:
+                next(reader)
+                if checkpoint: position=stream.tell()
+            for row in reader:
+                count += 1
+                if len(row) != len(names):
+                    raise ValueError(f'{path}: record {count}: expected {len(names)} fields, got {len(row)}')
+                key = [row[i] for i in key_positions]
+                if count % 10000 == 0:
+                    progress(args, f'Reading {prefix} file', rows=count, excluded=excluded, batch=serial+1, batch_rows=len(chunk), status='ongoing')
+                encoded_key = encode(key)
+                if encoded_key in args.excluded_keys:
+                    excluded += 1
+                    continue
+                if not args.allow_empty_keys and any(value == '' for value in key):
+                    raise ValueError(f'{path}: record {count}: empty key component')
+                if not chunk:
+                    progress(args, f'{prefix} sort batch started', batch=serial+1, rows=count-1, status='ongoing')
+                values = row if same_order else project(row) if project is not None else [row[order[0]]]
+                item = (encoded_key, pack_values(values))
+                # Includes byte objects, tuple, list pointer and sorting headroom.
+                size += len(item[0]) + len(item[1]) + 192
+                chunk.append(item)
+                if size >= budget or len(chunk) >= getattr(args, 'read_batch_size', 100000):
+                    if checkpoint: position=stream.tell()
+                    flush()
+            if checkpoint: position=stream.tell()
+        if chunk or not paths:
+            flush()
+        if checkpoint: checkpoint.save(paths,count,excluded,serial,position,True)
     # Bound open file count and merge-buffer memory even for tiny chunk budgets.
     merge_pass = 0
     while len(paths) > args.fan_in:
@@ -267,10 +297,13 @@ def sort_csv(path, names, canonical, keys, temp, prefix, args):
             progress(args, f'{prefix} merge batch started', merge_pass=merge_pass, batch=batch, total_batches=total_batches, input_runs=len(group), status='ongoing')
             with contextlib.closing(merge(group)) as rows:
                 write_run(target, rows, args)
-            for source in group:
-                source.unlink()
+            if not checkpoint:
+                for source in group: source.unlink()
             replacement.append(target)
             progress(args, f'{prefix} merge batch complete', merge_pass=merge_pass, batch=batch, total_batches=total_batches, status='completed')
+        if checkpoint:
+            checkpoint.save(replacement,count,excluded,serial,position,True)
+            for source in paths: source.unlink()
         paths = replacement
     progress(args, f'Read and sort {prefix} complete', rows=count, excluded=excluded)
     return paths, count, excluded
@@ -383,6 +416,13 @@ def unique(rows, label, diagnostics=None, args=None, stats=None, audit=None):
 
 
 def compare(args):
+    if getattr(args,'checkpoint_dir',None):
+        from checkpoints import lock
+        with lock(args.checkpoint_dir): return _compare(args)
+    return _compare(args)
+
+
+def _compare(args):
     started = time.monotonic()
     settings = execution_settings(vars(args))
     for name, value in settings.items(): setattr(args, name, value)
@@ -416,19 +456,32 @@ def compare(args):
     rules=validate_rules(getattr(args,'comparison_rules',[]),common,args.keys,ignored_columns)
     rule_lookup={rule['column']:rule for rule in rules}
     args.diagnostic_columns=canonical
+    checkpoint_dir=getattr(args,'checkpoint_dir',None)
+    if checkpoint_dir:
+        from checkpoints import validate
+        configuration=dict(keys=args.keys,headers=aligned,canonical=canonical,excluded=sorted(k.decode('utf-8') for k in args.excluded_keys),overrides=overrides,rules=rules,duplicate_policy=args.duplicate_policy,delimiter=args.delimiter,encoding=args.encoding,allow_empty_keys=args.allow_empty_keys)
+        validate(checkpoint_dir,args,configuration,lambda message:progress(args,message))
     # Exclusive creation prevents accidental replacement of previous reports.
     out = Path(args.output)
-    out.mkdir(parents=True, exist_ok=False)
+    if out.exists() and checkpoint_dir:
+        if (out/'summary.json').exists():
+            return json.loads((out/'summary.json').read_text())
+        if not (out/'INCOMPLETE').exists(): raise ValueError('Existing report is not an interrupted comparison')
+        # Rebuild final comparison output from validated sorted runs; never append partial results.
+    out.mkdir(parents=True, exist_ok=bool(checkpoint_dir))
     (out / 'INCOMPLETE').write_text('Reports are incomplete until summary.json is present.\n')
     stats = dict(left_rows=0, right_rows=0, matched_keys=0, equal_rows=0,
                  changed_rows=0, changed_cells=0, left_only=0, right_only=0, override_equivalent_cells=0, rule_equivalent_cells=0)
     stats.update({side + suffix: 0 for side in ('left', 'right') for suffix in ('_duplicate_keys', '_duplicate_rows_skipped')})
     columns = {name: 0 for name in canonical if name not in args.keys}
-    with tempfile.TemporaryDirectory(prefix='csv-compare-', dir=args.temp_dir) as work:
+    with (contextlib.nullcontext(str(checkpoint_dir)) if checkpoint_dir else tempfile.TemporaryDirectory(prefix='csv-compare-', dir=args.temp_dir)) as work:
         temp = Path(work)
         left_result, right_result = sort_inputs(args, left_names, right_names, canonical, temp)
         left_paths, stats['left_rows'], stats['left_excluded_rows'] = left_result
         right_paths, stats['right_rows'], stats['right_excluded_rows'] = right_result
+        if checkpoint_dir:
+            from checkpoints import verify_sources
+            verify_sources(checkpoint_dir)
         progress(args, 'Comparing keys', rows=0)
         with contextlib.ExitStack() as stack:
             writers = {}
@@ -494,6 +547,7 @@ def compare(args):
                  left_compared_rows=stats['left_rows']-stats['left_excluded_rows']-stats['left_duplicate_rows_skipped'],
                  right_compared_rows=stats['right_rows']-stats['right_excluded_rows']-stats['right_duplicate_rows_skipped'],
                  elapsed_seconds=round(time.monotonic() - started, 3))
+    if checkpoint_dir: verify_sources(checkpoint_dir)
     atomic_write_text(out / 'summary.json', json.dumps(stats, indent=2))
     (out / 'INCOMPLETE').unlink()
     return stats
@@ -510,6 +564,7 @@ def parser():
     p.add_argument('--read-batch-size', type=int, default=100000)
     p.add_argument('--compare-batch-size', type=int, default=10000)
     p.add_argument('--duplicate-policy', choices=('first', 'last'), default='first')
+    p.add_argument('--checkpoint-dir', help='Persistent validated sort batches for restart recovery')
     p.add_argument('--temp-dir', help='Scratch directory, preferably on a fast local SSD')
     p.add_argument('--fan-in', type=int, default=16, help='Maximum sorted streams per merge')
     p.add_argument('--delimiter', default=',')

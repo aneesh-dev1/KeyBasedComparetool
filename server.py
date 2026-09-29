@@ -56,7 +56,7 @@ class Application:
             job = json.loads(path.read_text())
             changed = False
             if job['state'] in ('queued', 'running', 'preparing'):
-                job.update(state='error', error='Server stopped before comparison completed. Start a new comparison.')
+                job.update(state='error', error='Server stopped before comparison completed. Resume this job to reuse validated sort batches.' if (path.parent/'checkpoints/identity.json').exists() else 'Server stopped before comparison completed. Start a new comparison.')
                 changed = True
             if job.get('analysis', {}).get('state') in ('queued', 'running'):
                 job['analysis'] = dict(state='error', message='Analysis preparation interrupted. Try again.')
@@ -85,10 +85,11 @@ class Application:
 
     def mark_cancelled(self,identity,kind):
         job=self.load(identity)
+        if kind=='comparison' and job['state']=='complete':return
         if kind in ('excel','html'):
             job['exports'][kind]=dict(state='cancelled',updated=time.time(),message='Export cancelled. Generate it again when ready.')
         elif kind=='analysis':job['analysis']=dict(state='cancelled',updated=time.time(),message='Analysis cancelled. Use Retry to prepare it again.')
-        else:job.update(state='cancelled',error='Cancelled by user. Start a new comparison.',finished=time.time())
+        else:job.update(state='cancelled',error='Cancelled by user. Resume saved sort batches when ready.' if (self.directory(identity)/'checkpoints/identity.json').exists() else 'Cancelled by user. Start a new comparison.',finished=time.time())
         self.save(job)
 
     def cancel(self,identity,kind):
@@ -115,10 +116,13 @@ class Application:
                 for side in ('left', 'right'):
                     source = self.upload_path(job, side)
                     job['files'][side]['uploaded'] = source.stat().st_size if source.exists() else 0
+            if job.get('analysis',{}).get('state')=='complete' and job['analysis'].get('version')!=2:
+                job['analysis']=dict(state='not_started',message='Prepare analysis to include mismatch patterns.')
             for export in job.get('exports', {}).values():
                 if export.get('state') == 'complete' and export.get('report_version') != REPORT_VERSION:
                     export.update(state='outdated', message='New report layout available. Generate this export again.')
-            return job
+            job['can_resume']=job['state'] in ('error','cancelled') and (self.directory(identity)/'checkpoints/identity.json').exists()
+        return job
 
     def save(self, job):
         with self.lock:
@@ -252,13 +256,15 @@ class Application:
                     log.seek(max(0, (directory / 'run.log').stat().st_size - 4000))
                     message = log.read().decode('utf-8', errors='replace')
                 raise ValueError(message or 'Comparison worker stopped unexpectedly')
+            check_cancel(directory/'cancel-comparison')
             summary = json.loads((directory / 'report/summary.json').read_text())
             summary['sources'] = [dict(side=side, file=job['files'][side]['name'], sheet=job['files'][side].get('sheet')) for side in ('left', 'right')]
-            (directory / 'report/summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+            atomic_write_text(directory / 'report/summary.json',json.dumps(summary, indent=2))
             (directory / 'report/summary.html').write_text(make_summary_html(summary), encoding='utf-8')
             with (directory / 'run.log').open('a') as log:
                 log.write(f'{time.strftime("%H:%M:%S")}  Comparison complete | changed cells={summary["changed_cells"]:,}\n')
             self.patch(identity, state='complete', summary=summary, finished=time.time())
+            shutil.rmtree(directory/'checkpoints',ignore_errors=True)
         except Exception as error:
             self.patch(identity, state='error', error=str(error), finished=time.time())
 
@@ -273,7 +279,7 @@ class Application:
             notify('Preparing a disk-backed index for key and column analysis…')
             build_index(directory/'report',temporary,notify,lambda:(directory/'cancel-analysis').exists())
             replace_retry(temporary,directory/'analysis.sqlite')
-            self.patch(identity,analysis=dict(state='complete',message='Analysis ready',updated=time.time()))
+            self.patch(identity,analysis=dict(state='complete',version=2,message='Analysis ready',updated=time.time()))
         except Exception as error:
             temporary.unlink(missing_ok=True)
             self.patch(identity,analysis=dict(state='error',message=str(error),updated=time.time()))
@@ -777,6 +783,15 @@ class Handler(BaseHTTPRequestHandler):
                         self.app.save(job)
                         self.app.submit(identity,kind,self.app.run_export,kind)
                 return self.json_response(job, 202)
+            if action == 'resume' and self.command == 'POST':
+                with self.app.lock:
+                    job=self.app.load(identity)
+                    if not job.get('can_resume') or self.app.busy(job):
+                        raise ValueError('This job has no resumable comparison, or is already active')
+                    job.update(state='queued',error='',finished=None)
+                    self.app.save(job)
+                    self.app.submit(identity,'comparison',self.app.run_comparison)
+                return self.json_response(job,202)
             if action == 'analysis' and self.command in ('GET','POST'):
                 if job['state'] != 'complete':
                     raise ValueError('Complete the comparison before analysis')

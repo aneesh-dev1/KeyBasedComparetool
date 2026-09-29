@@ -350,6 +350,7 @@ function hydrate(){
   $('sortWorkers').value=[1,2].includes(draft.sort_workers)?String(draft.sort_workers):job.state==='ready'?'2':'1';
   keyPage=ignorePage=sourceColumnOffset=0;hydratedId=job.id;
 }
+$('resumeComparison').addEventListener('click',async()=>{try{$('resumeComparison').disabled=true;job=await api(endpoint('/resume'),{});clearError();await refresh();}catch(error){showError(error);}finally{$('resumeComparison').disabled=false;}});
 async function refresh() {
   clearTimeout(pollTimer);
   const previousState=job.state;
@@ -444,6 +445,7 @@ $('loadSource').addEventListener('click',()=>loadSource().catch(showError));
 $('sourcePrev').addEventListener('click',()=>{sourceColumnOffset=Math.max(0,sourceColumnOffset-20);loadSource().catch(showError);});
 $('sourceNext').addEventListener('click',()=>{if(sourceColumnOffset+20<job.columns.length)sourceColumnOffset+=20;loadSource().catch(showError);});
 async function renderPipeline(){
+  $('resumeComparison').hidden=!job.can_resume;
   const stages=[['validate','Validate configuration'],...(job.sort_workers===2?[['sort','Read & sort both files']]:[['left','Read & sort file 1'],['right','Read & sort file 2']]),['compare','Compare matching keys'],['reports','Write results'],['complete','Complete']];
   const stage=job.state==='complete'?'complete':job.progress?.stage||'validate';const index=stages.findIndex(([id])=>id===stage);
   $('phase').textContent=job.state==='complete'?'Comparison complete':job.state==='error'?'Comparison failed':job.state==='queued'?'Queued':job.progress?.phase||'Starting worker';
@@ -781,13 +783,13 @@ function analysisColumns(){
 }
 function analysisContext(){
   const mode=$('analysisMode').value,column=$('analysisColumn').value,key=$('analysisKey').value;
-  $('analysisByColumn').setAttribute('aria-pressed',String(mode==='columns'));$('analysisByKey').setAttribute('aria-pressed',String(mode==='keys'));
+  $('analysisByColumn').setAttribute('aria-pressed',String(mode==='columns'));$('analysisByKey').setAttribute('aria-pressed',String(mode==='keys'));$('analysisByPattern').setAttribute('aria-pressed',String(mode==='patterns'));$('analysisKeyControls').hidden=mode==='patterns';$('patternSummary').hidden=mode!=='patterns';
   $('analysisColumnControls').hidden=mode==='keys'&&!column;
-  $('analysisHeading').textContent=key?'Differences for this key':column?`Mismatches in ${column}`:mode==='keys'?'Records to review':'Columns with differences';
+  $('analysisHeading').textContent=mode==='patterns'?'Recurring mismatch patterns':key?'Differences for this key':column?`Mismatches in ${column}`:mode==='keys'?'Records to review':'Columns with differences';
   const activeKey=key?(job.keys.length===1?[key]:JSON.parse(key)):[];
   const keyLabel=key?job.keys.map((name,i)=>`${name}: ${activeKey[i]}`).join(' · '):'';
   $('analysisSelection').textContent=[column?'Column: '+column:'All mismatching columns',keyLabel||'All keys'].join(' · ');
-  $('analysisReset').hidden=!column&&!key;$('analysisReset').textContent=mode==='keys'?'Back to all keys':'Back to all columns';
+  $('analysisReset').hidden=!column&&!key;$('analysisReset').textContent=mode==='patterns'?'Back to all patterns':mode==='keys'?'Back to all keys':'Back to all columns';
   if($('noteScope'))$('noteScope').textContent=column||key?'This note applies to '+$('analysisSelection').textContent+'.':'Choose a column or key above before saving a finding.';
   $('saveNote').disabled=!column&&!key;
 }
@@ -820,7 +822,7 @@ async function loadAnalysis(){
       headers=['Column','Mismatches','Mismatch %','Match %','Inspect'];
       rows=entries.slice(analysisOffset,analysisOffset+50).map(([name,count])=>[name,count,job.summary.matched_keys?(100*count/job.summary.matched_keys).toFixed(4):'N/A',job.summary.matched_keys?(100*(1-count/job.summary.matched_keys)).toFixed(4):'N/A']);
     }else{
-      const params=new URLSearchParams({mode:mode==='keys'&&!column&&key===undefined?'keys':'cells',offset:String(analysisOffset),column});if(key!==undefined)params.set('key',JSON.stringify(key));
+      const params=new URLSearchParams({mode:mode==='patterns'?'patterns':mode==='keys'&&!column&&key===undefined?'keys':'cells',offset:String(analysisOffset),column});if(key!==undefined)params.set('key',JSON.stringify(key));
       $('analysisStatus').textContent='Loading analysis…';$('analysisStatus').classList.add('loading-status');
       const result=await api(`/api/jobs/${id}/analysis?${params}`);if(generation!==analysisGeneration||job?.id!==id||currentView!=='analysisPanel')return;
       if(result.state!=='complete'){$('cancelAnalysis').hidden=false;
@@ -830,12 +832,14 @@ async function loadAnalysis(){
         analysisTimer=setTimeout(()=>{if(currentView==='analysisPanel'&&job?.id===id)loadAnalysis();},1500);return;
       }
       total=result.total;keyStatus=result.key_status;
-      if(params.get('mode')==='keys'){headers=[...job.keys,'Status','Mismatches','Inspect'];rows=result.rows.map(r=>[...JSON.parse(r[0]),({changed:'Values differ',left_only:'Only in File 1',right_only:'Only in File 2'}[r[1]]||r[1]),r[2]]);}
+      if(mode==='patterns'){headers=['Column','Pattern','File 1 value','File 2 value','Occurrences'];rows=result.rows.map(r=>[r[0],r[1],r[2]+(r[5]>1000?' … [truncated]':''),r[3]+(r[6]>1000?' … [truncated]':''),r[4]]);$('patternSummary').textContent=(result.categories||[]).map(([name,count])=>`${name}: ${number(count)} cells`).join(' · ')||'No mismatch patterns in this scope.';}
+      else if(params.get('mode')==='keys'){headers=[...job.keys,'Status','Mismatches','Inspect'];rows=result.rows.map(r=>[...JSON.parse(r[0]),({changed:'Values differ',left_only:'Only in File 1',right_only:'Only in File 2'}[r[1]]||r[1]),r[2]]);}
       else{headers=[...job.keys,'Column','File 1 value','File 2 value'];rows=result.rows.map(r=>[...JSON.parse(r[0]),r[1],r[2]+(r[4]>1000?' … [truncated]':''),r[3]+(r[5]>1000?' … [truncated]':'')]);}
     }
     $('analysisStatus').classList.remove('loading-status');$('cancelAnalysis').hidden=true;
     const head=document.createElement('tr');headers.forEach(value=>{const th=document.createElement('th');th.textContent=value;head.append(th);});table.append(head);
     rows.forEach(row=>{
+      if(mode==='patterns'){const tr=document.createElement('tr');row.forEach((value,i)=>{const td=document.createElement('td');td.textContent=(i===2||i===3)&&value===''?'(empty)':value;if(i===2)td.className='analysis-before';if(i===3)td.className='analysis-after';tr.append(td);});const td=document.createElement('td'),button=document.createElement('button');button.className='subtle';button.textContent='Review column';button.addEventListener('click',()=>{$('analysisColumnSearch').value='';analysisColumns();$('analysisMode').value='columns';$('analysisColumn').value=row[0];analysisOffset=0;loadAnalysis();});td.append(button);tr.append(td);table.append(tr);return;}
       const tr=document.createElement('tr'),isDetails=headers.at(-1)!=='Inspect';
       row.forEach((value,i)=>{const td=document.createElement('td');td.textContent=isDetails&&i>=row.length-2&&value===''?'(empty)':value;if(isDetails&&i===row.length-2)td.className='analysis-before';if(isDetails&&i===row.length-1)td.className='analysis-after';tr.append(td);});
       const td=document.createElement('td'),button=document.createElement('button');button.className='subtle';
@@ -843,12 +847,13 @@ async function loadAnalysis(){
       else{button.textContent='All changes for this key';button.addEventListener('click',()=>{$('analysisMode').value='keys';$('analysisColumn').value='';selectAnalysisKey(row.slice(0,job.keys.length));analysisOffset=0;loadAnalysis();});}
       td.append(button);tr.append(td);table.append(tr);
     });
-    if(headers.at(-1)!=='Inspect'){const th=document.createElement('th');th.textContent='Explore record';head.append(th);}
-    $('analysisStatus').textContent=total?`${number(total)} ${headers.at(-1)==='Inspect'?(mode==='columns'?'columns':'keys'):'mismatched cells'}. ${headers.at(-1)==='Inspect'?'Choose a result below to review it.':'File 1 values are shaded red; File 2 values are shaded green.'}`:keyStatus==='left_only'?'This key exists only in File 1.':keyStatus==='right_only'?'This key exists only in File 2.':keyText?'No recorded differences for this key. It may be equal, excluded, or absent from both files.':column?'No mismatches in this column.':'No results for this view. Try a different column search or switch views.';
+    if(headers.at(-1)!=='Inspect'){const th=document.createElement('th');th.textContent=mode==='patterns'?'Review':'Explore record';head.append(th);}
+    $('analysisStatus').textContent=total?`${number(total)} ${mode==='patterns'?'value-change patterns':headers.at(-1)==='Inspect'?(mode==='columns'?'columns':'keys'):'mismatched cells'}. ${headers.at(-1)==='Inspect'?'Choose a result below to review it.':'File 1 values are shaded red; File 2 values are shaded green.'}`:keyStatus==='left_only'?'This key exists only in File 1.':keyStatus==='right_only'?'This key exists only in File 2.':keyText?'No recorded differences for this key. It may be equal, excluded, or absent from both files.':column?'No mismatches in this column.':'No results for this view. Try a different column search or switch views.';
     $('analysisRange').textContent=total?`${analysisOffset+1}–${Math.min(analysisOffset+50,total)} of ${number(total)}`:'0 results';
     $('analysisPrev').disabled=!analysisOffset;$('analysisNext').disabled=analysisOffset+50>=total;
   }catch(error){$('analysisStatus').classList.remove('loading-status');$('analysisStatus').textContent=error.message;showError(error);}
 }
+$('analysisByPattern').addEventListener('click',()=>resetAnalysis('patterns'));
 $('analysisByColumn').addEventListener('click',()=>resetAnalysis('columns'));
 $('analysisByKey').addEventListener('click',()=>resetAnalysis('keys'));
 $('analysisReset').addEventListener('click',()=>resetAnalysis($('analysisMode').value));
@@ -862,19 +867,21 @@ $('analysisRetry').addEventListener('click',async()=>{try{$('analysisRetry').hid
 
 let valueRules=[];
 $('keysPanel').insertAdjacentHTML('afterbegin',`<section class="feature-box"><h3>Saved comparison profiles</h3><p>Reuse headers, keys, scope, overrides and comparison rules in this workspace.</p><div class="preview-controls"><select id="profileSelect" aria-label="Saved profile"><option value="">Choose profile</option></select><button id="applyProfile" class="subtle">Apply profile</button><input id="profileName" placeholder="Profile name" aria-label="Profile name"><button id="saveProfile" class="subtle">Save current settings</button><button id="deleteProfile" class="subtle">Delete profile</button></div><p id="profileStatus" role="status"></p></section>`);
-$('overridesPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Optional column comparison rules</h3><p>Exact text is the default. Rules never change source values or key matching. Invalid numbers or dates remain mismatches.</p><div class="preview-controls"><label>Column<select id="ruleColumn"></select></label><label><input id="ruleTrim" type="checkbox"> Trim whitespace</label><label><input id="ruleCase" type="checkbox"> Ignore case</label><label>Absolute numeric tolerance<input id="ruleTolerance" placeholder="e.g. 0.01"></label><label>File 1 date format<input id="ruleDateLeft" placeholder="%Y-%m-%d"></label><label>File 2 date format<input id="ruleDateRight" placeholder="%d/%m/%Y"></label><button id="addValueRule" class="subtle">Save column rule</button></div><p>Use Python date formats: %Y year, %m month, %d day, %H hour, %M minute, %S second. Choose tolerance or date formats for a column.</p><div id="valueRuleList"></div></section>`);
+$('overridesPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Optional column comparison rules</h3><p>Exact text is the default. Rules never change source values or key matching. Invalid numbers or dates remain mismatches.</p><div class="preview-controls"><label>Column<select id="ruleColumn"></select></label><label><input id="ruleTrim" type="checkbox"> Trim whitespace</label><label><input id="ruleCase" type="checkbox"> Ignore case</label><label><input id="ruleNumericFormat" type="checkbox"> Ignore numeric formatting (0 = 0.00, -11 = -11.00)</label><label>Absolute numeric tolerance<input id="ruleTolerance" placeholder="e.g. 0.01"></label><label>File 1 date format<input id="ruleDateLeft" placeholder="%Y-%m-%d"></label><label>File 2 date format<input id="ruleDateRight" placeholder="%d/%m/%Y"></label><button id="addValueRule" class="subtle">Save column rule</button></div><p>Use Python date formats: %Y year, %m month, %d day, %H hour, %M minute, %S second. Choose tolerance or date formats for a column.</p><div id="valueRuleList"></div></section>`);
 $('analysisPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Record your finding</h3><p id="noteScope" class="analysis-note-scope"></p><p>Notes apply to the selected column, exact key, or both. They document your review; they do not change mismatch counts. Regenerate reports after editing notes.</p><div class="preview-controls"><select id="noteStatus" aria-label="Classification"><option>Needs investigation</option><option>Expected</option><option>Resolved</option></select><textarea id="noteComment" maxlength="2000" aria-label="Analysis comment" placeholder="Describe your finding"></textarea><button id="saveNote" class="subtle">Save analysis note</button></div><div id="analysisNotes"></div></section>`);
 $('uploadPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><button id="checkSpace" class="subtle">Check server disk space before upload</button><p id="preflightStatus" role="status"></p></section>`);
 function renderValueRules(){
   const editable=job?.state==='ready';$('ruleColumn').replaceChildren();
   for(const column of job?.columns||[])if(!selected.has(column)&&!ignoredColumns.has(column))$('ruleColumn').add(new Option(column,column));
   $('addValueRule').disabled=!editable;$('valueRuleList').replaceChildren();
-  for(const rule of valueRules){const row=document.createElement('p'),label=document.createElement('span'),remove=document.createElement('button');label.textContent=rule.column+' · '+[rule.trim?'Trim':'',rule.ignore_case?'Ignore case':'',rule.tolerance!==undefined?'Tolerance '+rule.tolerance:'',rule.left_date_format?'Dates '+rule.left_date_format+' ↔ '+rule.right_date_format:''].filter(Boolean).join(' · ');remove.textContent='Remove';remove.className='subtle';remove.disabled=!editable;remove.addEventListener('click',async()=>{valueRules=valueRules.filter(r=>r.column!==rule.column);renderValueRules();try{await saveDraft();}catch(e){showError(e);}});row.append(label,remove);$('valueRuleList').append(row);}
+  for(const rule of valueRules){const row=document.createElement('p'),label=document.createElement('span'),remove=document.createElement('button');label.textContent=rule.column+' · '+[rule.trim?'Trim':'',rule.ignore_case?'Ignore case':'',rule.tolerance==='0'?'Ignore numeric formatting':rule.tolerance!==undefined?'Tolerance '+rule.tolerance:'',rule.left_date_format?'Dates '+rule.left_date_format+' ↔ '+rule.right_date_format:''].filter(Boolean).join(' · ');remove.textContent='Remove';remove.className='subtle';remove.disabled=!editable;remove.addEventListener('click',async()=>{valueRules=valueRules.filter(r=>r.column!==rule.column);renderValueRules();try{await saveDraft();}catch(e){showError(e);}});row.append(label,remove);$('valueRuleList').append(row);}
 }
+$('ruleNumericFormat').addEventListener('change',()=>{$('ruleTolerance').disabled=$('ruleNumericFormat').checked;});
 $('addValueRule').addEventListener('click',async()=>{try{
   const rule={column:$('ruleColumn').value,trim:$('ruleTrim').checked,ignore_case:$('ruleCase').checked,left_date_format:$('ruleDateLeft').value,right_date_format:$('ruleDateRight').value};
   if(!rule.column)throw Error('Choose a compared non-key column.');
-  if($('ruleTolerance').value!=='')rule.tolerance=$('ruleTolerance').value;
+  if($('ruleNumericFormat').checked)rule.tolerance='0';
+  else if($('ruleTolerance').value!=='')rule.tolerance=$('ruleTolerance').value;
   await api(endpoint('/validate-rules'),{comparison_rules:[rule],keys:[...selected],ignore_columns:[...ignoredColumns]});
   valueRules=[...valueRules.filter(r=>r.column!==rule.column),rule];await saveDraft();renderValueRules();
 }catch(e){showError(e);}});

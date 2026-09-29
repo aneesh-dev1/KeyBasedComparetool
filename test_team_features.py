@@ -93,6 +93,12 @@ class FeatureTests(unittest.TestCase):
             self.assertIn('Duplicate keys',book.read('xl/workbook.xml').decode())
             self.assertIn('WARNING: duplicate keys',book.read('xl/worksheets/sheet1.xml').decode())
         self.assertIn('Warning: duplicate keys',self.client.request(path+'/download/comparison-report.html').decode())
+    def test_numeric_formatting_option_keeps_other_text_exact(self):
+        path=self.upload(b'id,a,b,text\n001,0,-11,None\n',b'id,a,b,text\n001,0.00,-11.00,none\n')
+        job=self.complete(path,comparison_rules=[dict(column='a',tolerance='0'),dict(column='b',tolerance='0')])
+        self.assertEqual(job['summary']['changed_cells'],1)
+        self.assertEqual(job['summary']['rule_equivalent_cells'],2)
+        self.assertEqual(job['summary']['changed_cells_by_column'],{'a':0,'b':0,'text':1})
     def test_cancel_queued_and_running_tasks(self):
         path=self.upload();job=self.client.request(path);started=threading.Event()
         def wait_for_cancel(identity):

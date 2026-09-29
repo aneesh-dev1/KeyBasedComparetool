@@ -629,3 +629,42 @@ Review notes identify the selected column/key scope before saving.
 Run `node test_analysis_ui.cjs` for the guided navigation interaction checks,
 in addition to the Python analysis API tests. These are DOM simulation checks,
 not a browser rendering test.
+
+### Resume interrupted comparisons
+
+New comparisons keep durable, job-local sort checkpoints. After a restart, open
+the job in Job history and choose **Resume from saved sort batches** in Pipeline
+& logs. SHA-256 checks validate both full source files and saved runs before reuse;
+this requires sequential disk reads, but avoids reparsing and sorting completed
+records. UTF-8/CSV multiline record boundaries are preserved using text-stream
+seek positions. An incomplete sort batch or merge pass is repeated. The final
+comparison is restarted from sorted data and partial result CSVs are replaced,
+never appended. Changed sources/settings or corrupt/missing runs reject resume.
+Worker and sorter locks prevent concurrent reuse, including surviving child
+processes after a forced restart. Keep the same Python runtime when resuming.
+
+Checkpoints consume disk until success, job deletion, or normal retention cleanup.
+During merge, a completed checkpoint remains until the next merge pass commits,
+so allow additional scratch space. Successful server jobs remove their checkpoints.
+Jobs started before this feature have no resumable checkpoints. Source validation
+and checkpoint creation add I/O; 6 GB performance has not been benchmarked.
+
+### Mismatch patterns and numeric formatting
+
+In Analysis, choose **Mismatch patterns**. Recurring File 1 → File 2 pairs are
+ranked by occurrence count, with a column filter and per-category totals. Each
+mismatched cell belongs to one category, in this order: blank → value, value →
+blank, whitespace only, case only, case plus whitespace, numeric formatting, or
+other value change. Patterns describe mismatches; they do not accept or remove them.
+Preparing analysis stores pattern counts in the disk-backed index. Existing
+indexes rebuild on demand. Displayed values are capped at 1,000 characters;
+full-value hashes keep distinct long value pairs separate.
+
+To accept `0` / `0.00` and `-11` / `-11.00`, choose a value column in Value overrides,
+tick **Ignore numeric formatting**, then save the column rule. This uses exact
+decimal equality (zero tolerance). Keys and other columns retain their configured
+comparison rules; leading-zero numeric identifiers should remain exact text.
+Rerun a completed comparison to apply new rules.
+
+HTML sample controls use native expandable dropdowns, without requiring JavaScript
+to show the 20 key samples. Regenerate old exports to get the updated controls.

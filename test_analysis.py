@@ -54,3 +54,23 @@ class AnalysisTests(unittest.TestCase):
                 self.assertFalse(server.app.directory(job['id']).exists())
             finally:
                 server.shutdown();thread.join();server.server_close();server.app.pool.shutdown()
+
+class PatternTests(unittest.TestCase):
+    def test_classification_and_counts(self):
+        from analysis import classify_pattern
+        pairs=[('None','none','Case only'),('','value','Blank → value'),('value','','Value → blank'),(' x ','x','Whitespace only'),(' A ','a','Case and whitespace'),('001','1.0','Numeric formatting'),('NaN','nan','Case only'),('5','6','Other value change')]
+        for left,right,label in pairs:self.assertEqual(classify_pattern(left,right),label)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with (root/'differences.csv').open('w',newline='') as stream:
+                writer=csv.writer(stream);writer.writerow(['key_json','column','left_value','right_value'])
+                for i in range(3):writer.writerow([json.dumps([str(i)]),'status','None','none'])
+                writer.writerow(['["7"]','number','001','1.0'])
+                writer.writerow(['["8"]','status','','value'])
+            for name in ('left_only','right_only'):(root/(name+'.csv')).write_text('id\n')
+            build_index(root,root/'index.sqlite',lambda _:None)
+            result=query_index(root/'index.sqlite','patterns')
+            self.assertEqual(result['total'],3);self.assertEqual(result['rows'][0][:5],('status','Case only','None','none',3))
+            filtered=query_index(root/'index.sqlite','patterns',column='status')
+            self.assertEqual(filtered['total'],2);self.assertEqual(dict(filtered['categories']),{'Case only':3,'Blank → value':1})
+            self.assertEqual(query_index(root/'index.sqlite','patterns',column="' OR 1=1 --")['total'],0)

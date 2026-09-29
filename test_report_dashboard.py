@@ -50,6 +50,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('&lt;script&gt;x&lt;/script&gt;',text)
         self.assertNotIn('<script>x</script>',text)
         self.assertIn('id="sample-0"',text)
+        self.assertIn('<summary>View 1 keys</summary>',text)
+        self.assertNotIn('class="sample-link"',text)
+        self.assertIn('#columnStats > tbody > tr',text)
     def test_exact_bands_and_escape(self):
         from reports import match_bands
         self.summary.update(matched_keys=1000000,changed_cells_by_column={'perfect':0,'rounded':1,'99':10000,'below99':10001,'95':50000,'below95':50001})
