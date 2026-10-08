@@ -917,6 +917,7 @@ $('applyProfile').addEventListener('click',()=>applyProfile($('profileSelect').v
 $('quickProfile').addEventListener('change',async()=>{
   if(job?.state==='ready'&&$('quickProfile').value){try{await applyProfile($('quickProfile').value);}catch(error){showError(error);}}
   else $('quickProfileStatus').textContent=$('quickProfile').value?'Template will be applied after files and worksheets are loaded.':'No template selected.';
+  document.querySelector('.upload-profile').open=false;
 });
 async function applyPendingUploadProfile(){
   if(job?.state!=='ready')return;
@@ -927,7 +928,10 @@ async function applyPendingUploadProfile(){
   finally{localStorage.removeItem(key);}
 }
 loadProfiles().catch(showError);
-$('manageProfiles').addEventListener('click',()=>goView('profilesPanel').catch(showError));
+$('manageProfiles').addEventListener('click',()=>{document.querySelector('.upload-profile').open=false;goView('profilesPanel').catch(showError);});
+document.querySelector('.upload-profile').addEventListener('keydown',event=>{
+  if(event.key==='Escape'){event.currentTarget.open=false;event.currentTarget.querySelector('summary').focus();}
+});
 $('deleteProfile').addEventListener('click',async()=>{try{if(!confirm('Delete this saved profile? Existing jobs are unaffected.'))return;await api('/api/profiles',{id:$('profileSelect').value},'DELETE');await loadProfiles();}catch(e){showError(e);}});
 $('headerContinue').addEventListener('click',()=>setTimeout(()=>loadProfiles().catch(showError),300));
 async function cancelTask(id,kind){if(!confirm(`Cancel ${kind}? Active work will stop at its next safe checkpoint.`))return;try{const result=await api(`/api/jobs/${id}/cancel`,{kind});$('completionNotice').textContent=result.message;if(job?.id===id)await refresh();}catch(e){showError(e);}}

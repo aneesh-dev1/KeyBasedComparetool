@@ -684,3 +684,5 @@ Analysis keeps its column browser beside the scrollable results grid on desktop.
 Keys & scope and Column headers keep explanatory text in help disclosures available on hover, keyboard focus or click. Header apply/reset actions sit at the top. Desktop scope setup uses three bounded panels with the continuation action below.
 
 Choose an optional profile on Files before upload. It applies automatically once CSV headers or the selected Excel worksheets are ready; schema errors are reported for manual correction. Header rows display the original name and editable comparison name side by side.
+
+The profile picker is the template icon beside **Upload & continue**, after the two file cards. This keeps the upload canvas wide while preserving profile selection in the Files phase.
