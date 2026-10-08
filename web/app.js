@@ -951,3 +951,12 @@ async function pollNotifications(){
  try{const result=await api('/api/activity'),next=new Map();for(const item of result.activities){const id=item.id+':'+item.kind;next.set(id,item.state);const old=notificationSnapshot?.get(id);if(notificationSnapshot&&old!==item.state&&(old||item.changed_at>=notificationSince)&&['complete','error','cancelled'].includes(item.state)){const message=`${item.kind}: ${item.state==='complete'?'Completed':item.state==='error'?'Failed':'Cancelled'}`;$('completionNotice').textContent=message;if('Notification' in window&&Notification.permission==='granted')new Notification('Comparison tool',{body:message,tag:id});}}notificationSnapshot=next;}catch(e){/* Transient network failure; retry on the next interval. */}finally{notificationPolling=false;}
 }
 setInterval(pollNotifications,10000);pollNotifications();
+
+// Guidance works with pointer hover, keyboard focus and touch disclosure.
+for(const help of document.querySelectorAll('.inline-help')){
+  help.addEventListener('pointerenter',()=>{help.open=true;});
+  help.addEventListener('pointerleave',()=>{if(!help.contains(document.activeElement))help.open=false;});
+  help.addEventListener('focusin',()=>{help.open=true;});
+  help.addEventListener('focusout',event=>{if(!help.contains(event.relatedTarget))help.open=false;});
+  help.addEventListener('keydown',event=>{if(event.key==='Escape'){help.open=false;event.stopPropagation();}});
+}

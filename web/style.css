@@ -273,3 +273,35 @@ main>footer{display:none}.panel{padding:18px}.section-title{margin-bottom:14px}.
   .review-comments{padding:10px 12px;margin-top:8px}
   .review-comments[open]{max-height:45dvh;overflow:auto}
 }
+
+/* Setup controls remain visible; guidance is available on hover, focus or click. */
+.panel{padding:22px}.section-title{gap:18px;margin-bottom:18px}.file-grid{gap:24px}.file-card{padding:22px}.file-top{margin-bottom:16px}.settings{gap:20px}.panel-footer{padding-top:16px;margin-top:18px}
+.header-actions,.scope-title-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.inline-help{display:inline-block;position:relative;vertical-align:middle;margin:0 4px;color:var(--accent)}
+.inline-help>summary,.profile-popover>summary{list-style:none;cursor:pointer;border:1px solid var(--line);border-radius:50%;width:26px;height:26px;display:grid;place-items:center;background:white;color:var(--accent)}
+.inline-help>summary::-webkit-details-marker,.profile-popover>summary::-webkit-details-marker{display:none}
+.inline-help .help-content{display:none;position:absolute;z-index:40;top:100%;left:0;width:260px;max-width:70vw;padding:14px;background:#1b425b;color:white;border-radius:8px;box-shadow:0 6px 24px #163d5433}
+.inline-help:hover .help-content,.inline-help:focus-within .help-content,.inline-help[open] .help-content{display:block}
+.inline-help .help-content p{font-size:12px;line-height:1.6;color:white;margin:0}
+.inline-help summary:focus-visible,.profile-popover summary:focus-visible{outline:3px solid var(--brand-cyan);outline-offset:2px}
+.profile-popover{position:relative}.profile-popover>summary{border-radius:7px;width:36px;height:36px;font-size:20px}
+.profile-popover-content{position:absolute;right:0;top:44px;width:320px;max-width:75vw;background:white;border:1px solid var(--line);box-shadow:0 8px 28px #163d5426;padding:18px;z-index:35;border-radius:10px}
+.profile-popover-content select{width:100%;margin:10px 0}.profile-popover-content button{margin:4px 0}.profile-popover-content p{font-size:12px;margin-top:8px}
+.scope-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:16px}.scope-card{padding:16px;border:1px solid var(--line);border-radius:9px;min-width:0;background:#fbfdfe}
+.scope-grid .scope-options,.scope-grid .ignore-key-input{margin:0;border-top:1px solid var(--line);padding:16px}
+.scope-card h3,.scope-card h2{font-size:15px;margin:0 0 12px}.scope-card .section-title{margin-bottom:12px;gap:6px}.scope-card .pill{padding:5px;font-size:10px}
+.scope-card .key-list{grid-template-columns:1fr;max-height:clamp(110px,calc(100dvh - 530px),250px);overflow:auto}.scope-card .key-option{padding:8px 10px}.scope-card .search{padding:9px;margin-bottom:10px}
+.scope-card .list-navigation{flex-wrap:wrap;gap:4px;font-size:10px}.scope-card .list-navigation button{padding:5px;font-size:10px}.scope-card .selected-keys{margin-top:10px;font-size:11px}
+.scope-card #containerChoices{max-height:120px;overflow:auto;margin-bottom:14px}.scope-card textarea{width:100%;min-height:70px;resize:vertical}.scope-card label{font-size:12px}.scope-card .help-content{left:auto;right:0}
+#keysPanel>.settings{align-items:center;margin:16px 0 0}#keysPanel>.settings label{flex:0 1 240px}#keysPanel>.section-title h2{display:inline-block;margin-right:6px}
+#headersPanel>.rule-explanation{margin:8px 0}#headersPanel .header-editors{max-height:calc(100dvh - 430px);overflow:auto}
+@media(max-width:1000px){.scope-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.scope-card.ignore-key-input{grid-column:1/-1}}
+@media(max-width:650px){.scope-grid{grid-template-columns:1fr}.scope-card.ignore-key-input{grid-column:auto}.header-actions{width:100%}.panel{padding:16px}.scope-card .key-list{max-height:180px}}
+.scope-card .with-help{display:inline-block;margin-right:4px}.scope-card .section-title>div{min-width:0}.scope-card .key-list{max-height:clamp(100px,calc(100dvh - 630px),220px)}
+.scope-card.ignore-key-input>label{display:inline;font-size:12px}.scope-card.ignore-key-input>textarea{display:block;margin:10px 0}
+#keysPanel .scope-grid{margin-top:10px}#keysPanel .scope-card .section-title{min-height:26px}
+#keysPanel>.settings{margin-top:14px}#keysPanel .panel-footer{margin-top:14px;padding-top:12px}
+#headersPanel .with-help{display:inline-block;margin-right:6px}#headersPanel .header-actions .pill{display:none}
+#headersPanel .header-editors{max-height:calc(100dvh - 390px);padding-right:4px;gap:22px}#headersPanel .header-editors>section{padding:16px;background:#fbfdfe;border:1px solid var(--line);border-radius:9px}
+#headersPanel .header-editors h3{margin:0 0 8px}#headersPanel .header-editors p{margin-bottom:12px}#headerLayoutStatus{font-size:12px;line-height:1.5;padding:10px 12px;margin-bottom:14px}
+@media(min-width:801px){#headersPanel .header-editors{max-height:calc(100dvh - 465px)}}

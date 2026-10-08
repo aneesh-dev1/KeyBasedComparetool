@@ -584,7 +584,7 @@ HTML summary callouts and the Excel audit sheet, with a link from File Summary.
   sorts or ZIP operations may take time to finish their current operation.
   Comparison/import cancellation requires a new comparison; cancelled exports
   and analysis can be generated again. Uploaded files remain until job cleanup.
-- **Profiles:** save/apply/delete named profiles in the Profiles page; select one after upload in Column headers. They include
+- **Profiles:** save/apply/delete named profiles in the Profiles page; select one using the template icon in Keys & scope. They include
   header aliases by original name, keys, ignored columns/keys/containers, value
   overrides and optional comparison rules. Performance belongs in Settings. Profiles are private
   to the browser workspace; saving the same name replaces it. Missing profile
@@ -680,3 +680,5 @@ Analysis shows a browsable, paged list of mismatching columns, with optional fil
 Navigation starts collapsed on each page load. Expand it using the bottom toggle; narrow screens use a drawer, and reduced-motion preferences disable the transition. The expanded logo sits directly on the navy background. Redundant sidebar storage text and the upload-page disk-check button have been removed; storage management remains in Storage & queue.
 
 Analysis keeps its column browser beside the scrollable results grid on desktop. Comments and guidance expand when needed. Smaller screens stack the panels to keep controls readable rather than compressing them.
+
+Keys & scope and Column headers keep explanatory text in help disclosures available on hover, keyboard focus or click. Header apply/reset actions sit at the top. Desktop scope setup uses three bounded panels with the continuation action below.
