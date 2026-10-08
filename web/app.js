@@ -14,7 +14,11 @@ let overrideRules=[], currentView='uploadPanel', hydratedId=null, historyOffset=
 let logCursor=0, logText='', logJobId=null;
 let viewingHistoryJob=false;
 let keyContainers=[], selectedContainers=new Set();
-const phaseLabels=['Files','Column headers','Keys & scope','Value overrides','File preview','Pipeline & logs','Results','Analysis'];
+$('scopeNext').innerHTML='Start comparison <span>→</span>';
+$('sourcePanel').insertAdjacentHTML('beforeend','<div class="panel-footer"><button id="previewBack" class="subtle">Back to Keys & scope</button><button id="compare" class="primary" disabled>Start comparison →</button></div>');
+$('analysisPanel').insertAdjacentHTML('afterbegin','<button id="reviewOverrides" class="subtle review-overrides-action">Review value overrides</button>');
+const phaseLabels=['Files','Column headers','Keys & scope','Pipeline & logs','Results','Analysis'];
+const phaseViews=['uploadPanel','headersPanel','keysPanel','runningPanel','results','analysisPanel'];
 const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',sourcePanel:'navPreview',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',settingsPanel:'navSettings'};
 const number = value => Number(value).toLocaleString();
 const bytes = value => value >= 1024**3 ? `${(value / 1024**3).toFixed(2)} GB` : value >= 1024**2 ? `${(value / 1024**2).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
@@ -36,7 +40,7 @@ function syncNavigation(){
   const ready=job?.state==='ready';
   $('navHeaders').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
   $('navScope').disabled=!ready||uploading||job.headers_reviewed===false;
-  $('navOverrides').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
+  $('navOverrides').disabled=job?.state!=='complete'||uploading;
   $('navPreview').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
   $('navPipeline').disabled=!job||!['queued','running','complete','error','cancelled'].includes(job.state);
   if(ready&&job.headers_reviewed===false){$('navOverrides').disabled=$('navPreview').disabled=true;}
@@ -60,8 +64,8 @@ function panel(name) {
   for(const id of ['navNew','navJson','navContainers','navHistory','navDocs','navStorage','navProfiles','navSettings']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
   if(typeof closeSidebarDrawer==='function')closeSidebarDrawer();
   $('flowTitle').textContent=viewingHistoryJob?'Saved comparison':'New comparison';
-  const phase=Object.keys(views).indexOf(name);
-  if(!history&&!library)$('phaseLabel').textContent=`Step ${phase+1} of 8 · ${phaseLabels[phase]}`;
+  const phase=phaseViews.indexOf(name);
+  if(!history&&!library)$('phaseLabel').textContent=name==='overridesPanel'?'Review · Value overrides':name==='sourcePanel'?'Optional · File preview':`Step ${phase+1} of 6 · ${phaseLabels[phase]}`;
   for(const [id,control] of Object.entries(views)){
     if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'&&id!=='storagePanel'&&id!=='profilesPanel'&&id!=='settingsPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
   }
@@ -225,11 +229,13 @@ $('keyPrev').addEventListener('click',()=>{keyPage--;renderKeys();});
 $('keyNext').addEventListener('click',()=>{keyPage++;renderKeys();});
 $('ignorePrev').addEventListener('click',()=>{ignorePage--;renderIgnoredColumns();});
 $('ignoreNext').addEventListener('click',()=>{ignorePage++;renderIgnoredColumns();});
-$('compare').addEventListener('click',async()=>{
-  clearError();$('compare').disabled=true;
+async function startComparison(){
+  if(job?.state!=='ready'||!selected.size||$('compare').disabled)return;
+  clearError();$('compare').disabled=$('scopeNext').disabled=true;
   try {job=await api(endpoint('/start'),configuration());panel('runningPanel');await refresh();}
-  catch(error){showError(error);$('compare').disabled=false;}
-});
+  catch(error){showError(error);$('compare').disabled=$('scopeNext').disabled=false;}
+}
+$('compare').addEventListener('click',startComparison);
 function renderSummary() {
   const s=job.summary;
   const changes=Object.entries(s.changed_cells_by_column).filter(([,count])=>count>0).sort((a,b)=>b[1]-a[1]);
@@ -407,8 +413,18 @@ $('reset').addEventListener('click',()=>{localStorage.removeItem('keywise-job');
   }
 })();
 
-$('scopeNext').addEventListener('click',()=>goView('overridesPanel').catch(showError));
-$('overrideBack').addEventListener('click',()=>goView('keysPanel').catch(showError));
+$('scopeNext').addEventListener('click',startComparison);
+$('previewBack').addEventListener('click',()=>goView(job?.state==='ready'?'keysPanel':job?.state==='complete'?'results':'runningPanel').catch(showError));
+$('overrideBack').addEventListener('click',()=>goView('analysisPanel').catch(showError));
+$('reviewOverrides').addEventListener('click',()=>goView('overridesPanel').catch(showError));
+$('reviewCompare').addEventListener('click',async()=>{
+  clearError();$('reviewCompare').disabled=true;
+  try{
+    job=await api(endpoint('/review-copy'),{value_overrides:overrideRules});
+    localStorage.setItem('keywise-job',job.id);hydratedId=null;headerDraftJob=null;renderedId=null;hydrate();
+    job=await api(endpoint('/start'),configuration());panel('runningPanel');await refresh();
+  }catch(error){if(job?.state==='ready'){panel('keysPanel');renderKeys();renderIgnoredColumns();}showError(error);}finally{$('reviewCompare').disabled=job?.state!=='complete';}
+});
 function renderOverrideColumns(){
   const previous=$('overrideColumn').value;
   const search=$('overrideSearch').value.toLowerCase();
@@ -420,9 +436,9 @@ function renderOverrideColumns(){
 }
 $('overrideSearch').addEventListener('input',renderOverrideColumns);
 function renderOverrides(){
-  const locked=job.state!=='ready';
+  const locked=!['ready','complete'].includes(job.state);
   document.querySelector('.rule-builder').hidden=locked;
-  $('overrideBack').hidden=$('compare').hidden=locked;
+  $('overrideBack').hidden=locked;$('reviewCompare').disabled=job.state!=='complete';
   $('overrideTable').replaceChildren();
   const row=document.createElement('tr');
   for(const name of ['Column','File 1 value','File 2 value','Action']){const th=document.createElement('th');th.textContent=name;row.append(th);}
@@ -496,6 +512,21 @@ $('historyPrev').addEventListener('click',()=>{historyOffset=Math.max(0,historyO
 $('historyNext').addEventListener('click',()=>{historyOffset+=25;loadHistory().catch(showError);});
 
 const sidebarMedia=matchMedia('(max-width: 800px)');
+// A single line-icon style keeps destinations distinct in the compact rail.
+const navigationIcons={
+  navNew:'<rect x="3" y="4" width="7" height="16" rx="2"/><rect x="14" y="4" width="7" height="16" rx="2"/><path d="M6 8h1m10 8h1M8 12h8m-2-2 2 2-2 2"/>',
+  navJson:'<path d="M8 4H6a2 2 0 0 0-2 2v3l-2 3 2 3v3a2 2 0 0 0 2 2h2m8-16h2a2 2 0 0 1 2 2v3l2 3-2 3v3a2 2 0 0 1-2 2h-2M10 9l-2 3 2 3m4-6 2 3-2 3"/>',
+  navProfiles:'<rect x="7" y="7" width="14" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2m4-5h6m-6 4h6m-6 3h3"/>',
+  navSettings:'<path d="M4 7h8m4 0h4M4 17h3m4 0h9"/><circle cx="14" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+  navContainers:'<path d="M3 7l9-4 9 4-9 4-9-4Zm0 0v10l9 4 9-4V7M12 11v10m-5-5h3"/>',
+  navStorage:'<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M12 6.5h5M12 17.5h5"/>',
+  navHistory:'<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6M12 7v5l3 2"/>',
+  navDocs:'<path d="M12 6v15M3 4h5a5 5 0 0 1 4 2 5 5 0 0 1 4-2h5v15h-5a5 5 0 0 0-4 2 5 5 0 0 0-4-2H3V4Zm3 4h2m8 0h2M6 12h2m8 0h2"/>'
+};
+for(const [id,paths] of Object.entries(navigationIcons)){
+  const icon=$(id).querySelector('.side-icon');
+  if(icon)icon.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
 let desktopSidebarCollapsed=true;
 function hideSidebarTip(){
   $('sidebarTooltip').hidden=true;

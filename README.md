@@ -35,8 +35,10 @@ Open **http://127.0.0.1:8765**. No third-party packages are required.
 
 The sidebar groups **New comparison** and **JSON comparison** under Compare,
 and **Ignore key containers** and **Job history** under Manage. Files, Column
-headers, Keys & scope, Value overrides, File preview, Pipeline & logs, and Results
-are phases within New comparison. The bottom **Collapse sidebar** control switches
+headers, Keys & scope, Pipeline & logs, Results, and Analysis
+are the six phases within New comparison. **Preview files** is optional; start
+comparison directly from Keys & scope. **Review value overrides** is available
+from Analysis after comparison. The bottom **Collapse sidebar** control switches
 to a compact icon rail; hover or keyboard-focus an icon to see its label. Desktop
 collapse preferences are remembered after refreshing. On screens up to 800 px,
 the sidebar starts as an icon rail. Expanding opens a navigation drawer; selecting
@@ -266,7 +268,7 @@ all-value-column exclusion, validation errors, API input and filtered exports.
 
 ## Value overrides
 
-Select a compared non-key column, enter the exact **File 1 value** and **File 2
+From Analysis, choose **Review value overrides**. Select a compared non-key column, enter the exact **File 1 value** and **File 2
 value**, and click **Add rule**. Add multiple rules for one or several columns.
 For example, `status: None → none` accepts file 1's literal `None` paired with
 file 2's literal `none` for the same key. It does not accept the reverse pair or
@@ -282,8 +284,11 @@ list and the number of unequal cells accepted by overrides.
 
 Draft settings are saved when moving between comparison phases and when adding or
 removing a rule. Once a comparison is started, its configuration is immutable.
-Saved overrides remain viewable for older comparisons. To change a completed
-comparison, start a new one.
+Choose **Compare again with overrides** to create a separate run using the same
+uploaded files, without re-uploading. The server links the finalized inputs to
+the new job; this requires hard-link support in the data filesystem. Original
+results remain unchanged in Job history. Saved profile overrides still apply
+when a template is selected during upload.
 
 CLI example:
 
@@ -294,7 +299,13 @@ python3 compare.py left.csv right.csv --keys id --output results \
 
 ## File previews, pipeline, and job history
 
-**File Preview** reads only the requested first 1–1,000 rows per file. It shows
+HTML exports use a compact desktop dashboard: summary cards stay visible while
+section buttons switch between overview, mismatching columns, matching columns,
+ignored keys and containers, and review notes. Long lists scroll within the detail
+area. Mismatch samples remain expandable. Printing includes every section; small
+screens allow natural scrolling for readability.
+
+The optional **Preview files** action reads only the requested first 1–1,000 rows per file. It shows
 original file order, before exclusions/overrides, without aligning rows by key.
 Twenty columns are returned per page; use Previous/Next columns to inspect wide
 files. Cells are limited to 500 displayed characters, and responses are capped
@@ -660,7 +671,7 @@ Preparing analysis stores pattern counts in the disk-backed index. Existing
 indexes rebuild on demand. Displayed values are capped at 1,000 characters;
 full-value hashes keep distinct long value pairs separate.
 
-To accept `0` / `0.00` and `-11` / `-11.00`, choose a value column in Value overrides,
+To accept `0` / `0.00` and `-11` / `-11.00`, choose a value column in Settings,
 tick **Ignore numeric formatting**, then save the column rule. This uses exact
 decimal equality (zero tolerance). Keys and other columns retain their configured
 comparison rules; leading-zero numeric identifiers should remain exact text.

@@ -531,6 +531,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({'error': 'Comparison not found in this browser workspace'}, 404)
             self.authorized_job = identity
             directory = self.app.directory(identity)
+            if action == 'review-copy' and self.command == 'POST':
+                config=self.body()
+                with self.app.lock:
+                    job=self.app.load(identity)
+                    if job['state']!='complete':raise ValueError('Complete a comparison before reviewing overrides')
+                    rules,_=validate_overrides(config.get('value_overrides',[]),job['columns'],job['keys'],job.get('ignore_columns',[]))
+                    new_id=uuid.uuid4().hex
+                    target=self.app.directory(new_id)
+                    target.mkdir()
+                    try:
+                        # Finalized inputs are immutable. Linking keeps review runs from copying gigabytes.
+                        for side in ('left','right'):
+                            os.link(directory/f'{side}.csv',target/f'{side}.csv')
+                        fields=('owner','files','delimiter','encoding','source_headers','column_headers','columns','header_changes','header_layout_changes')
+                        copy={k:job[k] for k in fields if k in job}
+                        draft={k:job[k] for k in ('keys','ignore_columns','ignore_keys','ignore_container_ids','comparison_rules','duplicate_policy') if k in job}
+                        draft['value_overrides']=rules
+                        copy.update(id=new_id,state='ready',created=time.time(),exports={},headers_reviewed=True,draft=draft,review_of=identity)
+                        self.app.save(copy)
+                    except Exception:
+                        shutil.rmtree(target)
+                        raise
+                return self.json_response(copy,201)
             if action == 'validate-rules' and self.command == 'POST':
                 config=self.body()
                 return self.json_response(dict(rules=validate_rules(config.get('comparison_rules',[]),job.get('columns',[]),config.get('keys',[]),config.get('ignore_columns',[]))))

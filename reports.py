@@ -12,7 +12,7 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 9
+REPORT_VERSION = 10
 
 STYLE = '''body{font:15px system-ui,sans-serif;color:#004364;background:#f7f9fa;margin:40px auto;max-width:1200px;padding:0 24px}h1{font-size:32px}a{color:#007b99}table{border-collapse:collapse;width:100%;background:white;margin:20px 0}th,td{padding:12px;border:1px solid #dce5eb;text-align:left;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}th{background:#e6f6fa}nav{display:flex;gap:24px}p{line-height:1.6}'''
 
@@ -105,6 +105,10 @@ body>header{display:flex;align-items:center;justify-content:space-between;backgr
 .cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:24px 0}.card,section{background:white;border:1px solid #dce5eb;border-radius:12px;padding:22px;margin-bottom:22px}.card{margin:0;border-top:4px solid #00a6ca}.card strong{display:block;font-size:30px;margin:10px 0}.card small,.muted{color:#59717d}
 h2{font-size:21px;margin:0 0 15px}h3{font-size:16px}.overview{display:grid;grid-template-columns:1fr 1fr;gap:24px}.chart-wrap{display:flex;align-items:center;gap:26px;flex-wrap:wrap}.pie{width:220px;max-width:100%;height:auto}.legend{list-style:none;padding:0;flex:1}.legend li{padding:10px 0;border-bottom:1px solid #e5edf0;display:flex;gap:10px;align-items:center}.swatch{width:12px;height:12px;border-radius:50%;flex-shrink:0}.legend strong{margin-left:auto}.source{overflow-wrap:anywhere;padding:10px 0}.source strong{display:block}.callout{background:#fff9df;border-left:5px solid #e5bd25}.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{background:#e9f6f7;border:1px solid #c7e8eb;padding:7px 10px;border-radius:6px;color:#006779}.table-wrap{overflow:auto}table{margin:12px 0;font-size:13px}th{background:#004364;color:white;white-space:normal}td{border-width:0 0 1px;padding:11px}tr:nth-child(even){background:#f6fafb}.count{font-variant-numeric:tabular-nums}.container{border:1px solid #e5d79c;background:#fffdf3;border-radius:9px;padding:18px;margin:12px 0}.container summary{cursor:pointer;font-weight:650}input{font:inherit;border:1px solid #afc8d2;border-radius:6px;padding:10px;width:300px;max-width:100%}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}.print{background:#007b99;color:white;border:0;border-radius:6px;padding:10px 18px;cursor:pointer}footer{padding:12px 0 30px;font-size:12px;color:#59717d}.rate-note{font-size:12px}.mismatch-sample{border:1px solid #dce5eb;border-radius:8px;margin:10px 0;padding:14px}.sample-dropdown{width:min(650px,70vw);min-width:260px}.mismatch-sample summary{cursor:pointer;font-weight:650;overflow-wrap:anywhere}.sample-before{background:#fff0ed}.sample-after{background:#eaf7f3}.badge{font-size:12px;border-radius:5px;padding:5px 9px;background:#e9f6f7;display:inline-block}
 @media(max-width:850px){body{padding:16px}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.overview{grid-template-columns:1fr}.hero h1{font-size:28px}}
+.report-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.report-tabs button{font:inherit;font-size:12px;border:1px solid #b6ced8;background:white;color:#004364;border-radius:7px;padding:10px 14px;cursor:pointer}.report-tabs button[aria-pressed=true]{background:#004364;color:white}.report-tabs button:focus-visible{outline:3px solid #00a6ca;outline-offset:2px}
+@media screen{body.compact-report{box-sizing:border-box;max-width:none;height:100dvh;padding:18px 24px;display:flex;flex-direction:column;overflow:hidden}.compact-report>header{padding:10px 16px!important;margin-bottom:10px!important;flex-shrink:0}.compact-report main{display:flex;flex-direction:column;flex:1;min-height:0}.compact-report .hero{padding:14px 20px;margin:0}.compact-report .hero h1{font-size:25px;margin:4px 0}.compact-report .hero p{margin:4px 0}.compact-report .cards{gap:10px;margin:12px 0}.compact-report .card{padding:12px 16px}.compact-report .card strong{font-size:25px;margin:5px 0}.compact-report .report-panels{min-height:0;flex:1;overflow:auto;overscroll-behavior:contain}.compact-report .report-inactive{display:none!important}.compact-report section{padding:18px;margin-bottom:0}.compact-report footer{font-size:10px;padding:8px 0 0}.compact-report .overview{gap:14px}.compact-report .pie{width:170px}.compact-report .legend li{padding:6px 0}.compact-report th{position:sticky;top:0}.compact-report .table-wrap{max-width:100%}}
+@media screen and (max-width:700px){body.compact-report{padding:12px;min-height:100dvh;height:auto;overflow:auto}.compact-report .report-panels{max-height:65dvh;flex:auto}.compact-report .hero h1{font-size:22px}.compact-report .report-tabs button{padding:8px}.compact-report .card{padding:10px}}
+@media print{.report-tabs{display:none}.report-panels{overflow:visible!important}.report-inactive{display:block!important}}
 @media print{body{background:white;padding:0;font-size:11px}.print,input,.search-label{display:none!important}.hero,th,.swatch,.chip{-webkit-print-color-adjust:exact;print-color-adjust:exact}section{break-inside:auto}.card,.container,.hero{break-inside:avoid}.cards{gap:8px}.card{padding:12px}.card strong{font-size:23px}.table-wrap{overflow:visible}tr{break-inside:avoid}thead{display:table-header-group}[hidden]{display:table-row!important}a{color:inherit;text-decoration:none}}
 '''
 
@@ -184,6 +188,18 @@ def make_summary_html(summary, samples=None):
         out += '<section><h2>Analysis classifications &amp; comments</h2><div class="table-wrap"><table>'+''.join(html_row(row,i==0) for i,row in enumerate(note_rows(summary)))+'</table></div></section>'
     out += '''<footer>TransUnion · Data comparison report · Generated by the comparison tool</footer></main><script>
 const search=document.getElementById('columnSearch');search.addEventListener('input',()=>{document.querySelectorAll('#columnStats > tbody > tr').forEach(r=>r.hidden=!r.cells[0].textContent.toLowerCase().includes(search.value.toLowerCase()));});
+const main=document.querySelector('main'),panels=[...main.children].filter(e=>e.matches('.overview,section'));
+const tabs=document.createElement('nav');tabs.className='report-tabs';tabs.setAttribute('aria-label','Report sections');
+const area=document.createElement('div');area.className='report-panels';
+main.insertBefore(tabs,panels[0]);main.insertBefore(area,panels[0]);
+const buttons=panels.map((panel,i)=>{
+  const button=document.createElement('button');button.type='button';
+  button.textContent=panel.classList.contains('overview')?'Overview':panel.id==='statistics'?'Mismatching columns':panel.id==='matching'?'Matching columns':panel.id==='scope'?'Ignored keys & containers':panel.querySelector('h2').textContent;
+  if(!panel.id)panel.id='report-panel-'+i;button.setAttribute('aria-controls',panel.id);
+  button.addEventListener('click',()=>selectPanel(i));tabs.append(button);area.append(panel);return button;
+});
+function selectPanel(index){panels.forEach((panel,i)=>{panel.classList.toggle('report-inactive',i!==index);buttons[i].setAttribute('aria-pressed',String(i===index));});area.scrollTop=0;}
+document.body.classList.add('compact-report');selectPanel(0);
 let opened=[];window.addEventListener('beforeprint',()=>{opened=[...document.querySelectorAll('.container details:not([open])')];opened.forEach(d=>d.open=true);});window.addEventListener('afterprint',()=>opened.forEach(d=>d.open=false));
 </script></body></html>'''
     return out

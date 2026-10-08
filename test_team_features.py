@@ -79,6 +79,15 @@ class FeatureTests(unittest.TestCase):
         self.assertTrue(self.client.request('/api/activity')['activities'])
         self.assertEqual(self.other.request('/api/activity')['activities'],[])
         with self.assertRaises(HTTPError):self.other.request(path+'/annotations')
+    def test_review_copy_preserves_original_and_reuses_inputs(self):
+        path=self.upload();original=self.complete(path)
+        new=self.client.request(path+'/review-copy',dict(value_overrides=[dict(column='v',left='old',right='new')]))
+        self.assertEqual(new['review_of'],original['id'])
+        with self.assertRaises(HTTPError):self.other.request(path+'/review-copy',dict(value_overrides=[]))
+        result=self.complete('/api/jobs/'+new['id'],**{k:v for k,v in new['draft'].items() if k!='keys'})
+        self.assertEqual(result['summary']['changed_cells'],0)
+        self.assertEqual(self.client.request(path)['summary']['changed_cells'],1)
+        self.assertEqual((self.server.app.directory(new['id'])/'left.csv').stat().st_ino,(self.server.app.directory(original['id'])/'left.csv').stat().st_ino)
     def test_comparison_rules_and_duplicate_diagnostics(self):
         path=self.upload(b'id,amount,date,text\n001,1.00,2026-09-28, Hello \n',b'id,amount,date,text\n001,1.04,28/09/2026,hello\n')
         rules=[dict(column='amount',tolerance='0.05'),dict(column='date',left_date_format='%Y-%m-%d',right_date_format='%d/%m/%Y'),dict(column='text',trim=True,ignore_case=True)]

@@ -60,5 +60,12 @@ await vm.runInContext("generateAndDownload('html')",context);assert.equal(contex
 vm.runInContext(`globalThis.pendingProfile='template-1';globalThis.appliedProfiles=[];localStorage.getItem=()=>pendingProfile;localStorage.removeItem=()=>{pendingProfile=null};applyProfile=async id=>appliedProfiles.push(id);job.state='preparing';`,context);
 await vm.runInContext('applyPendingUploadProfile()',context);assert.equal(context.appliedProfiles.length,0);
 vm.runInContext("job.state='ready'",context);await vm.runInContext('applyPendingUploadProfile()',context);await vm.runInContext('applyPendingUploadProfile()',context);assert.deepEqual(Array.from(context.appliedProfiles),['template-1']);
-console.log('Analysis UI: mismatch-only columns, search, composite key lookup, value styling, review scope and back navigation passed.');
+// Setup starts comparison directly; preview is not a prerequisite.
+vm.runInContext(`job={id:'direct',state:'ready'};selected.clear();selected.add('id');$('compare').disabled=false;globalThis.starts=[];api=async(path,body)=>{starts.push(path);return {id:'direct',state:'queued'};};panel=name=>{currentView=name};refresh=async()=>{};`,context);
+await nodes.get('scopeNext').events.click[0]();
+assert.deepEqual(Array.from(context.starts),['/api/jobs/direct/start']);
+assert.equal(vm.runInContext('currentView',context),'runningPanel');
+assert.equal(vm.runInContext("phaseViews.includes('sourcePanel')||phaseViews.includes('overridesPanel')",context),false);
+assert.equal(vm.runInContext('phaseViews.length',context),6);
+console.log('Analysis UI and direct comparison start passed. Preview and overrides are outside the six setup/result phases.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
