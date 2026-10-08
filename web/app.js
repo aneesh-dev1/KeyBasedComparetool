@@ -140,6 +140,7 @@ $('upload').addEventListener('click', async () => {
       job = await api('/api/jobs',{delimiter:$('delimiter').value==='tab'?'\t':$('delimiter').value,encoding:$('encoding').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))});
       localStorage.setItem('keywise-job',job.id);
     }
+    if($('quickProfile').value)localStorage.setItem('upload-profile:'+job.id,$('quickProfile').value);
     job=await api(endpoint());
     for(const side of ['left','right']) {
       if(files[side].size!==job.files[side].size || files[side].name!==job.files[side].name) throw new Error('To resume, select the same files. Use New comparison to choose different files.');
@@ -368,7 +369,7 @@ async function refresh() {
   const requestedId=job.id;
   const latest=await api(endpoint());
   if(job.id!==requestedId)return;
-  job=latest;hydrate();
+  job=latest;await applyPendingUploadProfile();hydrate();
   $('reset').hidden=false;syncNavigation();
   if(['selecting_sheets','preparing'].includes(job.state)){
     if(currentView==='uploadPanel'){panel('uploadPanel');renderSheetSelection();}
@@ -909,11 +910,23 @@ $('addValueRule').addEventListener('click',async()=>{try{
   const proposed=[...settingsRules.filter(r=>r.column.toLowerCase()!==rule.column.toLowerCase()),rule];
   const result=await api('/api/settings',{...settingsConfig(),comparison_rules:proposed});settingsRules=result.comparison_rules;renderValueRules();$('settingsStatus').textContent='Column rule saved for future comparisons. A profile’s explicit rule for the same column takes precedence.';
 }catch(e){showError(e);}});
-async function loadProfiles(){const result=await api('/api/profiles');for(const id of ['profileSelect','quickProfile']){const previous=$(id).value;$(id).replaceChildren(new Option('Choose profile',''));result.profiles.forEach(p=>$(id).add(new Option(p.name,p.id)));$(id).value=previous;}const ready=job?.state==='ready';$('applyProfile').disabled=$('quickApplyProfile').disabled=!ready;$('saveProfile').disabled=!job||!['ready','complete'].includes(job.state);}
+async function loadProfiles(){const result=await api('/api/profiles');for(const id of ['profileSelect','quickProfile']){const previous=$(id).value;$(id).replaceChildren(new Option(id==='quickProfile'?'No template — configure manually':'Choose profile',''));result.profiles.forEach(p=>$(id).add(new Option(p.name,p.id)));$(id).value=previous;}const ready=job?.state==='ready';$('applyProfile').disabled=!ready;$('saveProfile').disabled=!job||!['ready','complete'].includes(job.state);}
 $('saveProfile').addEventListener('click',async()=>{try{if(headerDirty&&job?.state==='ready')await applyHeaders();await saveDraft();await api('/api/profiles',{job_id:job.id,name:$('profileName').value});await loadProfiles();$('profileStatus').textContent='Template saved with headers, keys, scope, value overrides and column rules.';}catch(e){showError(e);}});
 async function applyProfile(id){if(!id)throw Error('Choose a template first.');job=await api(endpoint('/apply-profile'),{id});hydratedId=null;headerDraftJob=null;hydrate();renderHeaders();renderKeys();renderIgnoredColumns();renderOverrides();$('quickProfileStatus').textContent='Template applied. Review the headers, keys and overrides before running.';$('profileStatus').textContent=$('quickProfileStatus').textContent;}
 $('applyProfile').addEventListener('click',()=>applyProfile($('profileSelect').value).catch(showError));
-$('quickApplyProfile').addEventListener('click',()=>applyProfile($('quickProfile').value).catch(showError));
+$('quickProfile').addEventListener('change',async()=>{
+  if(job?.state==='ready'&&$('quickProfile').value){try{await applyProfile($('quickProfile').value);}catch(error){showError(error);}}
+  else $('quickProfileStatus').textContent=$('quickProfile').value?'Template will be applied after files and worksheets are loaded.':'No template selected.';
+});
+async function applyPendingUploadProfile(){
+  if(job?.state!=='ready')return;
+  const key='upload-profile:'+job.id,id=localStorage.getItem(key);
+  if(!id)return;
+  try{await applyProfile(id);}
+  catch(error){showError('Template could not be applied: '+error.message+' Select another template on the Files page, or configure this comparison manually.');}
+  finally{localStorage.removeItem(key);}
+}
+loadProfiles().catch(showError);
 $('manageProfiles').addEventListener('click',()=>goView('profilesPanel').catch(showError));
 $('deleteProfile').addEventListener('click',async()=>{try{if(!confirm('Delete this saved profile? Existing jobs are unaffected.'))return;await api('/api/profiles',{id:$('profileSelect').value},'DELETE');await loadProfiles();}catch(e){showError(e);}});
 $('headerContinue').addEventListener('click',()=>setTimeout(()=>loadProfiles().catch(showError),300));

@@ -305,3 +305,6 @@ main>footer{display:none}.panel{padding:18px}.section-title{margin-bottom:14px}.
 #headersPanel .header-editors{max-height:calc(100dvh - 390px);padding-right:4px;gap:22px}#headersPanel .header-editors>section{padding:16px;background:#fbfdfe;border:1px solid var(--line);border-radius:9px}
 #headersPanel .header-editors h3{margin:0 0 8px}#headersPanel .header-editors p{margin-bottom:12px}#headerLayoutStatus{font-size:12px;line-height:1.5;padding:10px 12px;margin-bottom:14px}
 @media(min-width:801px){#headersPanel .header-editors{max-height:calc(100dvh - 465px)}}
+.upload-profile{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 20px;padding-bottom:16px;border-bottom:1px solid var(--line)}.upload-profile>label{font-size:12px;font-weight:600}.upload-profile select{min-width:220px;flex:1;max-width:420px}.upload-profile p{flex-basis:100%;font-size:11px;margin:0}
+.header-edit{grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);align-items:center;gap:16px;padding:12px 0}.header-edit input{min-width:0}.header-edit span{line-height:1.5}
+@media(max-width:520px){.upload-profile select{min-width:0;max-width:none;width:100%}.header-edit{gap:10px}}

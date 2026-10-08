@@ -56,5 +56,9 @@ assert.equal(nodes.get('noteComment').value,'Key explanation');assert.equal(vm.r
 // One action generates and downloads exactly once, for the original job.
 vm.runInContext(`job.exports={};globalThis.downloads=[];download=(name,id)=>downloads.push([name,id]);api=async(path,body)=>{if(path.includes('/export/'))return {};return {exports:{html:{state:'complete',size:100}}};}`,context);
 await vm.runInContext("generateAndDownload('html')",context);assert.equal(context.downloads.length,1);assert.equal(context.downloads[0][1],'a');
+// Upload-selected templates wait for worksheet preparation, then apply once.
+vm.runInContext(`globalThis.pendingProfile='template-1';globalThis.appliedProfiles=[];localStorage.getItem=()=>pendingProfile;localStorage.removeItem=()=>{pendingProfile=null};applyProfile=async id=>appliedProfiles.push(id);job.state='preparing';`,context);
+await vm.runInContext('applyPendingUploadProfile()',context);assert.equal(context.appliedProfiles.length,0);
+vm.runInContext("job.state='ready'",context);await vm.runInContext('applyPendingUploadProfile()',context);await vm.runInContext('applyPendingUploadProfile()',context);assert.deepEqual(Array.from(context.appliedProfiles),['template-1']);
 console.log('Analysis UI: mismatch-only columns, search, composite key lookup, value styling, review scope and back navigation passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
