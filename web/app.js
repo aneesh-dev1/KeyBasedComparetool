@@ -20,11 +20,17 @@ $('navNew').setAttribute('aria-label','CSV & Excel');$('navNew').dataset.tip='CS
 $('navNew').querySelector('.side-label').textContent='CSV & Excel';
 $('navNew').querySelector('.side-description').textContent='Comparison workspace';
 $('scopeNext').innerHTML='Start comparison <span>→</span>';
-$('sourcePanel').insertAdjacentHTML('beforeend','<div class="panel-footer"><button id="previewBack" class="subtle">Back to Keys & scope</button><button id="compare" class="primary" disabled>Start comparison →</button></div>');
+$('sourcePanel').insertAdjacentHTML('beforeend','<button id="compare" hidden disabled>Start comparison</button>');
+const inlinePreview=document.createElement('div');inlinePreview.className='inline-preview';
+inlinePreview.append($('sourcePanel'));$('uploadPanel').append(inlinePreview);
+$('sourcePanel').hidden=false;$('sourcePanel').inert=true;$('sourcePanel').setAttribute('aria-hidden','true');
+$('uploadPanel').querySelector('.section-title').append($('navPreview'));
+$('navPreview').setAttribute('aria-expanded','false');$('navPreview').setAttribute('aria-controls','sourcePanel');
+let previewExpanded=false;
 $('analysisPanel').insertAdjacentHTML('afterbegin','<button id="reviewOverrides" class="subtle review-overrides-action">Review value overrides</button>');
 const phaseLabels=['Files','Column headers','Keys & scope','Pipeline & logs','Results','Analysis'];
 const phaseViews=['uploadPanel','headersPanel','keysPanel','runningPanel','results','analysisPanel'];
-const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',sourcePanel:'navPreview',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',settingsPanel:'navSettings'};
+const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',settingsPanel:'navSettings'};
 const number = value => Number(value).toLocaleString();
 const bytes = value => value >= 1024**3 ? `${(value / 1024**3).toFixed(2)} GB` : value >= 1024**2 ? `${(value / 1024**2).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
 function showError(error) { $('error').textContent = error.message || String(error); $('error').hidden = false; }
@@ -48,7 +54,7 @@ function syncNavigation(){
   $('navOverrides').disabled=job?.state!=='complete'||uploading;
   $('navPreview').disabled=!job||!['ready','queued','running','complete'].includes(job.state)||uploading;
   $('navPipeline').disabled=!job||!['queued','running','complete','error','cancelled'].includes(job.state);
-  if(ready&&job.headers_reviewed===false){$('navOverrides').disabled=$('navPreview').disabled=true;}
+  if(ready&&job.headers_reviewed===false)$('navOverrides').disabled=true;
   $('cancelComparison').disabled=!['running','queued'].includes(job?.state);
   $('navResults').disabled=$('navAnalysis').disabled=job?.state!=='complete';
   $('navJson').disabled=$('navContainers').disabled=$('navHistory').disabled=$('navNew').disabled=false;
@@ -422,7 +428,15 @@ $('reset').addEventListener('click',async()=>{
 })();
 
 $('scopeNext').addEventListener('click',startComparison);
-$('previewBack').addEventListener('click',()=>goView(job?.state==='ready'?'keysPanel':job?.state==='complete'?'results':'runningPanel').catch(showError));
+$('navPreview').addEventListener('click',async()=>{
+  previewExpanded=!previewExpanded;
+  $('uploadPanel').classList.toggle('preview-expanded',previewExpanded);
+  $('sourcePanel').inert=!previewExpanded;
+  $('sourcePanel').setAttribute('aria-hidden',String(!previewExpanded));
+  $('navPreview').setAttribute('aria-expanded',String(previewExpanded));
+  $('navPreview').textContent=previewExpanded?'Close preview':'Preview files';
+  if(previewExpanded){$('sourceStatus').textContent='Loading preview…';try{await loadSource();}catch(error){$('sourceStatus').textContent='Preview could not load. Use Load preview to retry.';showError(error);}}
+});
 $('overrideBack').addEventListener('click',()=>goView('analysisPanel').catch(showError));
 $('reviewOverrides').addEventListener('click',()=>goView('overridesPanel').catch(showError));
 $('reviewCompare').addEventListener('click',async()=>{

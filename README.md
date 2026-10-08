@@ -309,7 +309,10 @@ ignored keys and containers, and review notes. Long lists scroll within the deta
 area. Mismatch samples remain expandable. Printing includes every section; small
 screens allow natural scrolling for readability.
 
-The optional **Preview files** action reads only the requested first 1–1,000 rows per file. It shows
+The optional **Preview files** action on Files smoothly minimizes the upload cards
+and expands two inline tables, side by side on desktop. Closing restores the cards;
+it never changes the active phase. Animations respect reduced-motion preferences.
+It reads only the requested first 1–1,000 rows per file. It shows
 original file order, before exclusions/overrides, without aligning rows by key.
 Twenty columns are returned per page; use Previous/Next columns to inspect wide
 files. Cells are limited to 500 displayed characters, and responses are capped
