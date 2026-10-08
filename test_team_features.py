@@ -38,8 +38,8 @@ class FeatureTests(unittest.TestCase):
         applied=self.client.request(target+'/apply-profile',dict(id=profile['id']))
         self.assertEqual(applied['draft']['comparison_rules'][0]['trim'],True)
         self.assertEqual(applied['columns'],['v','id'])
-        self.assertEqual(applied['draft']['read_batch_size'],7)
-        self.assertEqual(applied['draft']['compare_batch_size'],3)
+        self.assertNotIn('read_batch_size',applied['draft'])
+        self.assertNotIn('compare_batch_size',applied['draft'])
         self.assertEqual(applied['draft']['duplicate_policy'],'last')
         with self.assertRaises(HTTPError):self.other.request(target+'/apply-profile',dict(id=profile['id']))
         storage=self.client.request('/api/storage');self.assertEqual(len(storage['jobs']),2)
@@ -48,6 +48,21 @@ class FeatureTests(unittest.TestCase):
         self.assertTrue(self.client.request('/api/preflight',dict(bytes=100))['can_upload'])
         self.client.request('/api/profiles',dict(id=profile['id']),method='DELETE')
         self.assertEqual(self.client.request('/api/profiles')['profiles'],[])
+    def test_workspace_settings_rules_and_performance(self):
+        settings=dict(memory_mb=64,sort_workers=1,read_batch_size=2,compare_batch_size=3,
+            comparison_rules=[dict(column='AMOUNT',tolerance='0'),dict(column='text',trim=True,ignore_case=True)])
+        saved=self.client.request('/api/settings',settings)
+        self.assertEqual(self.client.request('/api/settings'),saved)
+        self.assertEqual(self.other.request('/api/settings')['comparison_rules'],[])
+        path=self.upload(b'id,amount,text\n001,-11, Hello \n',b'id,amount,text\n001,-11.00,hello\n')
+        job=self.complete(path,read_batch_size=9,compare_batch_size=9)
+        self.assertEqual(job['summary']['changed_cells'],0)
+        self.assertEqual(job['summary']['rule_equivalent_cells'],2)
+        self.assertEqual(job['summary']['read_batch_size'],2)
+        self.assertEqual(job['summary']['compare_batch_size'],3)
+        with self.assertRaises(HTTPError):
+            self.client.request('/api/settings',dict(settings,memory_mb=8192))
+
     def test_notes_export_and_activity(self):
         path=self.upload();job=self.complete(path)
         self.client.request(path+'/annotations',dict(column='v',key=None,status='Expected',comment='Known <difference>'))

@@ -53,6 +53,22 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('<summary>View 1 keys</summary>',text)
         self.assertNotIn('class="sample-link"',text)
         self.assertIn('#columnStats > tbody > tr',text)
+    def test_key_comments_follow_all_mismatch_columns(self):
+        path=self.root/'differences.csv'
+        path.write_text(path.read_text().replace('002','001'))
+        (self.root/'annotations.json').write_text(json.dumps([
+            dict(column='',key=['001'],status='Expected',comment='Key-wide explanation'),
+            dict(column='TOC',key=None,status='Reviewed',comment='Column explanation')]))
+        target=self.root/'report.xlsx';export_excel(self.root,target)
+        with zipfile.ZipFile(target) as book:
+            for sheet in (3,4):
+                xml=book.read(f'xl/worksheets/sheet{sheet}.xml').decode()
+                self.assertIn('Key-wide explanation',xml)
+                self.assertIn('Comments',xml)
+            self.assertIn('Column explanation',book.read('xl/worksheets/sheet3.xml').decode())
+        target=self.root/'report.html';export_html(self.root,target)
+        self.assertGreaterEqual(target.read_text().count('Key-wide explanation'),3)
+
     def test_exact_bands_and_escape(self):
         from reports import match_bands
         self.summary.update(matched_keys=1000000,changed_cells_by_column={'perfect':0,'rounded':1,'99':10000,'below99':10001,'95':50000,'below95':50001})

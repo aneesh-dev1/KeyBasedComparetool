@@ -15,7 +15,7 @@ let logCursor=0, logText='', logJobId=null;
 let viewingHistoryJob=false;
 let keyContainers=[], selectedContainers=new Set();
 const phaseLabels=['Files','Column headers','Keys & scope','Value overrides','File preview','Pipeline & logs','Results','Analysis'];
-const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',sourcePanel:'navPreview',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage'};
+const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',sourcePanel:'navPreview',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',settingsPanel:'navSettings'};
 const number = value => Number(value).toLocaleString();
 const bytes = value => value >= 1024**3 ? `${(value / 1024**3).toFixed(2)} GB` : value >= 1024**2 ? `${(value / 1024**2).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
 function showError(error) { $('error').textContent = error.message || String(error); $('error').hidden = false; }
@@ -28,8 +28,8 @@ async function api(path, body, method) {
 }
 function endpoint(suffix='') { return `/api/jobs/${job.id}${suffix}`; }
 function downloadUrl(name) { return endpoint(`/download/${name}`) + '?token=' + encodeURIComponent(token); }
-function download(name) {
-  const a = document.createElement('a'); a.href = downloadUrl(name); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+function download(name,identity=job.id) {
+  const a = document.createElement('a'); a.href = `/api/jobs/${identity}/download/${name}?token=${encodeURIComponent(token)}`; a.download = name; document.body.appendChild(a); a.click(); a.remove();
 }
 function setStep() { /* Navigation state is shown in the sidebar. */ }
 function syncNavigation(){
@@ -53,17 +53,17 @@ function panel(name) {
   $('sheetPanel').hidden=name!=='uploadPanel'||!['selecting_sheets','preparing'].includes(job?.state);
   $('reset').hidden=!job;
   const history=currentView==='historyPanel';
-  const library=['containersPanel','jsonPanel','docsPanel','storagePanel'].includes(currentView);
+  const library=['containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','settingsPanel'].includes(currentView);
   $('comparisonFlow').hidden=history||library;
   $('navNew').classList.toggle('active',!history&&!library&&!viewingHistoryJob);
   $('navHistory').classList.toggle('active',history||(!library&&viewingHistoryJob));
-  for(const id of ['navNew','navJson','navContainers','navHistory','navDocs','navStorage']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
+  for(const id of ['navNew','navJson','navContainers','navHistory','navDocs','navStorage','navProfiles','navSettings']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
   if(typeof closeSidebarDrawer==='function')closeSidebarDrawer();
   $('flowTitle').textContent=viewingHistoryJob?'Saved comparison':'New comparison';
   const phase=Object.keys(views).indexOf(name);
   if(!history&&!library)$('phaseLabel').textContent=`Step ${phase+1} of 8 · ${phaseLabels[phase]}`;
   for(const [id,control] of Object.entries(views)){
-    if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'&&id!=='storagePanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
+    if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'&&id!=='storagePanel'&&id!=='profilesPanel'&&id!=='settingsPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
   }
   syncNavigation();
   if(name==='uploadPanel'&&job&&job.state!=='uploading'){
@@ -74,16 +74,18 @@ function panel(name) {
     $('upload').textContent='Upload & continue →';$('upload').disabled=uploading||!files.left||!files.right;
   }
 }
-function configuration(){return {read_batch_size:Number($('readBatchSize').value),compare_batch_size:Number($('compareBatchSize').value),duplicate_policy:$('duplicatePolicy').value,keys:[...selected],memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules};}
+function configuration(){return {duplicate_policy:$('duplicatePolicy').value,keys:[...selected],ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules};}
 async function saveDraft(){if(job?.state==='ready')await api(endpoint('/config'),configuration());}
 async function goView(name){
   if(uploading&&name!=='uploadPanel'&&!['jsonPanel','containersPanel','historyPanel','docsPanel'].includes(name))return;
   clearError();await saveDraft();
   if(headerDirty&&headerDraftJob===job?.id&&['keysPanel','overridesPanel','sourcePanel'].includes(name))await applyHeaders();
   panel(name);
+  if(name==='settingsPanel')await loadSettings();
+  if(name==='profilesPanel')await loadProfiles();
   if(name==='storagePanel')await loadStorage();
   if(name==='analysisPanel')await openAnalysis();
-  if(name==='headersPanel')renderHeaders();
+  if(name==='headersPanel'){renderHeaders();await loadProfiles();}
   if(name==='keysPanel'){renderKeys();renderIgnoredColumns();await loadContainers();await loadProfiles();}
   if(name==='containersPanel')await loadContainers();
   if(name==='overridesPanel'){renderOverrideColumns();renderOverrides();renderValueRules();}
@@ -262,25 +264,38 @@ async function preview() {
   if(!result.rows.length){const tr=document.createElement('tr');const td=document.createElement('td');td.colSpan=result.headers.length;td.textContent='No records in this category.';tr.append(td);body.append(tr);}table.append(body);
 }
 $('previewCategory').addEventListener('change',()=>preview().catch(showError));
+const pendingExports=new Set();
 function renderExports() {
   for(const kind of ['excel','html']) {
     const value=job.exports[kind];const button=$(kind);const status=$(`${kind}Status`);
-    button.disabled=!!value&&['queued','running'].includes(value.state);
+    button.disabled=pendingExports.has(job.id+':'+kind)||!!value&&['queued','running'].includes(value.state);
     $(kind==='excel'?'cancelExcel':'cancelHtml').hidden=!button.disabled;
     button.classList.toggle('export-busy',button.disabled);button.setAttribute('aria-busy',String(button.disabled));
-    button.querySelector('strong').textContent=button.disabled?(value.state==='queued'?'Queued — waiting for a worker':'Generating '+(kind==='excel'?'Excel workbook':'HTML report')):(kind==='excel'?'Excel workbook':'HTML report');
+    button.querySelector('strong').textContent=button.disabled?(value?.state==='queued'?'Queued — waiting for a worker':'Generating '+(kind==='excel'?'Excel workbook':'HTML report')):(kind==='excel'?'Excel workbook':'HTML report');
     if(!value)status.textContent='';
     else if(value.state==='complete')status.textContent=`Ready to download · ${bytes(value.size)}`;
     else if(value.state==='error')status.textContent=`Export failed: ${value.error}`;
     else status.textContent=(value.message||'Queued for export…')+' Large reports may take time. You can continue reviewing results.';
   }
 }
-for(const kind of ['excel','html']) $(kind).addEventListener('click',async()=>{
-  clearError();
-  if(job.exports[kind]?.state==='complete')return download(kind==='excel'?'mismatches.xlsx':'comparison-report.html');
-  $(kind).disabled=true;
-  try{await api(endpoint(`/export/${kind}`),{});await refresh();}catch(error){showError(error);$(kind).disabled=false;}
-});
+async function generateAndDownload(kind){
+  clearError();const identity=job.id,key=identity+':'+kind,name=kind==='excel'?'mismatches.xlsx':'comparison-report.html';
+  if(pendingExports.has(key))return;
+  if(job.exports[kind]?.state==='complete')return download(name,identity);
+  pendingExports.add(key);renderExports();
+  try{
+    await api(`/api/jobs/${identity}/export/${kind}`,{});
+    for(;;){
+      const latest=await api(`/api/jobs/${identity}`),state=latest.exports[kind];
+      if(job?.id===identity){job.exports=latest.exports;renderExports();}
+      if(state?.state==='complete'){download(name,identity);break;}
+      if(['error','cancelled','outdated'].includes(state?.state))throw Error(state.error||state.message||'Export stopped');
+      await new Promise(resolve=>setTimeout(resolve,1500));
+    }
+  }catch(error){showError(error);}
+  finally{pendingExports.delete(key);if(job?.id===identity)renderExports();}
+}
+for(const kind of ['excel','html']) $(kind).addEventListener('click',()=>generateAndDownload(kind));
 let headerDraft=null, headerDraftJob=null, headerDirty=false, headerPage=0;
 function headerSources(){return job.source_headers||{left:job.columns,right:job.columns};}
 function renderHeaders(){
@@ -342,12 +357,8 @@ function hydrate(){
   overrideRules=Array.isArray(draft.value_overrides)?draft.value_overrides:[];
   valueRules=Array.isArray(draft.comparison_rules)?draft.comparison_rules:[];
   $('ignoreKeys').value=typeof draft.ignore_keys==='string'?draft.ignore_keys:'';
-  $('memory').value=[64,128,256,512,1024,2048,4096,8192].includes(draft.memory_mb)?String(draft.memory_mb):'4096';
-  if(Number($('memory').value)>maxSortMb)$('memory').value=String(maxSortMb);
-  $('readBatchSize').value=draft.read_batch_size||100000;
-  $('compareBatchSize').value=draft.compare_batch_size||10000;
   $('duplicatePolicy').value=draft.duplicate_policy||'first';
-  $('sortWorkers').value=[1,2].includes(draft.sort_workers)?String(draft.sort_workers):job.state==='ready'?'2':'1';
+
   keyPage=ignorePage=sourceColumnOffset=0;hydratedId=job.id;
 }
 $('resumeComparison').addEventListener('click',async()=>{try{$('resumeComparison').disabled=true;job=await api(endpoint('/resume'),{});clearError();await refresh();}catch(error){showError(error);}finally{$('resumeComparison').disabled=false;}});
@@ -365,7 +376,7 @@ async function refresh() {
   } else if(job.state==='ready'){
     if(previousState==='preparing')await loadContainers();
     if(currentView==='uploadPanel')panel('headersPanel');
-    if(currentView==='headersPanel'){panel('headersPanel');renderHeaders();}
+    if(currentView==='headersPanel'){panel('headersPanel');renderHeaders();await loadProfiles();}
     if(currentView==='keysPanel'){panel('keysPanel');renderKeys();renderIgnoredColumns();}
     $('diskInfo').textContent=`${bytes(job.free_disk_bytes)} free disk space. Allow room for scratch files and reports.`;
   } else if(['running','queued'].includes(job.state)){
@@ -379,8 +390,8 @@ async function refresh() {
     } else if(currentView==='runningPanel')await renderPipeline();
     if(Object.values(job.exports).some(value=>['queued','running'].includes(value.state)))pollTimer=setTimeout(()=>refresh().catch(pollError),1500);
   } else if(['error','cancelled'].includes(job.state)){
-    if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);await loadDiagnostics();}
-  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel'].includes(currentView)){
+    if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel','settingsPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);await loadDiagnostics();}
+  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel','settingsPanel'].includes(currentView)){
     panel('uploadPanel');$('delimiter').disabled=$('encoding').disabled=true;$('delimiter').value=job.delimiter==='\t'?'tab':job.delimiter;$('encoding').value=job.encoding;
   }
 }
@@ -459,7 +470,7 @@ async function renderPipeline(){
   if(log.text.length>=60000)pollTimer=setTimeout(()=>refresh().catch(pollError),300);
 }
 async function loadHistory(){
-  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel'].includes(currentView))return;
+  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel','settingsPanel'].includes(currentView))return;
   $('cleanupPolicy').textContent=result.retention_days?`Inactive jobs and all uploaded files, scratch data and reports are automatically deleted after ${result.retention_days} days. Download reports before expiry. Active jobs are protected.`:'Automatic cleanup is disabled. Delete unneeded jobs to reclaim disk space.';
   const table=$('historyTable');table.replaceChildren();
   const header=document.createElement('tr');for(const label of ['Created','Files','Status','Changed cells','Action']){const th=document.createElement('th');th.textContent=label;header.append(th);}const head=document.createElement('thead');head.append(header);table.append(head);
@@ -484,7 +495,7 @@ $('historyPrev').addEventListener('click',()=>{historyOffset=Math.max(0,historyO
 $('historyNext').addEventListener('click',()=>{historyOffset+=25;loadHistory().catch(showError);});
 
 const sidebarMedia=matchMedia('(max-width: 800px)');
-let desktopSidebarCollapsed=localStorage.getItem('tu-sidebar-collapsed')==='true';
+let desktopSidebarCollapsed=true;
 function hideSidebarTip(){
   $('sidebarTooltip').hidden=true;
   document.querySelectorAll('[aria-describedby="sidebarTooltip"]').forEach(el=>el.removeAttribute('aria-describedby'));
@@ -508,7 +519,7 @@ function closeSidebarDrawer(){
 applySidebar(sidebarMedia.matches||desktopSidebarCollapsed);
 $('sidebarToggle').addEventListener('click',()=>{
   const collapsed=!document.body.classList.contains('sidebar-collapsed');
-  if(!sidebarMedia.matches){desktopSidebarCollapsed=collapsed;localStorage.setItem('tu-sidebar-collapsed',String(collapsed));}
+  if(!sidebarMedia.matches){desktopSidebarCollapsed=collapsed;}
   applySidebar(collapsed);
 });
 sidebarMedia.addEventListener('change',()=>applySidebar(sidebarMedia.matches||desktopSidebarCollapsed));
@@ -540,7 +551,7 @@ window.addEventListener('resize',hideSidebarTip);
 $('navNew').addEventListener('click',async()=>{
   try{
     if(uploading){panel('uploadPanel');return;}
-    if(['containersPanel','jsonPanel','docsPanel','storagePanel'].includes(currentView)&&!viewingHistoryJob){await goView(job?.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):job?.state==='complete'?'results':job&&['running','queued','error','cancelled'].includes(job.state)?'runningPanel':'uploadPanel');return;}
+    if(['containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','settingsPanel'].includes(currentView)&&!viewingHistoryJob){await goView(job?.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):job?.state==='complete'?'results':job&&['running','queued','error','cancelled'].includes(job.state)?'runningPanel':'uploadPanel');return;}
     if(currentView==='historyPanel'||viewingHistoryJob){await saveDraft();localStorage.removeItem('keywise-job');location.reload();}
   }catch(error){showError(error);}
 });
@@ -768,7 +779,8 @@ function filterDocs(){
 $('docsSearch').addEventListener('input',filterDocs);
 filterDocs();
 
-let analysisOffset=0, analysisTimer=null, analysisGeneration=0;
+let analysisOffset=0, analysisTimer=null, analysisGeneration=0, columnChoicesPage=0;
+let analysisNotesCache=[],commentSelection="";
 $('openAnalysis').addEventListener('click',()=>goView('analysisPanel').catch(showError));
 function analysisKeyValues(){return job.keys.map((_,i)=>$('analysisKeyPart'+i).value);}
 function selectAnalysisKey(values){
@@ -779,8 +791,15 @@ function analysisColumns(){
   const chosen=$('analysisColumn').value,query=$('analysisColumnSearch').value.toLowerCase();
   $('analysisColumn').replaceChildren(new Option('All mismatching columns',''));
   for(const [name,count] of Object.entries(job.summary.changed_cells_by_column).filter(([n,c])=>c>0&&(n===chosen||n.toLowerCase().includes(query))).sort((a,b)=>b[1]-a[1]))$('analysisColumn').add(new Option(`${name} · ${number(count)} mismatches`,name));
-  $('analysisColumn').value=chosen;
+  $('analysisColumn').value=chosen;renderColumnChoices();
 }
+function renderColumnChoices(){
+  const query=$('analysisColumnSearch').value.toLowerCase(),entries=Object.entries(job.summary.changed_cells_by_column).filter(([n,c])=>c>0&&n.toLowerCase().includes(query)).sort((a,b)=>b[1]-a[1]);columnChoicesPage=Math.min(columnChoicesPage,Math.max(0,Math.ceil(entries.length/50)-1));$('analysisColumnChoices').replaceChildren();
+  for(const [name,count] of entries.slice(columnChoicesPage*50,columnChoicesPage*50+50)){const button=document.createElement('button');button.className='column-choice';button.textContent=`${name} · ${number(count)}`;button.setAttribute('aria-pressed',String($('analysisColumn').value===name));button.addEventListener('click',()=>{$('analysisColumn').value=name;analysisOffset=0;loadAnalysis();renderColumnChoices();});$('analysisColumnChoices').append(button);}
+  $('columnChoicesRange').textContent=entries.length?`${columnChoicesPage*50+1}–${Math.min(entries.length,columnChoicesPage*50+50)} of ${entries.length} columns`:'No mismatching columns';$('columnChoicesPrev').disabled=!columnChoicesPage;$('columnChoicesNext').disabled=(columnChoicesPage+1)*50>=entries.length;
+}
+$('columnChoicesPrev').addEventListener('click',()=>{columnChoicesPage--;renderColumnChoices();});
+$('columnChoicesNext').addEventListener('click',()=>{columnChoicesPage++;renderColumnChoices();});
 function analysisContext(){
   const mode=$('analysisMode').value,column=$('analysisColumn').value,key=$('analysisKey').value;
   $('analysisByColumn').setAttribute('aria-pressed',String(mode==='columns'));$('analysisByKey').setAttribute('aria-pressed',String(mode==='keys'));$('analysisByPattern').setAttribute('aria-pressed',String(mode==='patterns'));$('analysisKeyControls').hidden=mode==='patterns';$('patternSummary').hidden=mode!=='patterns';
@@ -790,8 +809,10 @@ function analysisContext(){
   const keyLabel=key?job.keys.map((name,i)=>`${name}: ${activeKey[i]}`).join(' · '):'';
   $('analysisSelection').textContent=[column?'Column: '+column:'All mismatching columns',keyLabel||'All keys'].join(' · ');
   $('analysisReset').hidden=!column&&!key;$('analysisReset').textContent=mode==='patterns'?'Back to all patterns':mode==='keys'?'Back to all keys':'Back to all columns';
-  if($('noteScope'))$('noteScope').textContent=column||key?'This note applies to '+$('analysisSelection').textContent+'.':'Choose a column or key above before saving a finding.';
-  $('saveNote').disabled=!column&&!key;
+  const signature=JSON.stringify([column,key]);
+  if(commentSelection!==signature){commentSelection=signature;$('noteTarget').value=key?'key':'column';fillCommentEditor();}
+  renderCommentScope();
+
 }
 async function resetAnalysis(mode){
   $('analysisMode').value=mode;$('analysisColumn').value='';$('analysisColumnSearch').value='';selectAnalysisKey(null);analysisOffset=0;analysisColumns();await loadAnalysis();
@@ -805,7 +826,7 @@ async function openAnalysis(){
   for(const [label,value] of [['Columns with differences',Object.values(job.summary.changed_cells_by_column).filter(n=>n>0).length],['Changed keys',job.summary.changed_rows],['Mismatched cells',job.summary.changed_cells],['Keys in one file only',job.summary.left_only+job.summary.right_only]]){const card=document.createElement('div'),title=document.createElement('span'),count=document.createElement('strong');title.textContent=label;count.textContent=number(value||0);card.append(title,count);$('analysisOverview').append(card);}
   const containers=job.summary.ignore_key_containers||[];
   $('analysisExclusions').textContent=containers.length?'Excluded containers: '+containers.map(c=>`${c.name}: ${c.reason} (${c.keys.length} configured keys)`).join(' · '):'No ignored-key containers configured.';
-  await loadAnalysis();await loadNotes();
+  commentSelection='';columnChoicesPage=0;await loadNotes();await loadAnalysis();
 }
 async function loadAnalysis(){
   clearTimeout(analysisTimer);const generation=++analysisGeneration,id=job.id;
@@ -837,17 +858,18 @@ async function loadAnalysis(){
       else{headers=[...job.keys,'Column','File 1 value','File 2 value'];rows=result.rows.map(r=>[...JSON.parse(r[0]),r[1],r[2]+(r[4]>1000?' … [truncated]':''),r[3]+(r[5]>1000?' … [truncated]':'')]);}
     }
     $('analysisStatus').classList.remove('loading-status');$('cancelAnalysis').hidden=true;
-    const head=document.createElement('tr');headers.forEach(value=>{const th=document.createElement('th');th.textContent=value;head.append(th);});table.append(head);
+    const head=document.createElement('tr');headers.forEach(value=>{const th=document.createElement('th');th.textContent=value==='Inspect'?'Comments':value;head.append(th);});if(headers.at(-1)!=='Inspect'){const th=document.createElement('th');th.textContent='Comments';head.append(th);}table.append(head);
     rows.forEach(row=>{
-      if(mode==='patterns'){const tr=document.createElement('tr');row.forEach((value,i)=>{const td=document.createElement('td');td.textContent=(i===2||i===3)&&value===''?'(empty)':value;if(i===2)td.className='analysis-before';if(i===3)td.className='analysis-after';tr.append(td);});const td=document.createElement('td'),button=document.createElement('button');button.className='subtle';button.textContent='Review column';button.addEventListener('click',()=>{$('analysisColumnSearch').value='';analysisColumns();$('analysisMode').value='columns';$('analysisColumn').value=row[0];analysisOffset=0;loadAnalysis();});td.append(button);tr.append(td);table.append(tr);return;}
+      if(mode==='patterns'){const tr=document.createElement('tr');row.forEach((value,i)=>{const td=document.createElement('td');td.textContent=(i===2||i===3)&&value===''?'(empty)':value;if(i===2)td.className='analysis-before';if(i===3)td.className='analysis-after';tr.append(td);});const comments=document.createElement('td');comments.textContent=commentsFor(row[0],null);tr.append(comments);const td=document.createElement('td'),button=document.createElement('button');button.className='subtle';button.textContent='Review column';button.addEventListener('click',()=>{$('analysisColumnSearch').value='';analysisColumns();$('analysisMode').value='columns';$('analysisColumn').value=row[0];analysisOffset=0;loadAnalysis();});td.append(button);tr.append(td);table.append(tr);return;}
       const tr=document.createElement('tr'),isDetails=headers.at(-1)!=='Inspect';
       row.forEach((value,i)=>{const td=document.createElement('td');td.textContent=isDetails&&i>=row.length-2&&value===''?'(empty)':value;if(isDetails&&i===row.length-2)td.className='analysis-before';if(isDetails&&i===row.length-1)td.className='analysis-after';tr.append(td);});
+      const comments=document.createElement('td');comments.className='analysis-comments';comments.textContent=isDetails?commentsFor(row[job.keys.length],row.slice(0,job.keys.length)):mode==='columns'?commentsFor(row[0],null):commentsFor('',row.slice(0,job.keys.length));tr.append(comments);
       const td=document.createElement('td'),button=document.createElement('button');button.className='subtle';
       if(!isDetails){button.textContent=mode==='columns'?'View mismatching keys':'View this key';button.addEventListener('click',()=>{if(mode==='columns')$('analysisColumn').value=row[0];else selectAnalysisKey(row.slice(0,job.keys.length));analysisOffset=0;loadAnalysis();});}
       else{button.textContent='All changes for this key';button.addEventListener('click',()=>{$('analysisMode').value='keys';$('analysisColumn').value='';selectAnalysisKey(row.slice(0,job.keys.length));analysisOffset=0;loadAnalysis();});}
       td.append(button);tr.append(td);table.append(tr);
     });
-    if(headers.at(-1)!=='Inspect'){const th=document.createElement('th');th.textContent=mode==='patterns'?'Review':'Explore record';head.append(th);}
+    {const th=document.createElement('th');th.textContent=mode==='patterns'?'Review':headers.at(-1)==='Inspect'?'Open':'Explore record';head.append(th);}
     $('analysisStatus').textContent=total?`${number(total)} ${mode==='patterns'?'value-change patterns':headers.at(-1)==='Inspect'?(mode==='columns'?'columns':'keys'):'mismatched cells'}. ${headers.at(-1)==='Inspect'?'Choose a result below to review it.':'File 1 values are shaded red; File 2 values are shaded green.'}`:keyStatus==='left_only'?'This key exists only in File 1.':keyStatus==='right_only'?'This key exists only in File 2.':keyText?'No recorded differences for this key. It may be equal, excluded, or absent from both files.':column?'No mismatches in this column.':'No results for this view. Try a different column search or switch views.';
     $('analysisRange').textContent=total?`${analysisOffset+1}–${Math.min(analysisOffset+50,total)} of ${number(total)}`:'0 results';
     $('analysisPrev').disabled=!analysisOffset;$('analysisNext').disabled=analysisOffset+50>=total;
@@ -865,29 +887,34 @@ $('analysisNext').addEventListener('click',()=>{analysisOffset+=50;loadAnalysis(
 
 $('analysisRetry').addEventListener('click',async()=>{try{$('analysisRetry').hidden=true;await api(endpoint('/analysis'),{});await loadAnalysis();}catch(error){showError(error);}});
 
-let valueRules=[];
-$('keysPanel').insertAdjacentHTML('afterbegin',`<section class="feature-box"><h3>Saved comparison profiles</h3><p>Reuse headers, keys, scope, overrides and comparison rules in this workspace.</p><div class="preview-controls"><select id="profileSelect" aria-label="Saved profile"><option value="">Choose profile</option></select><button id="applyProfile" class="subtle">Apply profile</button><input id="profileName" placeholder="Profile name" aria-label="Profile name"><button id="saveProfile" class="subtle">Save current settings</button><button id="deleteProfile" class="subtle">Delete profile</button></div><p id="profileStatus" role="status"></p></section>`);
-$('overridesPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Optional column comparison rules</h3><p>Exact text is the default. Rules never change source values or key matching. Invalid numbers or dates remain mismatches.</p><div class="preview-controls"><label>Column<select id="ruleColumn"></select></label><label><input id="ruleTrim" type="checkbox"> Trim whitespace</label><label><input id="ruleCase" type="checkbox"> Ignore case</label><label><input id="ruleNumericFormat" type="checkbox"> Ignore numeric formatting (0 = 0.00, -11 = -11.00)</label><label>Absolute numeric tolerance<input id="ruleTolerance" placeholder="e.g. 0.01"></label><label>File 1 date format<input id="ruleDateLeft" placeholder="%Y-%m-%d"></label><label>File 2 date format<input id="ruleDateRight" placeholder="%d/%m/%Y"></label><button id="addValueRule" class="subtle">Save column rule</button></div><p>Use Python date formats: %Y year, %m month, %d day, %H hour, %M minute, %S second. Choose tolerance or date formats for a column.</p><div id="valueRuleList"></div></section>`);
-$('analysisPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Record your finding</h3><p id="noteScope" class="analysis-note-scope"></p><p>Notes apply to the selected column, exact key, or both. They document your review; they do not change mismatch counts. Regenerate reports after editing notes.</p><div class="preview-controls"><select id="noteStatus" aria-label="Classification"><option>Needs investigation</option><option>Expected</option><option>Resolved</option></select><textarea id="noteComment" maxlength="2000" aria-label="Analysis comment" placeholder="Describe your finding"></textarea><button id="saveNote" class="subtle">Save analysis note</button></div><div id="analysisNotes"></div></section>`);
-$('uploadPanel').insertAdjacentHTML('beforeend',`<section class="feature-box"><button id="checkSpace" class="subtle">Check server disk space before upload</button><p id="preflightStatus" role="status"></p></section>`);
+let valueRules=[], settingsRules=[];
+$('profileControls').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Template library</h3><div class="preview-controls"><select id="profileSelect" aria-label="Saved profile"><option value="">Choose profile</option></select><button id="applyProfile" class="subtle">Apply profile</button><input id="profileName" placeholder="Profile name" aria-label="Profile name"><button id="saveProfile" class="subtle">Save current settings</button><button id="deleteProfile" class="subtle">Delete profile</button></div><p id="profileStatus" role="status"></p></section>`);
+$('settingsRules').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Column comparison rules</h3><p>Exact text is the default. Rules never change source values or key matching. Invalid numbers or dates remain mismatches.</p><div class="preview-controls"><label>Column<input id="ruleColumn" list="ruleColumnOptions" placeholder="Column name"><datalist id="ruleColumnOptions"></datalist></label><label><input id="ruleTrim" type="checkbox"> Trim whitespace</label><label><input id="ruleCase" type="checkbox"> Ignore case</label><label><input id="ruleNumericFormat" type="checkbox"> Ignore numeric formatting (0 = 0.00, -11 = -11.00)</label><label>Absolute numeric tolerance<input id="ruleTolerance" placeholder="e.g. 0.01"></label><label>File 1 date format<input id="ruleDateLeft" placeholder="%Y-%m-%d"></label><label>File 2 date format<input id="ruleDateRight" placeholder="%d/%m/%Y"></label><button id="addValueRule" class="subtle">Save column rule</button></div><p>Use Python date formats: %Y year, %m month, %d day, %H hour, %M minute, %S second. Choose tolerance or date formats for a column.</p><div id="valueRuleList"></div></section>`);
+$('analysisPanel').insertAdjacentHTML('beforeend',`<details class="feature-box review-comments"><summary>Comments</summary><label>Apply comment to<select id="noteTarget"><option value="column">Column — all mismatching keys</option><option value="key">Key — all mismatching columns</option><option value="cell">This key and column</option></select></label><p id="noteScope" class="analysis-note-scope"></p><p class="muted">Comments appear in regenerated reports.</p><div class="preview-controls"><select id="noteStatus" aria-label="Classification"><option>Needs investigation</option><option>Expected</option><option>Resolved</option></select><textarea id="noteComment" maxlength="2000" aria-label="Analysis comment" placeholder="Describe your finding"></textarea><button id="saveNote" class="subtle">Save comment</button></div><div id="analysisNotes"></div></details>`);
 function renderValueRules(){
-  const editable=job?.state==='ready';$('ruleColumn').replaceChildren();
-  for(const column of job?.columns||[])if(!selected.has(column)&&!ignoredColumns.has(column))$('ruleColumn').add(new Option(column,column));
-  $('addValueRule').disabled=!editable;$('valueRuleList').replaceChildren();
-  for(const rule of valueRules){const row=document.createElement('p'),label=document.createElement('span'),remove=document.createElement('button');label.textContent=rule.column+' · '+[rule.trim?'Trim':'',rule.ignore_case?'Ignore case':'',rule.tolerance==='0'?'Ignore numeric formatting':rule.tolerance!==undefined?'Tolerance '+rule.tolerance:'',rule.left_date_format?'Dates '+rule.left_date_format+' ↔ '+rule.right_date_format:''].filter(Boolean).join(' · ');remove.textContent='Remove';remove.className='subtle';remove.disabled=!editable;remove.addEventListener('click',async()=>{valueRules=valueRules.filter(r=>r.column!==rule.column);renderValueRules();try{await saveDraft();}catch(e){showError(e);}});row.append(label,remove);$('valueRuleList').append(row);}
+  $('ruleColumnOptions').replaceChildren();
+  for(const column of job?.columns||[])if(!selected.has(column))$('ruleColumnOptions').append(new Option(column,column));
+  $('valueRuleList').replaceChildren();
+  for(const rule of settingsRules){const row=document.createElement('p'),label=document.createElement('span'),edit=document.createElement('button'),remove=document.createElement('button');label.textContent=rule.column+' · '+[rule.trim?'Trim whitespace':'',rule.ignore_case?'Ignore case':'',rule.tolerance==='0'?'Ignore numeric formatting':rule.tolerance!==undefined?'Tolerance '+rule.tolerance:'',rule.left_date_format?'Date formats':''].filter(Boolean).join(' · ');edit.textContent='Edit';edit.className=remove.className='subtle';edit.addEventListener('click',()=>{$('ruleColumn').value=rule.column;$('ruleTrim').checked=!!rule.trim;$('ruleCase').checked=!!rule.ignore_case;$('ruleNumericFormat').checked=rule.tolerance==='0';$('ruleTolerance').value=rule.tolerance==='0'?'':rule.tolerance||'';$('ruleTolerance').disabled=rule.tolerance==='0';$('ruleDateLeft').value=rule.left_date_format||'';$('ruleDateRight').value=rule.right_date_format||'';});remove.textContent='Remove';remove.addEventListener('click',()=>{settingsRules=settingsRules.filter(r=>r.column!==rule.column);renderValueRules();$('settingsStatus').textContent='Unsaved changes — save settings to apply.';});row.append(label,edit,remove);$('valueRuleList').append(row);}
 }
+function settingsConfig(){return {memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),read_batch_size:Number($('readBatchSize').value),compare_batch_size:Number($('compareBatchSize').value),comparison_rules:settingsRules};}
+async function loadSettings(){const result=await api('/api/settings');$('memory').value=result.memory_mb;$('sortWorkers').value=result.sort_workers;$('readBatchSize').value=result.read_batch_size;$('compareBatchSize').value=result.compare_batch_size;settingsRules=result.comparison_rules||[];renderValueRules();$('settingsStatus').textContent='These defaults apply when a new comparison starts. Rules match column names ignoring case; key and ignored columns are excluded.';}
+$('saveSettings').addEventListener('click',async()=>{try{const result=await api('/api/settings',settingsConfig());settingsRules=result.comparison_rules;renderValueRules();$('settingsStatus').textContent='Settings saved. New runs use these defaults. Existing runs are unchanged.';}catch(error){showError(error);}});
 $('ruleNumericFormat').addEventListener('change',()=>{$('ruleTolerance').disabled=$('ruleNumericFormat').checked;});
 $('addValueRule').addEventListener('click',async()=>{try{
   const rule={column:$('ruleColumn').value,trim:$('ruleTrim').checked,ignore_case:$('ruleCase').checked,left_date_format:$('ruleDateLeft').value,right_date_format:$('ruleDateRight').value};
   if(!rule.column)throw Error('Choose a compared non-key column.');
   if($('ruleNumericFormat').checked)rule.tolerance='0';
   else if($('ruleTolerance').value!=='')rule.tolerance=$('ruleTolerance').value;
-  await api(endpoint('/validate-rules'),{comparison_rules:[rule],keys:[...selected],ignore_columns:[...ignoredColumns]});
-  valueRules=[...valueRules.filter(r=>r.column!==rule.column),rule];await saveDraft();renderValueRules();
+  const proposed=[...settingsRules.filter(r=>r.column.toLowerCase()!==rule.column.toLowerCase()),rule];
+  const result=await api('/api/settings',{...settingsConfig(),comparison_rules:proposed});settingsRules=result.comparison_rules;renderValueRules();$('settingsStatus').textContent='Column rule saved for future comparisons. A profile’s explicit rule for the same column takes precedence.';
 }catch(e){showError(e);}});
-async function loadProfiles(){const result=await api('/api/profiles');$('profileSelect').replaceChildren(new Option('Choose profile',''));result.profiles.forEach(p=>$('profileSelect').add(new Option(p.name,p.id)));}
-$('saveProfile').addEventListener('click',async()=>{try{await saveDraft();await api('/api/profiles',{job_id:job.id,name:$('profileName').value});await loadProfiles();$('profileStatus').textContent='Profile saved. Saving the same name replaces that profile.';}catch(e){showError(e);}});
-$('applyProfile').addEventListener('click',async()=>{try{job=await api(endpoint('/apply-profile'),{id:$('profileSelect').value});hydratedId=null;headerDraftJob=null;hydrate();renderKeys();renderIgnoredColumns();renderOverrides();renderValueRules();$('profileStatus').textContent='Profile applied. Review keys, scope and rules before starting.';}catch(e){showError(e);}});
+async function loadProfiles(){const result=await api('/api/profiles');for(const id of ['profileSelect','quickProfile']){const previous=$(id).value;$(id).replaceChildren(new Option('Choose profile',''));result.profiles.forEach(p=>$(id).add(new Option(p.name,p.id)));$(id).value=previous;}const ready=job?.state==='ready';$('applyProfile').disabled=$('quickApplyProfile').disabled=!ready;$('saveProfile').disabled=!job||!['ready','complete'].includes(job.state);}
+$('saveProfile').addEventListener('click',async()=>{try{if(headerDirty&&job?.state==='ready')await applyHeaders();await saveDraft();await api('/api/profiles',{job_id:job.id,name:$('profileName').value});await loadProfiles();$('profileStatus').textContent='Template saved with headers, keys, scope, value overrides and column rules.';}catch(e){showError(e);}});
+async function applyProfile(id){if(!id)throw Error('Choose a template first.');job=await api(endpoint('/apply-profile'),{id});hydratedId=null;headerDraftJob=null;hydrate();renderHeaders();renderKeys();renderIgnoredColumns();renderOverrides();$('quickProfileStatus').textContent='Template applied. Review the headers, keys and overrides before running.';$('profileStatus').textContent=$('quickProfileStatus').textContent;}
+$('applyProfile').addEventListener('click',()=>applyProfile($('profileSelect').value).catch(showError));
+$('quickApplyProfile').addEventListener('click',()=>applyProfile($('quickProfile').value).catch(showError));
+$('manageProfiles').addEventListener('click',()=>goView('profilesPanel').catch(showError));
 $('deleteProfile').addEventListener('click',async()=>{try{if(!confirm('Delete this saved profile? Existing jobs are unaffected.'))return;await api('/api/profiles',{id:$('profileSelect').value},'DELETE');await loadProfiles();}catch(e){showError(e);}});
 $('headerContinue').addEventListener('click',()=>setTimeout(()=>loadProfiles().catch(showError),300));
 async function cancelTask(id,kind){if(!confirm(`Cancel ${kind}? Active work will stop at its next safe checkpoint.`))return;try{const result=await api(`/api/jobs/${id}/cancel`,{kind});$('completionNotice').textContent=result.message;if(job?.id===id)await refresh();}catch(e){showError(e);}}
@@ -903,10 +930,19 @@ async function loadStorage(){
   }catch(e){showError(e);$('storageStatus').textContent='Unable to measure storage.';}finally{$('storageStatus').classList.remove('loading-status');}
 }
 $('storageRefresh').addEventListener('click',loadStorage);
-$('checkSpace').addEventListener('click',async()=>{try{if(!files.left||!files.right)throw Error('Choose both files first.');const data=await api('/api/preflight',{bytes:files.left.size+files.right.size});$('preflightStatus').textContent=`${bytes(data.free)} free · ${bytes(data.upload_bytes)} upload · suggested free space ${bytes(data.suggested_free_bytes)}. ${data.can_upload?data.message:'Not enough space for the uploaded copies. Clean up old jobs.'}`;}catch(e){showError(e);}});
 async function loadDiagnostics(){const result=await api(endpoint('/diagnostics'));const box=$('duplicateDiagnostics');box.hidden=!result.key;box.replaceChildren();if(result.key){const title=document.createElement('h3'),detail=document.createElement('p'),scroll=document.createElement('div'),table=document.createElement('table');title.textContent=`Duplicate key in ${result.side} file · ${number(result.count)} rows`;detail.textContent=JSON.stringify(result.key)+' · '+result.note;scroll.className='table-scroll';table.id='duplicateSampleTable';scroll.append(table);box.append(title,detail,scroll);drawTable('duplicateSampleTable',result.sample_columns,result.samples);}}
-async function loadNotes(){const result=await api(endpoint('/annotations'));$('analysisNotes').replaceChildren();for(const note of result.notes.slice(0,100)){const p=document.createElement('p');p.textContent=`${note.column||'All columns'} · ${note.key?JSON.stringify(note.key):'All keys'} · ${note.status}: ${note.comment}`;$('analysisNotes').append(p);}if(result.notes.length>100){const p=document.createElement('p');p.textContent=`Showing 100 of ${result.notes.length} notes; all notes are included in exports.`;$('analysisNotes').append(p);}}
-$('saveNote').addEventListener('click',async()=>{try{const text=$('analysisKey').value,key=text===''?null:job.keys.length===1?[text]:JSON.parse(text);await api(endpoint('/annotations'),{column:$('analysisColumn').value,key,status:$('noteStatus').value,comment:$('noteComment').value});await loadNotes();job=await api(endpoint());renderExports();}catch(e){showError(e);}});
+function selectedCommentTarget(){
+  const text=$('analysisKey').value,key=text===''?null:job.keys.length===1?[text]:JSON.parse(text),kind=$('noteTarget').value;
+  return {column:kind==='key'?'':$('analysisColumn').value,key:kind==='column'?null:key};
+}
+function commentLabel(note){return (note.column?'Column '+note.column:'All columns')+' · '+(note.key?job.keys.map((k,i)=>k+': '+note.key[i]).join(', '):'All keys');}
+function commentsFor(column,key){return analysisNotesCache.filter(n=>(!n.column||n.column===column)&&(n.key===null||key!==null&&JSON.stringify(n.key)===JSON.stringify(key))).map(n=>`${n.key?(n.column?'Key + column':'Key comment'):'Column comment'} · ${n.status}: ${n.comment}`).join('\n')||'—';}
+function renderCommentScope(){const target=selectedCommentTarget(),kind=$('noteTarget').value;const valid=kind==='key'?!!target.key:kind==='column'?!!target.column:!!target.key&&!!target.column;$('saveNote').disabled=!valid;$('noteScope').textContent=valid?'Comment applies to '+commentLabel(target)+'.':'Select '+(kind==='key'?'a key':kind==='column'?'a column':'a key and column')+' above to add a comment.';}
+function fillCommentEditor(){const target=selectedCommentTarget(),note=analysisNotesCache.find(n=>n.column===target.column&&JSON.stringify(n.key)===JSON.stringify(target.key));$('noteComment').value=note?.comment||'';$('noteStatus').value=note?.status||'Needs investigation';renderCommentScope();}
+$('noteTarget').addEventListener('change',fillCommentEditor);
+async function loadNotes(){const result=await api(endpoint('/annotations'));analysisNotesCache=result.notes;$('analysisNotes').replaceChildren();for(const note of result.notes.slice(0,100)){const p=document.createElement('p'),label=document.createElement('span'),edit=document.createElement('button');label.textContent=commentLabel(note)+' · '+note.status+': '+note.comment;edit.textContent='View / edit';edit.className='subtle';edit.addEventListener('click',async()=>{$('analysisMode').value=note.key?'keys':'columns';$('analysisColumnSearch').value='';analysisColumns();$('analysisColumn').value=note.column;selectAnalysisKey(note.key);analysisOffset=0;await loadAnalysis();$('noteTarget').value=note.key?(note.column?'cell':'key'):'column';fillCommentEditor();document.querySelector('.review-comments').open=true;$('noteComment').focus();});p.append(label,edit);$('analysisNotes').append(p);}if(!result.notes.length)$('analysisNotes').textContent='No comments yet. Select a column or key to begin.';if(result.notes.length>100){const p=document.createElement('p');p.textContent=`Showing 100 of ${result.notes.length} saved comments. Applicable comments still appear on every mismatch row.`;$('analysisNotes').append(p);}}
+$('saveNote').addEventListener('click',async()=>{try{await api(endpoint('/annotations'),{...selectedCommentTarget(),status:$('noteStatus').value,comment:$('noteComment').value});await loadNotes();await loadAnalysis();job=await api(endpoint());renderExports();}catch(e){showError(e);}});
+
 let notificationSnapshot=null,notificationPolling=false,notificationSince=Date.now()/1000;
 $('enableNotifications').addEventListener('click',async()=>{if(!('Notification' in window)){showError('This browser does not support desktop notifications.');return;}try{const permission=await Notification.requestPermission();localStorage.setItem('comparison-notifications',permission==='granted'?'on':'off');$('notificationStatus').textContent=permission==='granted'?'Enabled while this page remains open.':'Notifications were not enabled. Check your browser permissions.';notificationSnapshot=null;notificationSince=Date.now()/1000;pollNotifications();}catch(e){showError(e);}});
 $('disableNotifications').addEventListener('click',()=>{localStorage.setItem('comparison-notifications','off');notificationSnapshot=null;$('notificationStatus').textContent='Notifications disabled.';});

@@ -43,7 +43,18 @@ vm.runInContext(`api=async path=>({state:'complete',total:1,rows:path.includes('
 await vm.runInContext("resetAnalysis('patterns')",context);
 assert.equal(nodes.get('analysisKeyControls').hidden,true);assert.equal(nodes.get('patternSummary').textContent,'Case only: 3 cells');
 assert.equal(nodes.get('analysisTable').children[1].children[4].textContent,3);
-nodes.get('analysisTable').children[1].children[5].children[0].events.click[0]();await vm.runInContext('loadAnalysis()',context);
+nodes.get('analysisTable').children[1].children[6].children[0].events.click[0]();await vm.runInContext('loadAnalysis()',context);
 assert.equal(nodes.get('analysisColumn').value,'large');assert.equal(nodes.get('analysisMode').value,'columns');
+vm.runInContext(`analysisNotesCache=[{column:'',key:['001','A,B'],status:'Expected',comment:'Key explanation'},{column:'large',key:null,status:'Needs investigation',comment:'Column explanation'}]`,context);
+assert(vm.runInContext("commentsFor('large',['001','A,B'])",context).includes('Key explanation'));
+assert(vm.runInContext("commentsFor('small',['001','A,B'])",context).includes('Key explanation'));
+assert(!vm.runInContext("commentsFor('small',['002','A,B'])",context).includes('Key explanation'));
+assert(vm.runInContext("commentsFor('large',['002','A,B'])",context).includes('Column explanation'));
+assert(nodes.get('analysisColumnChoices').children.length>0);
+vm.runInContext("selectAnalysisKey(['001','A,B']);$('analysisColumn').value='large';$('noteTarget').value='key';fillCommentEditor()",context);
+assert.equal(nodes.get('noteComment').value,'Key explanation');assert.equal(vm.runInContext('selectedCommentTarget().column',context),'');
+// One action generates and downloads exactly once, for the original job.
+vm.runInContext(`job.exports={};globalThis.downloads=[];download=(name,id)=>downloads.push([name,id]);api=async(path,body)=>{if(path.includes('/export/'))return {};return {exports:{html:{state:'complete',size:100}}};}`,context);
+await vm.runInContext("generateAndDownload('html')",context);assert.equal(context.downloads.length,1);assert.equal(context.downloads[0][1],'a');
 console.log('Analysis UI: mismatch-only columns, search, composite key lookup, value styling, review scope and back navigation passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

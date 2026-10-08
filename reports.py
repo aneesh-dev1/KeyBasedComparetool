@@ -12,7 +12,7 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 8
+REPORT_VERSION = 9
 
 STYLE = '''body{font:15px system-ui,sans-serif;color:#004364;background:#f7f9fa;margin:40px auto;max-width:1200px;padding:0 24px}h1{font-size:32px}a{color:#007b99}table{border-collapse:collapse;width:100%;background:white;margin:20px 0}th,td{padding:12px;border:1px solid #dce5eb;text-align:left;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}th{background:#e6f6fa}nav{display:flex;gap:24px}p{line-height:1.6}'''
 
@@ -51,6 +51,15 @@ def report_summary(report):
     notes=report/'annotations.json'
     summary['analysis_notes']=json.loads(notes.read_text()) if notes.exists() else []
     return summary
+
+
+def comment_lookup(summary):
+    return {(n['column'],tuple(n['key']) if n['key'] is not None else None):n['status']+': '+n['comment'] for n in summary.get('analysis_notes',[])}
+
+
+def applicable_comments(notes,column,key):
+    key=tuple(key)
+    return '\n'.join(notes[scope] for scope in ((column,None),('',key),(column,key)) if scope in notes)
 
 
 def note_rows(summary):
@@ -102,6 +111,7 @@ h2{font-size:21px;margin:0 0 15px}h3{font-size:16px}.overview{display:grid;grid-
 
 def make_summary_html(summary, samples=None):
     samples = samples or {}
+    row_notes=comment_lookup(summary)
     import math
     from datetime import datetime, timezone
     esc = lambda value: html.escape(str(value))
@@ -153,9 +163,9 @@ def make_summary_html(summary, samples=None):
         out += row[:-5]+'<td>'
         rows=samples.get(name,[])
         if rows:
-            out += f'<details class="mismatch-sample" id="sample-{index}"><summary>View {len(rows)} keys</summary><div class="sample-dropdown"><p>'+esc(name)+f' · {len(rows)} sample keys of {count:,} mismatches. First keys in comparison order; values over 1,000 characters are marked as truncated.</p><div class="table-wrap"><table><thead>'+html_row(summary['keys']+['File 1 value','File 2 value'],True)+'</thead><tbody>'
+            out += f'<details class="mismatch-sample" id="sample-{index}"><summary>View {len(rows)} keys</summary><div class="sample-dropdown"><p>'+esc(name)+f' · {len(rows)} sample keys of {count:,} mismatches. First keys in comparison order; values over 1,000 characters are marked as truncated.</p><div class="table-wrap"><table><thead>'+html_row(summary['keys']+['File 1 value','File 2 value']+(['Comments'] if row_notes else []),True)+'</thead><tbody>'
             for values in rows:
-                out += '<tr>'+''.join('<td>'+esc(value)+'</td>' for value in values[:-2])+'<td class="sample-before">'+esc(values[-2])+'</td><td class="sample-after">'+esc(values[-1])+'</td></tr>'
+                out += '<tr>'+''.join('<td>'+esc(value)+'</td>' for value in values[:-2])+'<td class="sample-before">'+esc(values[-2])+'</td><td class="sample-after">'+esc(values[-1])+'</td>'+('<td>'+esc(applicable_comments(row_notes,name,values[:-2]))+'</td>' if row_notes else '')+'</tr>'
             out += '</tbody></table></div></div></details>'
         else:out += 'Generate HTML report to include samples'
         out += '</td></tr>'
@@ -303,6 +313,7 @@ def partition_columns(report, columns, parent, notify):
 
 def export_excel(report, destination, notify=lambda message: None):
     summary = report_summary(report)
+    row_notes=comment_lookup(summary)
     stats = column_stats(summary)
     columns = [name for name,count,_,_ in stats if count]
     if any(summary['changed_cells_by_column'][name] > 1048574 for name in columns):
@@ -360,11 +371,11 @@ def export_excel(report, destination, notify=lambda message: None):
     with partition_columns(report, columns, destination.parent, notify) as paths:
         def rows(column):
             notify(f'Writing sheet for {column}')
-            yield summary['keys']+['valueA','valueB','variable','typeA','typeB','diffAB',Link('Back to TOC','TOC')]
+            yield summary['keys']+['valueA','valueB','variable','typeA','typeB','diffAB']+(['Comments'] if row_notes else [])+[Link('Back to TOC','TOC')]
             with paths[column].open(encoding='utf-8') as source:
                 for line in source:
                     values=json.loads(line)
-                    yield values+[column,'text','text',numeric_difference(values[-2],values[-1])]
+                    yield values+[column,'text','text',numeric_difference(values[-2],values[-1])]+([applicable_comments(row_notes,column,values[:-2])] if row_notes else [])
         sheets.extend((mapped[column],rows(column)) for column in columns)
         if not columns:
             sheets.append(('No mismatches',iter([['Comparison result'],['Status','Details'],['No changed cells','Check summary for keys found only in one file.']])))

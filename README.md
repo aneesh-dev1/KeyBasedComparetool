@@ -74,8 +74,8 @@ Open it directly offline or use Print / save as PDF. No ZIP or supporting files
 are required. Individual cell mismatches remain in Excel/CSV and Analysis;
 HTML generation streams the mismatch CSV once, stopping when every changed column has up to 20 sample keys. Expand a column to see its keys and both values. Values over 1,000 characters are marked as truncated; the detailed downloads retain full values.
 
-Report generation is asynchronous. Click Excel or HTML once to generate it,
-then click again when it says “Ready to download.” Comparison and export jobs
+Report generation is asynchronous. Click Excel or HTML once to generate it
+and it downloads automatically when ready. Comparison and export jobs
 share one job queue. A comparison can use two file-sort processes, but multiple
 comparisons and exports do not run simultaneously.
 
@@ -584,9 +584,9 @@ HTML summary callouts and the Excel audit sheet, with a link from File Summary.
   sorts or ZIP operations may take time to finish their current operation.
   Comparison/import cancellation requires a new comparison; cancelled exports
   and analysis can be generated again. Uploaded files remain until job cleanup.
-- **Profiles:** save/apply/delete named profiles in Keys & scope. They include
+- **Profiles:** save/apply/delete named profiles in the Profiles page; select one after upload in Column headers. They include
   header aliases by original name, keys, ignored columns/keys/containers, value
-  overrides, optional comparison rules and sort settings. Profiles are private
+  overrides and optional comparison rules. Performance belongs in Settings. Profiles are private
   to the browser workspace; saving the same name replaces it. Missing profile
   columns or containers produce a validation error before comparison.
 - **Analysis notes:** classify a column, key, or key/column pair as Expected,
@@ -615,7 +615,7 @@ Windows/on-prem deployment still need a representative pilot.
 
 ### Batch settings and duplicate handling
 
-Keys & scope offers read/sort batch rows (default 100,000), comparison batch keys (default 10,000), and first/last source occurrence for duplicates. CLI equivalents: `--read-batch-size`, `--compare-batch-size`, `--duplicate-policy`. Batch sizes accept integers from 1 to 1,000,000. Sorting flushes at the row cap or memory budget, whichever comes first. Comparison remains streaming; its batch setting controls progress reporting. Duplicate counts and skipped rows are shown in Results and exports. Match percentages use only retained rows.
+Settings offers persistent read/sort batch rows (default 100,000), comparison batch keys (default 10,000), ; Keys & scope retains first/last source occurrence for duplicates. CLI equivalents: `--read-batch-size`, `--compare-batch-size`, `--duplicate-policy`. Batch sizes accept integers from 1 to 1,000,000. Sorting flushes at the row cap or memory budget, whichever comes first. Comparison remains streaming; its batch setting controls progress reporting. Duplicate counts and skipped rows are shown in Results and exports. Match percentages use only retained rows.
 
 ### Guided Analysis view
 
@@ -668,3 +668,15 @@ Rerun a completed comparison to apply new rules.
 
 HTML sample controls use native expandable dropdowns, without requiring JavaScript
 to show the 20 key samples. Regenerate old exports to get the updated controls.
+
+### Workspace settings and comments
+
+Settings stores performance defaults and optional column comparison rules for future runs in your workspace. In team mode, browser workspaces are separate. Rule names match common column headers without case sensitivity; key, ignored and absent columns are skipped. Explicit profile rules take precedence over Settings defaults. Completed runs retain their original rules. Save a numeric tolerance of zero to treat `0` and `0.00` as equivalent.
+
+Analysis shows a browsable, paged list of mismatching columns, with optional filtering. Comments can apply to a whole column, a key across all columns, or a single key/column pair. Existing comments can be viewed and edited. Key comments appear alongside every mismatch for that key in analysis and report samples, and in the corresponding Excel mismatch sheets.
+
+### Compact review workspace
+
+Navigation starts collapsed on each page load. Expand it using the bottom toggle; narrow screens use a drawer, and reduced-motion preferences disable the transition. The expanded logo sits directly on the navy background. Redundant sidebar storage text and the upload-page disk-check button have been removed; storage management remains in Storage & queue.
+
+Analysis keeps its column browser beside the scrollable results grid on desktop. Comments and guidance expand when needed. Smaller screens stack the panels to keep controls readable rather than compressing them.

@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 import webbrowser
 
+from workspace_settings import PERFORMANCE, validate_settings, resolved_rules
 from task_control import check_cancel
 from comparison_rules import validate_rules
 from analysis import build_index, query_index
@@ -469,6 +470,14 @@ class Handler(BaseHTTPRequestHandler):
                 if type(size) is not int or size<0 or size>200*1024**3:raise ValueError('Invalid combined upload size')
                 free=shutil.disk_usage(self.app.root).free
                 return self.json_response(dict(free=free,upload_bytes=size,suggested_free_bytes=size*3,can_upload=free>=size+128*1024**2,message='Plan for at least 3× combined input size for uploads, sorting and reports. This estimate is not a reservation or upper bound; many mismatches and analysis indexes need more.'))
+            if path == '/api/settings' and self.command in ('GET','POST'):
+                target=self.container_path().with_name('settings.json')
+                with self.app.lock:
+                    if self.command=='POST':
+                        settings=validate_settings(self.body(),self.server.max_sort_mb)
+                        atomic_write_text(target,json.dumps(settings))
+                    settings=json.loads(target.read_text()) if target.exists() else validate_settings({},self.server.max_sort_mb)
+                return self.json_response(settings)
             if path == '/api/profiles' and self.command in ('GET','POST','DELETE'):
                 target=self.container_path().with_name('comparison-profiles.json')
                 with self.app.lock:
@@ -480,6 +489,11 @@ class Handler(BaseHTTPRequestHandler):
                         name=config.get('name','').strip()
                         if not name or len(name)>100:raise ValueError('Enter a profile name of 1–100 characters')
                         profile=dict(id=uuid.uuid4().hex,name=name,source_headers=item['source_headers'],column_headers=item['column_headers'],config=item.get('draft',{}) if item['state']=='ready' else {key:item.get(key) for key in ('keys','ignore_columns','ignore_keys','ignore_container_ids','value_overrides','comparison_rules','memory_mb','sort_workers','read_batch_size','compare_batch_size','duplicate_policy')})
+                        profile['config']={k:v for k,v in profile['config'].items() if k not in PERFORMANCE}
+                        settings_path=self.container_path().with_name('settings.json')
+                        defaults=json.loads(settings_path.read_text()) if settings_path.exists() else {}
+                        cfg=profile['config']
+                        profile['config']['comparison_rules']=resolved_rules(defaults,cfg,item['columns'],cfg.get('keys') or [],cfg.get('ignore_columns') or [])
                         profiles=[p for p in profiles if p['name'].casefold()!=name.casefold()]
                         if len(profiles)>=100:raise ValueError('Delete an unused profile first (maximum 100)')
                         profiles.append(profile)
@@ -539,7 +553,7 @@ class Handler(BaseHTTPRequestHandler):
                         aliases={old.casefold():new for old,new in zip(profile['source_headers'][side],profile['column_headers'][side])}
                         layout[side]=[aliases.get(name.casefold(),name) for name in job['source_headers'][side]]
                     aligned,changes=align_headers(job['source_headers'],layout);common=common_headers(aligned)
-                    draft=profile['config'];keys=draft.get('keys') or []
+                    draft={k:v for k,v in profile['config'].items() if k not in PERFORMANCE};keys=draft.get('keys') or []
                     if not keys or any(k not in common for k in keys):raise ValueError('Profile key columns are missing from these files; update headers or choose another profile')
                     ignored,_=validate_scope(keys,common,draft.get('ignore_columns') or [],draft.get('ignore_keys') or '')
                     validate_overrides(draft.get('value_overrides') or [],common,keys,ignored)
@@ -741,7 +755,10 @@ class Handler(BaseHTTPRequestHandler):
                     keys = config.get('keys', [])
                     if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys) or len(set(keys)) != len(keys) or any(k not in job['columns'] for k in keys):
                         raise ValueError('Select at least one valid, unique key column')
-                    memory = int(config.get('memory_mb', 4096))
+                    settings_path=self.container_path().with_name('settings.json')
+                    defaults=json.loads(settings_path.read_text()) if settings_path.exists() else {}
+                    config.update({k:defaults[k] for k in PERFORMANCE if k in defaults})
+                    memory = int(config.get('memory_mb', min(4096,self.server.max_sort_mb)))
                     if memory not in (64, 128, 256, 512, 1024, 2048, 4096, 8192):
                         raise ValueError('Invalid memory setting')
                     if memory > self.server.max_sort_mb:
@@ -763,7 +780,7 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError(f"Container {item['name']} expects {item['key_width']} key columns")
                         validate_scope(keys, job['columns'], [], item['values'])
                     overrides, _ = validate_overrides(config.get('value_overrides', []), job['columns'], keys, ignored_columns)
-                    rules=validate_rules(config.get('comparison_rules',[]),job['columns'],keys,ignored_columns)
+                    rules=resolved_rules(defaults,config,job['columns'],keys,ignored_columns)
                     job.update(**execution_settings(config),comparison_rules=rules,state='queued', keys=keys, memory_mb=memory, sort_workers=sort_workers,
                                ignore_columns=ignored_columns, ignore_keys=config.get('ignore_keys', ''), value_overrides=overrides,
                                ignore_container_ids=ids, ignore_key_containers=containers)
