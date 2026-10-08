@@ -33,8 +33,12 @@ Open **http://127.0.0.1:8765**. No third-party packages are required.
    each category. Download the full results using the report buttons.
 6. Use **Job history** in the sidebar to reopen previous results or unfinished uploads.
 
-The sidebar groups **New comparison** and **JSON comparison** under Compare,
-and **Ignore key containers** and **Job history** under Manage. Files, Column
+The sidebar groups **CSV & Excel** and **JSON comparison** under Compare.
+**New comparison** is a creation action in the **Job history** header, rather
+than a repeated action inside each phase. **CSV & Excel** returns to the current
+comparison without clearing it. Starting another comparison preserves saved jobs.
+The sidebar groups **Ignore key containers** and **Job history** under Manage.
+Files, Column
 headers, Keys & scope, Pipeline & logs, Results, and Analysis
 are the six phases within New comparison. **Preview files** is optional; start
 comparison directly from Keys & scope. **Review value overrides** is available

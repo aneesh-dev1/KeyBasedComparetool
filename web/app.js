@@ -14,6 +14,11 @@ let overrideRules=[], currentView='uploadPanel', hydratedId=null, historyOffset=
 let logCursor=0, logText='', logJobId=null;
 let viewingHistoryJob=false;
 let keyContainers=[], selectedContainers=new Set();
+$('historyPanel').querySelector('.section-title').append($('reset'));
+$('reset').textContent='New comparison';$('reset').className='primary';
+$('navNew').setAttribute('aria-label','CSV & Excel');$('navNew').dataset.tip='CSV & Excel';
+$('navNew').querySelector('.side-label').textContent='CSV & Excel';
+$('navNew').querySelector('.side-description').textContent='Comparison workspace';
 $('scopeNext').innerHTML='Start comparison <span>→</span>';
 $('sourcePanel').insertAdjacentHTML('beforeend','<div class="panel-footer"><button id="previewBack" class="subtle">Back to Keys & scope</button><button id="compare" class="primary" disabled>Start comparison →</button></div>');
 $('analysisPanel').insertAdjacentHTML('afterbegin','<button id="reviewOverrides" class="subtle review-overrides-action">Review value overrides</button>');
@@ -55,7 +60,7 @@ function panel(name) {
   $('mainWorkspace').classList.toggle('docs-view',name==='docsPanel');
   for (const [id,nav] of Object.entries(views)){ $(id).hidden=id!==name; $(nav).classList.toggle('active',id===name); }
   $('sheetPanel').hidden=name!=='uploadPanel'||!['selecting_sheets','preparing'].includes(job?.state);
-  $('reset').hidden=!job;
+  $('reset').hidden=false;
   const history=currentView==='historyPanel';
   const library=['containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','settingsPanel'].includes(currentView);
   $('comparisonFlow').hidden=history||library;
@@ -403,7 +408,10 @@ async function refresh() {
   }
 }
 function pollError(error){showError(error);pollTimer=setTimeout(()=>refresh().catch(pollError),5000);}
-$('reset').addEventListener('click',()=>{localStorage.removeItem('keywise-job');location.reload();});
+$('reset').addEventListener('click',async()=>{
+  if(uploading)return;
+  try{await saveDraft();localStorage.removeItem('keywise-job');location.reload();}catch(error){showError(error);}
+});
 (async()=>{
   const id=localStorage.getItem('keywise-job');
   if(id&&/^[a-f0-9]{32}$/.test(id)){
@@ -583,8 +591,10 @@ window.addEventListener('resize',hideSidebarTip);
 $('navNew').addEventListener('click',async()=>{
   try{
     if(uploading){panel('uploadPanel');return;}
-    if(['containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','settingsPanel'].includes(currentView)&&!viewingHistoryJob){await goView(job?.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):job?.state==='complete'?'results':job&&['running','queued','error','cancelled'].includes(job.state)?'runningPanel':'uploadPanel');return;}
-    if(currentView==='historyPanel'||viewingHistoryJob){await saveDraft();localStorage.removeItem('keywise-job');location.reload();}
+    if(['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','settingsPanel'].includes(currentView)||viewingHistoryJob){
+      viewingHistoryJob=false;
+      await goView(job?.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):job?.state==='complete'?'results':job&&['running','queued','error','cancelled'].includes(job.state)?'runningPanel':'uploadPanel');
+    }
   }catch(error){showError(error);}
 });
 
