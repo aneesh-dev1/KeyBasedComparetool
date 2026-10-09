@@ -34,9 +34,11 @@ Open **http://127.0.0.1:8765**. No third-party packages are required.
 6. Use **Job history** in the sidebar to reopen previous results or unfinished uploads.
 
 The sidebar groups **CSV & Excel** and **JSON comparison** under Compare.
-**New comparison** is a creation action in the **Job history** header, rather
-than a repeated action inside each phase. **CSV & Excel** returns to the current
-comparison without clearing it. Starting another comparison preserves saved jobs.
+Each page load opens a fresh, empty comparison. **CSV & Excel** opens a submenu
+with **New comparison** and **Continue current selection**. Continue restores the
+selection in this tab, or the last saved job when opening the app again. New opens
+a blank upload page without deleting previous jobs. During an active upload, New
+is disabled. **New comparison** is also available in the **Job history** header.
 The sidebar groups **Ignore key containers** and **Job history** under Manage.
 Files, Column
 headers, Keys & scope, Pipeline & logs, and Results

@@ -18,7 +18,10 @@ function findNode(id){const visit=n=>{if(n.id===id)return n;for(const c of n.chi
 const doc={getElementById:id=>nodes.get(id)||findNode(id),body:new Element(),querySelector:q=>{const el=new Element();el.content=q.includes('max-sort')?'4096':'token';return el;},querySelectorAll:()=>[],addEventListener(){},createElement:()=>new Element()};
 class Notification{static permission='granted';static async requestPermission(){return 'granted'}constructor(title,opts){notifications.push(opts.body)}}
 const context=vm.createContext({matchMedia:()=>({matches:false,addEventListener(){}}),document:doc,window:{addEventListener(){},matchMedia:()=>({matches:false,addEventListener(){}}),scrollTo(){},Notification},Notification,innerHeight:900,localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},setInterval(){},setTimeout(){},clearTimeout(){},Option:function(t,v){this.text=t;this.value=v},URL,URLSearchParams,Blob,TextDecoder,structuredClone,console,confirm:()=>true,location:{reload(){}},fetch:async path=>({ok:true,json:async()=>path==='/api/activity'?{activities:[{id:'a',kind:'Comparison',state:activity}]}:{containers:[],profiles:[]}})});
+storage.set('keywise-job','a'.repeat(32));
 vm.runInContext(fs.readFileSync('web/app.js','utf8'),context);
+assert.equal(vm.runInContext('job',context),null,'Saved selection must not open automatically');
+assert.equal(vm.runInContext('currentView',context),'uploadPanel');
 
 (async()=>{
 vm.runInContext(`job={id:'a',state:'complete',keys:['id','part'],exports:{},summary:{changed_cells_by_column:{large:3,small:1,equal:0},changed_rows:3,changed_cells:4,matched_keys:10,left_only:1,right_only:0}};currentView='analysisPanel';api=async()=>({notes:[]});`,context);
@@ -67,5 +70,12 @@ assert.deepEqual(Array.from(context.starts),['/api/jobs/direct/start']);
 assert.equal(vm.runInContext('currentView',context),'runningPanel');
 assert.equal(vm.runInContext("phaseViews.includes('sourcePanel')||phaseViews.includes('overridesPanel')",context),false);
 assert.equal(vm.runInContext('phaseViews.length',context),5);
+// Restoring the previous run is an explicit user action; New retains its pointer.
+vm.runInContext(`job=null;localStorage.getItem=()=> 'a'.repeat(32);api=async()=>({id:'a'.repeat(32),state:'complete'});`,context);
+await vm.runInContext('restoreCurrentComparison()',context);
+assert.equal(vm.runInContext('job.id',context),'a'.repeat(32));
+assert.equal(vm.runInContext('currentView',context),'results');
+vm.runInContext(`globalThis.reloaded=false;saveDraft=async()=>{};location.reload=()=>{reloaded=true};localStorage.removeItem=()=>{throw new Error('Must retain the last selection')};`,context);
+await nodes.get('menuNewComparison').events.click[0]();assert.equal(context.reloaded,true);
 console.log('Analysis UI and direct comparison start passed. Preview, overrides and analysis are outside the five phases.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

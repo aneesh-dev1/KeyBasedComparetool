@@ -14,6 +14,9 @@ let overrideRules=[], currentView='uploadPanel', hydratedId=null, historyOffset=
 let logCursor=0, logText='', logJobId=null;
 let viewingHistoryJob=false;
 let keyContainers=[], selectedContainers=new Set();
+let lastComparisonView='uploadPanel';
+document.body.insertAdjacentHTML('beforeend','<div id="comparisonMenu" class="comparison-menu" role="menu" aria-label="CSV and Excel actions" hidden><button id="menuNewComparison" role="menuitem">＋ New comparison</button><button id="menuContinueComparison" role="menuitem">↪ Continue current selection</button></div>');
+$('navNew').setAttribute('aria-haspopup','menu');$('navNew').setAttribute('aria-expanded','false');$('navNew').setAttribute('aria-controls','comparisonMenu');
 $('historyPanel').querySelector('.section-title').append($('reset'));
 $('reset').textContent='New comparison';$('reset').className='primary';
 $('navNew').setAttribute('aria-label','CSV & Excel');$('navNew').dataset.tip='CSV & Excel';
@@ -61,6 +64,7 @@ function syncNavigation(){
   $('reset').disabled=uploading;
 }
 function panel(name) {
+  if(phaseViews.includes(name))lastComparisonView=name;
   if(typeof updateReviewWorkspace==='function')updateReviewWorkspace(name);
   if(currentView!==name)window.scrollTo(0,0);
   currentView=name;
@@ -419,16 +423,16 @@ async function refresh() {
 function pollError(error){showError(error);pollTimer=setTimeout(()=>refresh().catch(pollError),5000);}
 $('reset').addEventListener('click',async()=>{
   if(uploading)return;
-  try{await saveDraft();localStorage.removeItem('keywise-job');location.reload();}catch(error){showError(error);}
+  try{await saveDraft();location.reload();}catch(error){showError(error);}
 });
-(async()=>{
+async function restoreCurrentComparison(){
   const id=localStorage.getItem('keywise-job');
   if(id&&/^[a-f0-9]{32}$/.test(id)){
     job={id};
     try{job=await api(endpoint());currentView=job.state==='complete'?'results':['running','queued','error','cancelled'].includes(job.state)?'runningPanel':job.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel';panel(currentView);await refresh();if(job.state==='uploading')showError(`Upload not finished. Reselect ${job.files.left.name} and ${job.files.right.name} to resume, or start a new comparison.`);}
-    catch(error){showError(error);$('reset').hidden=false;}
+    catch(error){job=null;showError(error);$('reset').hidden=false;}
   }
-})();
+}
 
 $('scopeNext').addEventListener('click',startComparison);
 $('navPreview').addEventListener('click',async()=>{
@@ -606,15 +610,27 @@ for(const button of document.querySelectorAll('.sidebar [data-tip]')){
 }
 $('workspaceSidebar').addEventListener('scroll',hideSidebarTip);
 window.addEventListener('resize',hideSidebarTip);
-$('navNew').addEventListener('click',async()=>{
-  try{
-    if(uploading){panel('uploadPanel');return;}
-    if(['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','settingsPanel'].includes(currentView)||viewingHistoryJob){
-      viewingHistoryJob=false;
-      await goView(job?.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):job?.state==='complete'?'results':job&&['running','queued','error','cancelled'].includes(job.state)?'runningPanel':'uploadPanel');
-    }
-  }catch(error){showError(error);}
+function closeComparisonMenu(){ $('comparisonMenu').hidden=true;$('navNew').setAttribute('aria-expanded','false'); }
+$('navNew').addEventListener('click',()=>{
+  const menu=$('comparisonMenu');if(!menu.hidden){closeComparisonMenu();return;}
+  $('menuNewComparison').disabled=uploading;
+  $('menuContinueComparison').disabled=!(job||files.left||files.right||localStorage.getItem('keywise-job'));
+  const rect=$('navNew').getBoundingClientRect();menu.style.left=Math.min(rect.right+10,window.innerWidth-290)+'px';menu.style.top=Math.min(rect.top,window.innerHeight-115)+'px';menu.hidden=false;$('navNew').setAttribute('aria-expanded','true');
+  (uploading?$('menuContinueComparison'):$('menuNewComparison')).focus();
 });
+$('menuNewComparison').addEventListener('click',async()=>{if(uploading)return;try{await saveDraft();closeComparisonMenu();location.reload();}catch(error){showError(error);}});
+$('menuContinueComparison').addEventListener('click',async()=>{
+  closeComparisonMenu();clearError();
+  try{if(!job&&!files.left&&!files.right){await restoreCurrentComparison();return;}viewingHistoryJob=false;await goView(uploading?'uploadPanel':lastComparisonView);}catch(error){showError(error);}
+});
+document.addEventListener('pointerdown',event=>{if(!$('comparisonMenu').contains(event.target)&&!$('navNew').contains(event.target))closeComparisonMenu();});
+$('comparisonMenu').addEventListener('keydown',event=>{
+  if(event.key==='Escape'){closeComparisonMenu();$('navNew').focus();event.preventDefault();}
+  if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const options=[$('menuNewComparison'),$('menuContinueComparison')].filter(b=>!b.disabled);const index=options.indexOf(document.activeElement);options[event.key==='Home'?0:event.key==='End'?options.length-1:(index+1)%options.length]?.focus();}
+  if(event.key==='Tab')closeComparisonMenu();
+});
+window.addEventListener('resize',closeComparisonMenu);
+$('workspaceSidebar').addEventListener('scroll',closeComparisonMenu);
 
 async function loadContainers(){
   const data=await api('/api/key-containers');keyContainers=data.containers;
