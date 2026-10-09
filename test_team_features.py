@@ -88,6 +88,20 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(result['summary']['changed_cells'],0)
         self.assertEqual(self.client.request(path)['summary']['changed_cells'],1)
         self.assertEqual((self.server.app.directory(new['id'])/'left.csv').stat().st_ino,(self.server.app.directory(original['id'])/'left.csv').stat().st_ino)
+    def test_review_copy_accepts_keys_scope_and_rules(self):
+        path=self.upload(b'id,alt,amount,noise\n001,A,0,x\n',b'id,alt,amount,noise\n001,A,0.00,y\n')
+        original=self.complete(path)
+        config=dict(keys=['alt'],ignore_columns=['noise'],ignore_keys='',ignore_container_ids=[],value_overrides=[],comparison_rules=[dict(column='amount',tolerance='0')],duplicate_policy='first')
+        copy=self.client.request(path+'/review-copy',config)
+        target='/api/jobs/'+copy['id']
+        self.client.request(target+'/start',dict(copy['draft'],memory_mb=64,sort_workers=1))
+        result=self.client.wait(target,lambda j:j['state'] in ('complete','error'))
+        self.assertEqual(result['state'],'complete',result)
+        self.assertEqual(result['summary']['changed_cells'],0)
+        self.assertEqual(result['keys'],['alt'])
+        self.assertEqual(self.client.request(path)['summary'],original['summary'])
+        with self.assertRaises(HTTPError):self.client.request(path+'/review-copy',dict(config,keys=['missing']))
+        with self.assertRaises(HTTPError):self.client.request(path+'/review-copy',dict(config,ignore_columns=['amount']))
     def test_comparison_rules_and_duplicate_diagnostics(self):
         path=self.upload(b'id,amount,date,text\n001,1.00,2026-09-28, Hello \n',b'id,amount,date,text\n001,1.04,28/09/2026,hello\n')
         rules=[dict(column='amount',tolerance='0.05'),dict(column='date',left_date_format='%Y-%m-%d',right_date_format='%d/%m/%Y'),dict(column='text',trim=True,ignore_case=True)]

@@ -39,10 +39,16 @@ than a repeated action inside each phase. **CSV & Excel** returns to the current
 comparison without clearing it. Starting another comparison preserves saved jobs.
 The sidebar groups **Ignore key containers** and **Job history** under Manage.
 Files, Column
-headers, Keys & scope, Pipeline & logs, Results, and Analysis
-are the six phases within New comparison. **Preview files** is optional; start
-comparison directly from Keys & scope. **Review value overrides** is available
-from Analysis after comparison. The bottom **Collapse sidebar** control switches
+headers, Keys & scope, Pipeline & logs, and Results
+are the five phases within New comparison. **Preview files** is optional; start
+comparison directly from Keys & scope. Completed pipelines offer a gently pulsing
+**View results** button. Results compact the steps into a vertical circle rail;
+hover or focus reveals labels and each circle returns to its phase.
+**Analyze mismatches** opens column/key analysis in a drawer over Results.
+The **Recompare** floating action opens tabs for Keys & scope, Value overrides,
+and Comparison rules. It creates a separate run with the same files and preserves
+the original job. Escape closes overlays; reduced-motion preferences disable animation.
+The bottom **Collapse sidebar** control switches
 to a compact icon rail; hover or keyboard-focus an icon to see its label. Desktop
 collapse preferences are remembered after refreshing. On screens up to 800 px,
 the sidebar starts as an icon rail. Expanding opens a navigation drawer; selecting
@@ -272,7 +278,7 @@ all-value-column exclusion, validation errors, API input and filtered exports.
 
 ## Value overrides
 
-From Analysis, choose **Review value overrides**. Select a compared non-key column, enter the exact **File 1 value** and **File 2
+From Results, choose **Recompare → Value overrides**. Select a compared non-key column, enter the exact **File 1 value** and **File 2
 value**, and click **Add rule**. Add multiple rules for one or several columns.
 For example, `status: None → none` accepts file 1's literal `None` paired with
 file 2's literal `none` for the same key. It does not accept the reverse pair or
@@ -288,7 +294,7 @@ list and the number of unequal cells accepted by overrides.
 
 Draft settings are saved when moving between comparison phases and when adding or
 removing a rule. Once a comparison is started, its configuration is immutable.
-Choose **Compare again with overrides** to create a separate run using the same
+Choose **Start recomparison** to create a separate run using the same
 uploaded files, without re-uploading. The server links the finalized inputs to
 the new job; this requires hard-link support in the data filesystem. Original
 results remain unchanged in Job history. Saved profile overrides still apply

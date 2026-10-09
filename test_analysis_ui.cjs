@@ -66,6 +66,6 @@ await nodes.get('scopeNext').events.click[0]();
 assert.deepEqual(Array.from(context.starts),['/api/jobs/direct/start']);
 assert.equal(vm.runInContext('currentView',context),'runningPanel');
 assert.equal(vm.runInContext("phaseViews.includes('sourcePanel')||phaseViews.includes('overridesPanel')",context),false);
-assert.equal(vm.runInContext('phaseViews.length',context),6);
-console.log('Analysis UI and direct comparison start passed. Preview and overrides are outside the six setup/result phases.');
+assert.equal(vm.runInContext('phaseViews.length',context),5);
+console.log('Analysis UI and direct comparison start passed. Preview, overrides and analysis are outside the five phases.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

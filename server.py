@@ -536,7 +536,12 @@ class Handler(BaseHTTPRequestHandler):
                 with self.app.lock:
                     job=self.app.load(identity)
                     if job['state']!='complete':raise ValueError('Complete a comparison before reviewing overrides')
-                    rules,_=validate_overrides(config.get('value_overrides',[]),job['columns'],job['keys'],job.get('ignore_columns',[]))
+                    draft={k:config.get(k,job.get(k)) for k in ('keys','ignore_columns','ignore_keys','ignore_container_ids','comparison_rules','duplicate_policy')}
+                    keys=draft['keys']
+                    if not isinstance(keys,list) or not keys or not all(isinstance(k,str) and k in job['columns'] for k in keys) or len(set(keys))!=len(keys):raise ValueError('Select at least one valid, unique key column')
+                    ignored,_=validate_scope(keys,job['columns'],draft.get('ignore_columns') or [],draft.get('ignore_keys') or '')
+                    draft['comparison_rules']=validate_rules(draft.get('comparison_rules') or [],job['columns'],keys,ignored)
+                    rules,_=validate_overrides(config.get('value_overrides',job.get('value_overrides',[])),job['columns'],keys,ignored)
                     new_id=uuid.uuid4().hex
                     target=self.app.directory(new_id)
                     target.mkdir()
@@ -546,7 +551,6 @@ class Handler(BaseHTTPRequestHandler):
                             os.link(directory/f'{side}.csv',target/f'{side}.csv')
                         fields=('owner','files','delimiter','encoding','source_headers','column_headers','columns','header_changes','header_layout_changes')
                         copy={k:job[k] for k in fields if k in job}
-                        draft={k:job[k] for k in ('keys','ignore_columns','ignore_keys','ignore_container_ids','comparison_rules','duplicate_policy') if k in job}
                         draft['value_overrides']=rules
                         copy.update(id=new_id,state='ready',created=time.time(),exports={},headers_reviewed=True,draft=draft,review_of=identity)
                         self.app.save(copy)
