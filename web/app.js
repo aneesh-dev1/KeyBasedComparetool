@@ -86,6 +86,7 @@ function panel(name) {
     if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'&&id!=='storagePanel'&&id!=='profilesPanel'&&id!=='settingsPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
   }
   syncNavigation();
+  if(typeof updateEnterpriseShell==='function')updateEnterpriseShell(name);
   if(name==='uploadPanel'&&job&&job.state!=='uploading'){
     for(const side of ['left','right']){$(`${side}File`).disabled=true;$(`${side}Name`).textContent=job.files[side].name;$(`${side}Size`).textContent=bytes(job.files[side].size)+' · uploaded';}
     $('upload').disabled=true;$('upload').textContent='Files uploaded';
@@ -1092,7 +1093,7 @@ function updateReviewWorkspace(name){
 }
 async function transitionToResults(){
   if(resultsTransitionRunning||job?.state!=='complete')return;
-  if(matchMedia('(prefers-reduced-motion: reduce)').matches||$('mainWorkspace').classList.contains('review-rail')){await goView('results');return;}
+  if(reducedWorkspaceMotion()||$('mainWorkspace').classList.contains('review-rail')){await goView('results');return;}
   resultsTransitionRunning=true;
   const flights=[],animations=[],buttons=['navFiles','navHeaders','navScope','navPipeline','navResults'].map($);
   const workspace=$('mainWorkspace'),sidebar=$('workspaceSidebar'),identity=job.id;
@@ -1115,6 +1116,8 @@ async function transitionToResults(){
       play(label,[{opacity:1},{opacity:0}],{duration:160,fill:'forwards'}),
       play(number,[{left:'12px'},{left:'10px'}],{duration:460,easing:'ease-out',fill:'forwards'})
     ])));
+    // Once the setup labels have folded away, use the same icons as the review rail.
+    flights.forEach(({number},index)=>{const icon=buttons[index].querySelector('.step-rail-icon');if(icon){number.replaceChildren(icon.cloneNode(true));number.classList.add('flight-icon');}});
     // Keep the circles in place while Results establishes the destination geometry.
     panel('results');renderSummary();renderExports();$('previewTable').replaceChildren();preview().catch(showError);
     if(job?.id!==identity)return;
@@ -1203,7 +1206,7 @@ function initReviewWorkspace(){
   for(const p of downloadPanel.querySelectorAll('p:not([id]):not(.eyebrow)'))reportHelp.append(p);
   reportHelp.querySelector('.fine').textContent='Excel includes detailed column mismatches and configured exclusion audits. HTML contains the leadership summary and mismatch samples. Excel sheet and cell limits apply.';
   downloadPanel.append(reportHelp);
-  const closeOverlay=async(dialog,drawer=false)=>{if(!dialog.open||(dialog.id==='rerunDialog'&&$('startRerun').disabled))return;if(!matchMedia('(prefers-reduced-motion: reduce)').matches)await dialog.animate([{opacity:1,transform:'translate(0)'},{opacity:0,transform:drawer?'translateX(60px)':'translateY(12px)'}],{duration:180,easing:'ease-in',fill:'forwards'}).finished;dialog.close();dialog.getAnimations().forEach(a=>a.cancel());};
+  const closeOverlay=async(dialog,drawer=false)=>{if(!dialog.open||(dialog.id==='rerunDialog'&&$('startRerun').disabled))return;if(!reducedWorkspaceMotion())await dialog.animate([{opacity:1,transform:'translate(0)'},{opacity:0,transform:drawer?'translateX(60px)':'translateY(12px)'}],{duration:180,easing:'ease-in',fill:'forwards'}).finished;dialog.close();dialog.getAnimations().forEach(a=>a.cancel());};
   $('closeAnalysisDrawer').addEventListener('click',()=>closeOverlay($('analysisDrawer'),true));
   $('analysisDrawer').addEventListener('cancel',event=>{event.preventDefault();closeOverlay($('analysisDrawer'),true);});
   $('analysisDrawer').addEventListener('close',()=>{clearTimeout(analysisTimer);analysisGeneration++;$('analysisPanel').hidden=true;if(currentView==='analysisPanel')currentView='results';if(analysisReturnTarget?.isConnected)analysisReturnTarget.focus();});
@@ -1233,3 +1236,143 @@ function initReviewWorkspace(){
   updateReviewWorkspace(currentView);
 }
 initReviewWorkspace();
+
+// Enterprise shell: presentation and keyboard affordances share the existing controllers.
+function reducedWorkspaceMotion(){return document.body.classList.contains('reduce-motion')||matchMedia('(prefers-reduced-motion: reduce)').matches;}
+function animateWorkspacePane(element){
+  if(reducedWorkspaceMotion())return;
+  element.animate([{opacity:.5,transform:'translateY(6px)'},{opacity:1,transform:'translateY(0)'}],{duration:220,easing:'cubic-bezier(.22,1,.36,1)'});
+}
+function updateEnterpriseShell(name){
+  const heading=document.querySelector('.heading h1');
+  if(!$('workspaceContext'))return;
+  const titles={uploadPanel:'New comparison',headersPanel:'Column headers',keysPanel:'Keys & scope',runningPanel:'Pipeline & logs',results:'Comparison results',jsonPanel:'JSON comparison',historyPanel:'Job history',containersPanel:'Ignore key containers',profilesPanel:'Profile templates',settingsPanel:'Settings',docsPanel:'Docs & FAQ',storagePanel:'Storage & queue',overridesPanel:'Value overrides'};
+  heading.textContent=titles[name]||'Comparison workspace';
+  $('workspaceContext').textContent=phaseViews.includes(name)?'CSV & Excel':titles[name]||'Workspace';
+  const changed=document.body.dataset.workspaceView!==name;
+  document.body.dataset.workspaceView=name;
+  const target=$(name);
+  if(changed&&document.activeElement?.closest('.side-link:not(#navNew),.phase-button')){heading.tabIndex=-1;heading.focus({preventScroll:true});}
+  if(changed&&target&&name!=='analysisPanel'&&!resultsTransitionRunning&&!reducedWorkspaceMotion()){
+    target.getAnimations().filter(a=>a.id==='workspace-enter').forEach(a=>a.cancel());
+    const animation=target.animate([{opacity:.4,transform:'translateY(8px)'},{opacity:1,transform:'translateY(0)'}],{duration:240,easing:'cubic-bezier(.22,1,.36,1)'});animation.id='workspace-enter';
+  }
+}
+function initEnterpriseShell(){
+  // The controller unit harness has no layout DOM. Browser checks cover this shell.
+  if(typeof document.createDocumentFragment!=='function')return;
+  document.body.classList.add('enterprise-ui');
+  const stageIcons={
+    navFiles:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/>',
+    navHeaders:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11M15 9v11"/>',
+    navScope:'<circle cx="8" cy="9" r="5"/><path d="m12 13 8 8m-4-4 3-3m-6 0 3-3"/>',
+    navPipeline:'<rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M6 9v9h9M9 6h9v9"/>',
+    navResults:'<path d="M4 3v17h17M8 16v-4m5 4V7m5 9v-7"/>'
+  };
+  for(const [id,paths] of Object.entries(stageIcons)){const marker=$(id).firstElementChild,digit=marker.textContent;marker.innerHTML=`<span class="step-number-value">${digit}</span><svg class="step-rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;marker.setAttribute('aria-hidden','true');}
+  const main=$('mainWorkspace'),heading=main.querySelector('.heading');
+  heading.insertAdjacentHTML('beforebegin','<div class="workspace-topbar"><div><strong>Data Compare</strong><span aria-hidden="true">/</span><span id="workspaceContext">CSV &amp; Excel</span></div><button id="keyboardHelp" class="subtle" aria-haspopup="dialog" aria-keyshortcuts="Alt+/">Keyboard shortcuts <kbd>Alt /</kbd></button></div>');
+  document.querySelector('.sidebar-product').textContent='DATA COMPARE';
+  // Keep the primary action in the same top-right position in every setup phase.
+  const uploadActions=document.createElement('div');uploadActions.className='enterprise-setup-actions';
+  $('uploadPanel').querySelector('.section-title').append(uploadActions);uploadActions.append($('navPreview'),$('upload'));
+  $('keysPanel').querySelector('.scope-title-actions').append($('scopeNext'));
+  $('keysPanel').querySelector('.panel-footer').hidden=true;
+  const duplicateSettings=$('keysPanel').querySelector(':scope > .settings');
+  $('keysPanel').querySelector('.section-title').after(duplicateSettings);
+  $('uploadPanel').querySelector('.upload-actions').classList.add('enterprise-profile-status');
+  // Keep global destinations separate from the five comparison stages.
+  const manage=$('navHistory').parentElement;
+  manage.insertBefore($('navHistory'),$('navProfiles'));
+  manage.insertBefore($('navContainers'),$('navProfiles'));
+  $('navStorage').hidden=true;
+  const sheet=$('sheetPanel');
+  const sheetHelp=document.createElement('details');sheetHelp.className='compact-help';sheetHelp.innerHTML='<summary>Excel value handling</summary>';
+  const longSheetHelp=[...sheet.children].find(el=>el.tagName==='P'&&el.textContent.startsWith('Excel uses'));
+  if(longSheetHelp){sheetHelp.append(longSheetHelp);sheet.insertBefore(sheetHelp,$('sheetStatus'));}
+
+  // Settings use local tabs without duplicating inputs or saving behind the user's back.
+  const settings=$('settingsPanel'),settingsControls=settings.querySelector('.settings'),guidance=settings.querySelector('.compact-help');
+  settingsControls.before(Object.assign(document.createElement('div'),{id:'enterpriseSettingsTabs',className:'enterprise-tabs'}));
+  const perf=document.createElement('section');perf.id='settings-performance';settingsControls.before(perf);perf.append(settingsControls,guidance);
+  const rules=$('settingsRules');rules.id='settingsRules';
+  const access=document.createElement('section');access.id='settings-accessibility';access.hidden=true;
+  access.innerHTML='<div class="settings"><label>Motion<select id="motionPreference"><option value="system">Follow system preference</option><option value="reduced">Reduce motion</option></select></label><label>Keyboard shortcuts<select id="shortcutPreference"><option value="on">Enabled</option><option value="off">Disabled</option></select></label><label>Table density<select id="densityPreference"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label></div><p class="muted">Display preferences are saved for this browser. Tab, Enter and Escape remain available.</p>';
+  rules.after(access);
+  const storageLink=document.createElement('button');storageLink.className='subtle';storageLink.textContent='Storage & queue';storageLink.addEventListener('click',()=>goView('storagePanel').catch(showError));
+  const tabs=$('enterpriseSettingsTabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Settings categories');
+  const sections=[['Performance',perf],['Column rules',rules],['Accessibility',access]];
+  function selectSettings(index){sections.forEach(([label,section],i)=>{section.hidden=i!==index;const button=$('settings-tab-'+i);button.setAttribute('aria-selected',String(i===index));button.tabIndex=i===index?0:-1;});$('saveSettings').hidden=index===2;animateWorkspacePane(sections[index][1]);}
+  sections.forEach(([label,section],i)=>{const b=document.createElement('button');b.id='settings-tab-'+i;b.textContent=label;b.setAttribute('role','tab');b.setAttribute('aria-controls',section.id);section.setAttribute('role','tabpanel');section.setAttribute('aria-labelledby',b.id);b.addEventListener('click',()=>selectSettings(i));tabs.append(b);});tabs.after(storageLink);selectSettings(0);
+  const applyPreferences=()=>{const motion=localStorage.getItem('compare-motion')||'system',density=localStorage.getItem('compare-density')||'comfortable';document.body.classList.toggle('reduce-motion',motion==='reduced');document.body.classList.toggle('compact-density',density==='compact');$('motionPreference').value=motion;$('densityPreference').value=density;$('shortcutPreference').value=localStorage.getItem('compare-shortcuts')||'on';};
+  for(const [id,key] of [['motionPreference','compare-motion'],['densityPreference','compare-density'],['shortcutPreference','compare-shortcuts']])$(id).addEventListener('change',()=>{localStorage.setItem(key,$(id).value);applyPreferences();});applyPreferences();
+
+  // JSON has three local views; actual parsers, rules and exports remain unchanged.
+  const json=$('jsonPanel'),inputs=json.querySelector('.json-inputs'),arraySetup=json.querySelector('.json-array-setup'),advanced=json.querySelector('.json-advanced');
+  const jsonTabs=document.createElement('div');jsonTabs.className='enterprise-tabs';jsonTabs.setAttribute('role','tablist');jsonTabs.setAttribute('aria-label','JSON workspace');inputs.before(jsonTabs);
+  const inputPane=document.createElement('section');inputPane.id='json-input-pane';inputs.before(inputPane);inputPane.append(inputs);
+  const arrayPane=document.createElement('section');arrayPane.id='json-array-pane';arraySetup.before(arrayPane);arrayPane.append(arraySetup,advanced);
+  const jsonSections=[['Inputs',inputPane],['Array alignment',arrayPane],['Comparison',$('jsonResult')]];
+  let jsonTabIndex=0;
+  const jsonSelect=index=>{jsonTabIndex=index;jsonSections.forEach(([label,section],i)=>{if(i!==2)section.hidden=i!==index;else section.classList.toggle('enterprise-inactive',i!==index);const b=$('json-tab-'+i);b.setAttribute('aria-selected',String(i===index));b.tabIndex=i===index?0:-1;});animateWorkspacePane(jsonSections[index][1]);};
+  jsonSections.forEach(([label,section],i)=>{const b=document.createElement('button');b.id='json-tab-'+i;b.textContent=label;b.setAttribute('role','tab');b.setAttribute('aria-controls',section.id);section.setAttribute('role','tabpanel');section.setAttribute('aria-labelledby',b.id);b.disabled=i===2;b.addEventListener('click',()=>jsonSelect(i));jsonTabs.append(b);});jsonSelect(0);
+  new MutationObserver(()=>{const available=!$('jsonResult').hidden;$('json-tab-2').disabled=!available;if(available)jsonSelect(2);else if(jsonTabIndex===2)jsonSelect(0);}).observe($('jsonResult'),{attributes:true,attributeFilter:['hidden']});
+  const jsonToolbar=document.createElement('div');jsonToolbar.className='enterprise-json-toolbar';jsonTabs.before(jsonToolbar);jsonToolbar.append(jsonTabs,$('jsonCompare'));
+  const resultHeading=document.createElement('div');resultHeading.className='enterprise-json-result-heading';const resultTitles=document.createElement('div');$('jsonResultTitle').before(resultHeading);resultTitles.append($('jsonResultTitle'),$('jsonCounts'),$('jsonWarnings'));resultHeading.append(resultTitles,$('jsonResult').querySelector('.preview-controls'));
+  const resultHelp=document.createElement('details');resultHelp.className='compact-help';resultHelp.innerHTML='<summary>Reading this comparison</summary>';const resultNote=[...$('jsonResult').children].find(el=>el.tagName==='P'&&!el.id);if(resultNote)resultHelp.append(resultNote);$('jsonResult').append(resultHelp);
+  // Long guidance stays discoverable without consuming the working area.
+  for(const host of [json,$('containersPanel')]){
+    const notes=[...host.children].filter(n=>n.tagName==='P'&&!n.id&&!n.classList.contains('eyebrow'));
+    if(notes.length){const help=document.createElement('details');help.className='compact-help enterprise-guidance';help.innerHTML='<summary>Usage guidance</summary>';notes.forEach(n=>help.append(n));host.append(help);}
+  }
+  const container=$('containersPanel'),library=$('containerLibrary'),libraryTitle=library.previousElementSibling;
+  const containerGrid=document.createElement('div');containerGrid.className='enterprise-container-grid';
+  const editor=document.createElement('section'),saved=document.createElement('section');editor.setAttribute('aria-label','Create ignore container');saved.setAttribute('aria-label','Saved ignore containers');
+  let node=container.querySelector('.settings');while(node&&node!==libraryTitle){const next=node.nextElementSibling;editor.append(node);node=next;}
+  saved.append(libraryTitle,library);containerGrid.append(editor,saved);container.insertBefore(containerGrid,container.querySelector('.enterprise-guidance'));
+  // Guide cards become expandable, retaining IDs and the existing search index.
+  for(const article of document.querySelectorAll('.docs-card')){const h=article.querySelector('h3');if(!h)continue;const disclosure=document.createElement('details'),summary=document.createElement('summary');summary.textContent=h.textContent;disclosure.append(summary);for(const child of [...article.children]){if(child===h||child.classList.contains('eyebrow'))child.remove();else disclosure.append(child);}article.append(disclosure);}
+  $('docsSearch').addEventListener('input',()=>{for(const detail of document.querySelectorAll('.docs-card>details'))detail.open=!!$('docsSearch').value;});
+  // Find columns locally from the already-loaded summary, without fetching source rows.
+  const search=document.createElement('input');search.id='resultColumnSearch';search.type='search';search.placeholder='Find column';search.setAttribute('aria-label','Find mismatching column');search.className='search';$('changedColumnCount').before(search);
+  const filterColumns=()=>{const q=search.value.toLowerCase();for(const row of $('columnSummary').children)row.hidden=!row.querySelector('span').textContent.toLowerCase().includes(q);};search.addEventListener('input',filterColumns);new MutationObserver(filterColumns).observe($('columnSummary'),{childList:true});
+
+  // Column review is a focused drawer, with the mismatch table taking priority.
+  const analysis=$('analysisPanel'),workbench=analysis.querySelector('.analysis-workbench');
+  const filterDisclosure=document.createElement('details');filterDisclosure.className='analysis-filter-disclosure';filterDisclosure.id='analysisFilterDisclosure';filterDisclosure.innerHTML='<summary>Change column or find a key</summary>';
+  workbench.before(filterDisclosure);filterDisclosure.append(analysis.querySelector('.analysis-filter-grid'));
+  const drawerTitle=$('analysisDrawer').querySelector('.drawer-heading h2');drawerTitle.id='analysisDrawerTitle';$('analysisDrawer').setAttribute('aria-labelledby',drawerTitle.id);
+  const contextLabel=document.createElement('p');contextLabel.className='analysis-drawer-eyebrow';contextLabel.textContent='MISMATCH REVIEW';drawerTitle.before(contextLabel);
+  const titleWrap=document.createElement('div');contextLabel.before(titleWrap);titleWrap.append(contextLabel,drawerTitle);
+  const updateDrawerTitle=()=>{drawerTitle.textContent=$('analysisHeading').textContent||'Mismatch review';};new MutationObserver(updateDrawerTitle).observe($('analysisHeading'),{childList:true,characterData:true,subtree:true});
+  const comments=analysis.querySelector('.review-comments');comments.classList.add('enterprise-comments');comments.querySelector('summary').textContent='Comments & findings';
+  comments.open=true;
+  const savedNotes=document.createElement('details');savedNotes.className='saved-review-notes';savedNotes.innerHTML='<summary>Saved comments</summary>';$('analysisNotes').before(savedNotes);savedNotes.append($('analysisNotes'));
+  $('analysisByKey').addEventListener('click',()=>{filterDisclosure.open=true;});
+  $('analysisDrawer').addEventListener('close',()=>{filterDisclosure.open=false;});
+  $('analysisSearch').addEventListener('click',()=>{if($('analysisKeyFields').querySelector('input')?.value)filterDisclosure.open=false;});
+
+  document.body.insertAdjacentHTML('beforeend','<dialog id="shortcutsDialog" class="shortcuts-dialog" aria-labelledby="shortcutsTitle"><div class="drawer-heading"><h2 id="shortcutsTitle">Keyboard shortcuts</h2><button id="closeShortcuts" class="subtle" aria-label="Close keyboard shortcuts">Close</button></div><dl><dt>Move between controls</dt><dd>Tab / Shift + Tab</dd><dt>Activate selected control</dt><dd>Enter / Space</dd><dt>Toggle sidebar</dt><dd>Alt + B</dd><dt>Comparison steps</dt><dd>Alt + 1–5</dd><dt>Search current page</dt><dd>Alt + F</dd><dt>Recompare completed job</dt><dd>Alt + R</dd><dt>Open shortcut guide</dt><dd>Alt + /</dd><dt>Move within tabs / stages</dt><dd>Arrow keys · Home / End</dd><dt>Close drawer or menu</dt><dd>Escape</dd></dl><p>Shortcuts never start, cancel, delete or export a job. Activate those actions explicitly.</p></dialog>');
+  let helpReturn;
+  $('keyboardHelp').addEventListener('click',()=>{helpReturn=document.activeElement;$('shortcutsDialog').showModal();});$('closeShortcuts').addEventListener('click',()=>$('shortcutsDialog').close());$('shortcutsDialog').addEventListener('close',()=>helpReturn?.focus());
+  const visible=el=>el&&!el.disabled&&!el.closest('[hidden],[inert],.enterprise-inactive')&&el.getClientRects().length>0;
+  document.addEventListener('keydown',event=>{
+    if(event.defaultPrevented||event.isComposing)return;
+    const group=event.target.closest('[role="tablist"],.phase-list');
+    if(group&&event.target.tagName==='BUTTON'&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key)){
+      const controls=[...group.querySelectorAll('button')].filter(visible),index=controls.indexOf(event.target);if(!controls.length)return;event.preventDefault();const delta=['ArrowLeft','ArrowUp'].includes(event.key)?-1:1;controls[event.key==='Home'?0:event.key==='End'?controls.length-1:(index+delta+controls.length)%controls.length].focus();return;
+    }
+    if(!event.altKey||event.ctrlKey||event.metaKey||localStorage.getItem('compare-shortcuts')==='off'||document.querySelector('dialog[open]')||resultsTransitionRunning)return;
+    const key=event.key.toLowerCase();let control;
+    if(key==='b')control=$('sidebarToggle');
+    if(key==='/')control=$('keyboardHelp');
+    if(key==='r')control=$('recompareFab');
+    if(/^[1-5]$/.test(key)&&phaseViews.includes(currentView))control=$(['navFiles','navHeaders','navScope','navPipeline','navResults'][Number(key)-1]);
+    if(key==='f'){control=[...$(currentView).querySelectorAll('input[type="search"],input.search')].find(visible);if(!control&&currentView==='headersPanel'){$('headerSearchToggle').click();control=$('headerSearch');}if(control){event.preventDefault();control.focus();}return;}
+    if(visible(control)){event.preventDefault();control.click();}
+  });
+  // Provide a keyboard target in each global page when navigation replaces content.
+  for(const button of document.querySelectorAll('.side-link:not(#navNew),.phase-button'))button.addEventListener('click',()=>{if(button.disabled)return;const before=currentView;requestAnimationFrame(()=>{if(currentView!==before){heading.querySelector('h1').tabIndex=-1;heading.querySelector('h1').focus({preventScroll:true});}});});
+  updateEnterpriseShell(currentView);
+}
+initEnterpriseShell();

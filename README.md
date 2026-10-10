@@ -714,10 +714,21 @@ Analysis shows a browsable, paged list of mismatching columns, with optional fil
 
 Navigation starts collapsed on each page load. Expand it using the bottom toggle; narrow screens use a drawer, and reduced-motion preferences disable the transition. The expanded logo sits directly on the navy background. Redundant sidebar storage text and the upload-page disk-check button have been removed; storage management remains in Storage & queue.
 
-Analysis keeps its column browser beside the scrollable results grid on desktop. Comments and guidance expand when needed. Smaller screens stack the panels to keep controls readable rather than compressing them.
+Analysis opens in a right drawer with compact metrics, column/key/pattern tabs, expandable filters, and a bounded mismatch table. Comments and findings show their scope explicitly; saved comments expand separately.
 
-Keys & scope and Column headers keep explanatory text in help disclosures available on hover, keyboard focus or click. Header apply/reset actions sit at the top. Desktop scope setup uses three bounded panels with the continuation action below.
+Keys & scope and Column headers keep explanatory text in help disclosures available on hover, keyboard focus or click. Header apply/reset actions sit at the top. Desktop scope setup uses three bounded panels with Start comparison at the top-right, matching Column headers.
 
 Choose an optional profile on Files before upload. It applies automatically once CSV headers or the selected Excel worksheets are ready; schema errors are reported for manual correction. Header rows display the original name and editable comparison name side by side.
 
-The profile picker is the template icon beside **Upload & continue**, after the two file cards. This keeps the upload canvas wide while preserving profile selection in the Files phase.
+The profile picker is the template icon beside upload status, after the two file cards. **Upload & continue** and optional Preview are at the top-right. This keeps the upload canvas wide while preserving profile selection in the Files phase.
+# Enterprise workspace design
+
+The UI uses a shared TransUnion-inspired visual system: navy navigation, the existing TransUnion wordmark and compact TU mark, cyan accents, yellow primary actions and light data surfaces. The sidebar starts collapsed. Expanded branding keeps clear spacing between the logo and Data Compare label.
+
+CSV/Excel retains five phases, with meaningful icons in the vertical review rail. File preview is inline, profile selection remains on Files, and selecting a mismatching column opens the analysis drawer. Recompare uses tabs for scope, overrides and column rules. JSON separates Inputs, Array alignment and Comparison; successful comparisons open the side-by-side result automatically.
+
+Settings separates Performance, Column rules and Accessibility. Storage & queue is accessible from Settings rather than the sidebar. Resource settings remain workspace defaults; motion, density and shortcut preferences are local to the browser. Container creation and the saved library are side by side on desktop. Docs retain searchable content in expandable guides.
+
+Keyboard: Tab / Shift+Tab move between controls; Enter / Space activate them; arrows and Home / End navigate tab and phase controls. Alt+B toggles navigation, Alt+1–5 opens an available comparison phase, Alt+F focuses the current search, Alt+R opens recomparison, and Alt+/ opens the shortcut guide. Escape closes dialogs. Shortcuts never start, cancel, delete or export a job. Operating-system and browser shortcuts may take priority. Reduced motion follows the system preference or can be selected in Settings → Accessibility.
+
+All pages reflow at narrow widths. Data tables and long lists use bounded scrolling; controls remain reachable rather than being clipped to enforce a fixed page height.
