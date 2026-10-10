@@ -1063,14 +1063,56 @@ for(const help of document.querySelectorAll('.inline-help')){
 }
 
 // Review overlays preserve the result underneath and never edit the completed job.
-var reviewUI=false, reviewRailJob=null, rerunDraft=null;
+var reviewUI=false, reviewRailJob=null, rerunDraft=null, resultsTransitionRunning=false;
 function updateReviewWorkspace(name){
   if(!reviewUI)return;
   if(name==='results'&&job?.state==='complete')reviewRailJob=job.id;
   const rail=reviewRailJob===job?.id&&job?.state==='complete'&&phaseViews.includes(name);
   $('mainWorkspace').classList.toggle('review-rail',rail);
   $('recompareFab').hidden=name!=='results'||job?.state!=='complete';
+  $('recompareFab').classList.toggle('fab-ready',!$('recompareFab').hidden&&!resultsTransitionRunning);
   if($('analysisDrawer').open)$('analysisDrawer').close();
+}
+async function transitionToResults(){
+  if(resultsTransitionRunning||job?.state!=='complete')return;
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches||$('mainWorkspace').classList.contains('review-rail')){await goView('results');return;}
+  resultsTransitionRunning=true;
+  const flights=[],animations=[],buttons=['navFiles','navHeaders','navScope','navPipeline','navResults'].map($);
+  const workspace=$('mainWorkspace'),sidebar=$('workspaceSidebar'),identity=job.id;
+  let interrupted=false;
+  const finishMotion=()=>{interrupted=true;for(const animation of animations)animation.cancel();};
+  const play=(element,frames,options)=>{const animation=element.animate(frames,options);animations.push(animation);return animation.finished.catch(()=>{});};
+  try{
+    // Snapshot the on-screen positions before changing layout. The real controls
+    // remain in the DOM; decorative copies bridge the horizontal and vertical layouts.
+    for(const button of buttons){
+      const rect=button.getBoundingClientRect(),flight=document.createElement('div'),number=document.createElement('span'),label=document.createElement('span');
+      flight.className='step-flight';flight.setAttribute('aria-hidden','true');number.className='flight-number';number.textContent=button.firstElementChild.textContent;label.className='flight-label';label.textContent=button.getAttribute('aria-label');
+      Object.assign(flight.style,{left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',height:rect.height+'px',background:getComputedStyle(button).backgroundColor,borderColor:getComputedStyle(button).borderColor});
+      flight.append(number,label);document.body.append(flight);flights.push({flight,number,label,rect,circleX:rect.left+(rect.width-42)/2});
+    }
+    document.body.classList.add('steps-in-flight');workspace.inert=true;sidebar.inert=true;
+    window.addEventListener('resize',finishMotion);
+    await Promise.all(flights.map(({flight,number,label,rect,circleX})=>Promise.all([
+      play(flight,[{width:rect.width+'px',height:rect.height+'px',transform:'translateX(0)',borderRadius:'8px'},{width:'42px',height:'42px',transform:`translateX(${circleX-rect.left}px)`,borderRadius:'50%'}],{duration:460,easing:'cubic-bezier(.22,1,.36,1)',fill:'forwards'}),
+      play(label,[{opacity:1},{opacity:0}],{duration:160,fill:'forwards'}),
+      play(number,[{left:'12px'},{left:'10px'}],{duration:460,easing:'ease-out',fill:'forwards'})
+    ])));
+    // Keep the circles in place while Results establishes the destination geometry.
+    panel('results');renderSummary();renderExports();$('previewTable').replaceChildren();preview().catch(showError);
+    if(job?.id!==identity)return;
+    if(!interrupted){
+      await Promise.all(flights.map(({flight,rect,circleX},index)=>{
+        const target=buttons[index].getBoundingClientRect();
+        return play(flight,[{transform:`translate(${circleX-rect.left}px,0)`},{transform:`translate(${target.left-rect.left}px,${target.top-rect.top}px)`}],{duration:720,delay:70+index*35,easing:'cubic-bezier(.45,0,.15,1)',fill:'forwards'});
+      }));
+    }
+  }finally{
+    window.removeEventListener('resize',finishMotion);
+    for(const {flight} of flights)flight.remove();for(const animation of animations)animation.cancel();
+    document.body.classList.remove('steps-in-flight');workspace.inert=false;sidebar.inert=false;resultsTransitionRunning=false;
+    if(currentView==='results'){$('recompareFab').classList.add('fab-ready');$('resultTitle').tabIndex=-1;$('resultTitle').focus({preventScroll:true});}
+  }
 }
 async function showAnalysisDrawer(){
   if(!reviewUI||job?.state!=='complete')return;
@@ -1137,7 +1179,7 @@ function initReviewWorkspace(){
   $('closeRerun').addEventListener('click',()=>closeOverlay($('rerunDialog')));
   $('rerunDialog').addEventListener('cancel',event=>{event.preventDefault();closeOverlay($('rerunDialog'));});
   $('recompareFab').addEventListener('click',openRecomparison);
-  $('viewResults').addEventListener('click',()=>goView('results').catch(showError));
+  $('viewResults').addEventListener('click',()=>transitionToResults().catch(showError));
   for(const [index,id] of ['navFiles','navHeaders','navScope','navPipeline','navResults'].entries()){
     const button=$(id),label=phaseLabels[index];button.innerHTML=`<span>${index+1}</span><span class="step-name">${label}</span>`;button.style.setProperty('--step',index);button.setAttribute('aria-label',label);button.title=label;
   }
