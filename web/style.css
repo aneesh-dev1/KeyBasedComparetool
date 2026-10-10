@@ -55,7 +55,7 @@ main{margin-left:220px;transition:margin-left .18s ease}
 .phase-list{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:9px}
 .phase-button{width:100%;min-height:60px;display:flex;align-items:center;gap:8px;background:#edf2f5;border:1px solid #dde7ec;padding:10px;color:#526c7b;text-align:left;font-size:11px;border-radius:6px;line-height:1.5}
 .phase-button span{display:grid;place-items:center;border:1px solid #c3d5df;border-radius:50%;width:23px;height:23px;flex-shrink:0;font-size:11px}
-.phase-button.active{color:#004364;background:#e6f6fa;border-color:#00a6ca;font-weight:650}.phase-button.active span{background:#00a6ca;color:#004364;border-color:#00a6ca}.phase-button:hover:not(:disabled){border-color:#00a6ca}
+.phase-button.active{color:#004364;background:#eef8fa;border-color:#8ccbd9;font-weight:650}.phase-button.active>span:first-child{background:#d9f0f5;color:#004364;border-color:#a9d8e2}.phase-button.active .step-name{background:transparent;color:inherit}.phase-button:hover:not(:disabled){border-color:#00a6ca}
 body.sidebar-collapsed .sidebar{width:68px;padding:22px 8px}
 body.sidebar-collapsed main{margin-left:68px}
 body.sidebar-collapsed .sidebar .brand,body.sidebar-collapsed .workspace-label,body.sidebar-collapsed .side-label,body.sidebar-collapsed .sidebar-bottom{display:none}
