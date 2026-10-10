@@ -19,8 +19,8 @@ document.body.insertAdjacentHTML('beforeend','<div id="comparisonMenu" class="co
 $('navNew').setAttribute('aria-haspopup','menu');$('navNew').setAttribute('aria-expanded','false');$('navNew').setAttribute('aria-controls','comparisonMenu');
 $('historyPanel').querySelector('.section-title').append($('reset'));
 $('reset').textContent='New comparison';$('reset').className='primary';
-$('navNew').setAttribute('aria-label','CSV & Excel');$('navNew').dataset.tip='CSV & Excel';
-$('navNew').querySelector('.side-label').textContent='CSV & Excel';
+$('navNew').setAttribute('aria-label','Compare files');$('navNew').dataset.tip='Compare files';
+$('navNew').querySelector('.side-label').textContent='Compare files';
 $('navNew').querySelector('.side-description').textContent='Comparison workspace';
 $('scopeNext').innerHTML='Start comparison <span>→</span>';
 $('sourcePanel').insertAdjacentHTML('beforeend','<button id="compare" hidden disabled>Start comparison</button>');
@@ -64,7 +64,7 @@ function syncNavigation(){
   $('reset').disabled=uploading;
 }
 function panel(name) {
-  if(phaseViews.includes(name))lastComparisonView=name;
+  if(phaseViews.includes(name)||name==='jsonPanel')lastComparisonView=name;
   if(typeof updateReviewWorkspace==='function')updateReviewWorkspace(name);
   if(currentView!==name)window.scrollTo(0,0);
   currentView=name;
@@ -75,7 +75,7 @@ function panel(name) {
   const history=currentView==='historyPanel';
   const library=['containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','settingsPanel'].includes(currentView);
   $('comparisonFlow').hidden=history||library;
-  $('navNew').classList.toggle('active',!history&&!library&&!viewingHistoryJob);
+  $('navNew').classList.toggle('active',name==='jsonPanel'||(!history&&!library&&!viewingHistoryJob));
   $('navHistory').classList.toggle('active',history||(!library&&viewingHistoryJob));
   for(const id of ['navNew','navJson','navContainers','navHistory','navDocs','navStorage','navProfiles','navSettings']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
   if(typeof closeSidebarDrawer==='function')closeSidebarDrawer();
@@ -95,7 +95,7 @@ function panel(name) {
     $('upload').textContent='Upload & continue →';$('upload').disabled=uploading||!files.left||!files.right;
   }
 }
-function configuration(){return {duplicate_policy:$('duplicatePolicy').value,keys:[...selected],ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules};}
+function configuration(){return {duplicate_policy:$('duplicatePolicy').value,keys:[...selected],ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules.filter(r=>!selected.has(r.column)&&!ignoredColumns.has(r.column))};}
 async function saveDraft(){if(job?.state==='ready')await api(endpoint('/config'),configuration());}
 async function goView(name){
   if(name==='analysisPanel'&&typeof showAnalysisDrawer==='function'){await showAnalysisDrawer();return;}
@@ -118,11 +118,12 @@ async function goView(name){
 for(const [view,nav] of Object.entries(views))$(nav).addEventListener('click',()=>goView(view).catch(showError));
 function choose(side, file) {
   if (uploading || (job && job.state!=='uploading')) return;
-  if(file&&!/\.(csv|xlsx|xlsm)$/i.test(file.name)){showError('Choose CSV, .xlsx or .xlsm. Save older .xls files as .xlsx first.');return;}
+  if(file&&!/\.(csv|xlsx|xlsm|json)$/i.test(file.name)){showError('Choose CSV, JSON, .xlsx or .xlsm. Save older .xls files as .xlsx first.');return;}
   files[side] = file || null;
-  $(`${side}Name`).textContent = file ? file.name : `Choose ${side==='left'?'original':'updated'} CSV or Excel`;
+  $(`${side}Name`).textContent = file ? file.name : `Choose ${side==='left'?'original':'updated'} CSV, Excel or JSON`;
   $(`${side}Size`).textContent = file ? bytes(file.size) : 'Click to browse or drop a file here';
   $('upload').disabled = !files.left || !files.right;
+  updateDetectedFiles();
 }
 for (const side of ['left','right']) {
   $(`${side}File`).addEventListener('change', event => choose(side,event.target.files[0]));
@@ -149,6 +150,7 @@ function sendChunk(side, blob, offset, update) {
 }
 $('upload').addEventListener('click', async () => {
   if(uploading)return;
+  if(files.left&&files.right){const left=detectedFileType(files.left),right=detectedFileType(files.right);if((left==='JSON')!==(right==='JSON')){showError('Choose two JSON files, or a pair of CSV/Excel files. JSON cannot be compared to a table.');return;}if(left==='JSON'){await loadUnifiedJson();return;}}
   clearError(); uploading = true;pauseUploadRequested=false;lastUploadPaint=0;
   $('pauseUpload').hidden=false;$('pauseUpload').disabled=false;$('pauseUpload').textContent='Pause upload';$('uploadActivity').hidden=false;
   syncNavigation(); $('upload').disabled = true; $('reset').disabled = true;
@@ -260,7 +262,7 @@ function renderSummary() {
   const changes=Object.entries(s.changed_cells_by_column).filter(([,count])=>count>0).sort((a,b)=>b[1]-a[1]);
   $('resultTitle').textContent=s.changed_rows||s.left_only||s.right_only?'Your comparison is ready.':'Both files match within the selected scope.';
   $('resultSubtitle').textContent=`${number(s.left_rows)} left rows · ${number(s.right_rows)} right rows · Keys: ${s.keys.join(', ')}`;
-  $('scopeSummary').textContent=`${number(s.ignored_columns?.length||0)} columns ignored · ${number(s.left_excluded_rows||0)} left rows and ${number(s.right_excluded_rows||0)} right rows excluded by key. ${number(s.value_overrides?.length||0)} value overrides; ${number(s.override_equivalent_cells||0)} unequal cells accepted by rules. Counts refer to the selected scope.`;
+  $('scopeSummary').textContent=`${number(s.ignored_columns?.length||0)} columns ignored · ${number(s.left_excluded_rows||0)} left rows and ${number(s.right_excluded_rows||0)} right rows excluded by key. ${number(s.value_overrides?.length||0)} value overrides; ${number((s.override_equivalent_cells||0)+(s.rule_equivalent_cells||0))} unequal cells accepted by rules. Counts refer to the selected scope.`;
   const duplicates=(s.left_duplicate_rows_skipped||0)+(s.right_duplicate_rows_skipped||0);
   $('duplicateDownload').hidden=!duplicates;$('duplicateDownload').href=downloadUrl('duplicate_keys.csv');
   if(duplicates){$('resultTitle').textContent='Comparison complete — duplicate keys found';$('scopeSummary').textContent+=` Warning: ${number(s.left_duplicate_rows_skipped||0)} file 1 rows and ${number(s.right_duplicate_rows_skipped||0)} file 2 rows skipped as duplicates. Kept the ${s.duplicate_policy||'first'} source occurrence per key. Download the duplicate audit for details.`;}
@@ -977,26 +979,11 @@ $('analysisRetry').addEventListener('click',async()=>{try{$('analysisRetry').hid
 
 let valueRules=[], settingsRules=[];
 $('profileControls').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Template library</h3><div class="preview-controls"><select id="profileSelect" aria-label="Saved profile"><option value="">Choose profile</option></select><button id="applyProfile" class="subtle">Apply profile</button><input id="profileName" placeholder="Profile name" aria-label="Profile name"><button id="saveProfile" class="subtle">Save current settings</button><button id="deleteProfile" class="subtle">Delete profile</button></div><p id="profileStatus" role="status"></p></section>`);
-$('settingsRules').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Column comparison rules</h3><p>Exact text is the default. Rules never change source values or key matching. Invalid numbers or dates remain mismatches.</p><div class="preview-controls"><label>Column<input id="ruleColumn" list="ruleColumnOptions" placeholder="Column name"><datalist id="ruleColumnOptions"></datalist></label><label><input id="ruleTrim" type="checkbox"> Trim whitespace</label><label><input id="ruleCase" type="checkbox"> Ignore case</label><label><input id="ruleNumericFormat" type="checkbox"> Ignore numeric formatting (0 = 0.00, -11 = -11.00)</label><label>Absolute numeric tolerance<input id="ruleTolerance" placeholder="e.g. 0.01"></label><label>File 1 date format<input id="ruleDateLeft" placeholder="%Y-%m-%d"></label><label>File 2 date format<input id="ruleDateRight" placeholder="%d/%m/%Y"></label><button id="addValueRule" class="subtle">Save column rule</button></div><p>Use Python date formats: %Y year, %m month, %d day, %H hour, %M minute, %S second. Choose tolerance or date formats for a column.</p><div id="valueRuleList"></div></section>`);
 $('analysisPanel').insertAdjacentHTML('beforeend',`<details class="feature-box review-comments"><summary>Comments</summary><label>Apply comment to<select id="noteTarget"><option value="column">Column — all mismatching keys</option><option value="key">Key — all mismatching columns</option><option value="cell">This key and column</option></select></label><p id="noteScope" class="analysis-note-scope"></p><p class="muted">Comments appear in regenerated reports.</p><div class="preview-controls"><select id="noteStatus" aria-label="Classification"><option>Needs investigation</option><option>Expected</option><option>Resolved</option></select><textarea id="noteComment" maxlength="2000" aria-label="Analysis comment" placeholder="Describe your finding"></textarea><button id="saveNote" class="subtle">Save comment</button></div><div id="analysisNotes"></div></details>`);
-function renderValueRules(){
-  $('ruleColumnOptions').replaceChildren();
-  for(const column of job?.columns||[])if(!selected.has(column))$('ruleColumnOptions').append(new Option(column,column));
-  $('valueRuleList').replaceChildren();
-  for(const rule of settingsRules){const row=document.createElement('p'),label=document.createElement('span'),edit=document.createElement('button'),remove=document.createElement('button');label.textContent=rule.column+' · '+[rule.trim?'Trim whitespace':'',rule.ignore_case?'Ignore case':'',rule.tolerance==='0'?'Ignore numeric formatting':rule.tolerance!==undefined?'Tolerance '+rule.tolerance:'',rule.left_date_format?'Date formats':''].filter(Boolean).join(' · ');edit.textContent='Edit';edit.className=remove.className='subtle';edit.addEventListener('click',()=>{$('ruleColumn').value=rule.column;$('ruleTrim').checked=!!rule.trim;$('ruleCase').checked=!!rule.ignore_case;$('ruleNumericFormat').checked=rule.tolerance==='0';$('ruleTolerance').value=rule.tolerance==='0'?'':rule.tolerance||'';$('ruleTolerance').disabled=rule.tolerance==='0';$('ruleDateLeft').value=rule.left_date_format||'';$('ruleDateRight').value=rule.right_date_format||'';});remove.textContent='Remove';remove.addEventListener('click',()=>{settingsRules=settingsRules.filter(r=>r.column!==rule.column);renderValueRules();$('settingsStatus').textContent='Unsaved changes — save settings to apply.';});row.append(label,edit,remove);$('valueRuleList').append(row);}
-}
-function settingsConfig(){return {memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),read_batch_size:Number($('readBatchSize').value),compare_batch_size:Number($('compareBatchSize').value),comparison_rules:settingsRules};}
-async function loadSettings(){const result=await api('/api/settings');$('memory').value=result.memory_mb;$('sortWorkers').value=result.sort_workers;$('readBatchSize').value=result.read_batch_size;$('compareBatchSize').value=result.compare_batch_size;settingsRules=result.comparison_rules||[];renderValueRules();$('settingsStatus').textContent='These defaults apply when a new comparison starts. Rules match column names ignoring case; key and ignored columns are excluded.';}
-$('saveSettings').addEventListener('click',async()=>{try{const result=await api('/api/settings',settingsConfig());settingsRules=result.comparison_rules;renderValueRules();$('settingsStatus').textContent='Settings saved. New runs use these defaults. Existing runs are unchanged.';}catch(error){showError(error);}});
-$('ruleNumericFormat').addEventListener('change',()=>{$('ruleTolerance').disabled=$('ruleNumericFormat').checked;});
-$('addValueRule').addEventListener('click',async()=>{try{
-  const rule={column:$('ruleColumn').value,trim:$('ruleTrim').checked,ignore_case:$('ruleCase').checked,left_date_format:$('ruleDateLeft').value,right_date_format:$('ruleDateRight').value};
-  if(!rule.column)throw Error('Choose a compared non-key column.');
-  if($('ruleNumericFormat').checked)rule.tolerance='0';
-  else if($('ruleTolerance').value!=='')rule.tolerance=$('ruleTolerance').value;
-  const proposed=[...settingsRules.filter(r=>r.column.toLowerCase()!==rule.column.toLowerCase()),rule];
-  const result=await api('/api/settings',{...settingsConfig(),comparison_rules:proposed});settingsRules=result.comparison_rules;renderValueRules();$('settingsStatus').textContent='Column rule saved for future comparisons. A profile’s explicit rule for the same column takes precedence.';
-}catch(e){showError(e);}});
+function renderValueRules(){}
+function settingsConfig(){return {memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),read_batch_size:Number($('readBatchSize').value),compare_batch_size:Number($('compareBatchSize').value),comparison_rules:[]};}
+async function loadSettings(){const result=await api('/api/settings');$('memory').value=result.memory_mb;$('sortWorkers').value=result.sort_workers;$('readBatchSize').value=result.read_batch_size;$('compareBatchSize').value=result.compare_batch_size;$('settingsStatus').textContent='Performance defaults apply to new runs. Comparison rules are configured in Keys & scope.';}
+$('saveSettings').addEventListener('click',async()=>{try{await api('/api/settings',settingsConfig());$('settingsStatus').textContent='Performance settings saved. Existing runs are unchanged.';}catch(error){showError(error);}});
 async function loadProfiles(){const result=await api('/api/profiles');for(const id of ['profileSelect','quickProfile']){const previous=$(id).value;$(id).replaceChildren(new Option(id==='quickProfile'?'No template — configure manually':'Choose profile',''));result.profiles.forEach(p=>$(id).add(new Option(p.name,p.id)));$(id).value=previous;}const ready=job?.state==='ready';$('applyProfile').disabled=!ready;$('saveProfile').disabled=!job||!['ready','complete'].includes(job.state);}
 $('saveProfile').addEventListener('click',async()=>{try{if(headerDirty&&job?.state==='ready')await applyHeaders();await saveDraft();await api('/api/profiles',{job_id:job.id,name:$('profileName').value});await loadProfiles();$('profileStatus').textContent='Template saved with headers, keys, scope, value overrides and column rules.';}catch(e){showError(e);}});
 async function applyProfile(id){if(!id)throw Error('Choose a template first.');job=await api(endpoint('/apply-profile'),{id});hydratedId=null;headerDraftJob=null;hydrate();renderHeaders();renderKeys();renderIgnoredColumns();renderOverrides();$('quickProfileStatus').textContent='Template applied. Review the headers, keys and overrides before running.';$('profileStatus').textContent=$('quickProfileStatus').textContent;}
@@ -1155,6 +1142,7 @@ function showRerunTab(tab){
   for(const name of ['scope','overrides','rules']){$('rerun-'+name).hidden=name!==tab;$('rerun-tab-'+name).setAttribute('aria-selected',String(name===tab));$('rerun-tab-'+name).tabIndex=name===tab?0:-1;}
 }
 function renderRerunRows(kind){
+  if(kind==='rules'&&document.body.classList.contains('enterprise-ui')){renderRerunRuleSummary();return;}
   const target=$('rerun-'+kind+'-list');target.replaceChildren();
   const rules=kind==='overrides'?rerunDraft.value_overrides:rerunDraft.comparison_rules;
   rules.forEach((rule,index)=>{
@@ -1248,7 +1236,7 @@ function updateEnterpriseShell(name){
   if(!$('workspaceContext'))return;
   const titles={uploadPanel:'New comparison',headersPanel:'Column headers',keysPanel:'Keys & scope',runningPanel:'Pipeline & logs',results:'Comparison results',jsonPanel:'JSON comparison',historyPanel:'Job history',containersPanel:'Ignore key containers',profilesPanel:'Profile templates',settingsPanel:'Settings',docsPanel:'Docs & FAQ',storagePanel:'Storage & queue',overridesPanel:'Value overrides'};
   heading.textContent=titles[name]||'Comparison workspace';
-  $('workspaceContext').textContent=phaseViews.includes(name)?'CSV & Excel':titles[name]||'Workspace';
+  $('workspaceContext').textContent=phaseViews.includes(name)?'Compare files':titles[name]||'Workspace';
   const changed=document.body.dataset.workspaceView!==name;
   document.body.dataset.workspaceView=name;
   const target=$(name);
@@ -1295,14 +1283,14 @@ function initEnterpriseShell(){
   const settings=$('settingsPanel'),settingsControls=settings.querySelector('.settings'),guidance=settings.querySelector('.compact-help');
   settingsControls.before(Object.assign(document.createElement('div'),{id:'enterpriseSettingsTabs',className:'enterprise-tabs'}));
   const perf=document.createElement('section');perf.id='settings-performance';settingsControls.before(perf);perf.append(settingsControls,guidance);
-  const rules=$('settingsRules');rules.id='settingsRules';
+  const rules=$('settingsRules');rules.hidden=true;
   const access=document.createElement('section');access.id='settings-accessibility';access.hidden=true;
   access.innerHTML='<div class="settings"><label>Motion<select id="motionPreference"><option value="system">Follow system preference</option><option value="reduced">Reduce motion</option></select></label><label>Keyboard shortcuts<select id="shortcutPreference"><option value="on">Enabled</option><option value="off">Disabled</option></select></label><label>Table density<select id="densityPreference"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label></div><p class="muted">Display preferences are saved for this browser. Tab, Enter and Escape remain available.</p>';
   rules.after(access);
   const storageLink=document.createElement('button');storageLink.className='subtle';storageLink.textContent='Storage & queue';storageLink.addEventListener('click',()=>goView('storagePanel').catch(showError));
   const tabs=$('enterpriseSettingsTabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Settings categories');
-  const sections=[['Performance',perf],['Column rules',rules],['Accessibility',access]];
-  function selectSettings(index){sections.forEach(([label,section],i)=>{section.hidden=i!==index;const button=$('settings-tab-'+i);button.setAttribute('aria-selected',String(i===index));button.tabIndex=i===index?0:-1;});$('saveSettings').hidden=index===2;animateWorkspacePane(sections[index][1]);}
+  const sections=[['Performance',perf],['Accessibility',access]];
+  function selectSettings(index){sections.forEach(([label,section],i)=>{section.hidden=i!==index;const button=$('settings-tab-'+i);button.setAttribute('aria-selected',String(i===index));button.tabIndex=i===index?0:-1;});$('saveSettings').hidden=index===1;animateWorkspacePane(sections[index][1]);}
   sections.forEach(([label,section],i)=>{const b=document.createElement('button');b.id='settings-tab-'+i;b.textContent=label;b.setAttribute('role','tab');b.setAttribute('aria-controls',section.id);section.setAttribute('role','tabpanel');section.setAttribute('aria-labelledby',b.id);b.addEventListener('click',()=>selectSettings(i));tabs.append(b);});tabs.after(storageLink);selectSettings(0);
   const applyPreferences=()=>{const motion=localStorage.getItem('compare-motion')||'system',density=localStorage.getItem('compare-density')||'comfortable';document.body.classList.toggle('reduce-motion',motion==='reduced');document.body.classList.toggle('compact-density',density==='compact');$('motionPreference').value=motion;$('densityPreference').value=density;$('shortcutPreference').value=localStorage.getItem('compare-shortcuts')||'on';};
   for(const [id,key] of [['motionPreference','compare-motion'],['densityPreference','compare-density'],['shortcutPreference','compare-shortcuts']])$(id).addEventListener('change',()=>{localStorage.setItem(key,$(id).value);applyPreferences();});applyPreferences();
@@ -1376,3 +1364,88 @@ function initEnterpriseShell(){
   updateEnterpriseShell(currentView);
 }
 initEnterpriseShell();
+
+// A rule selection expands to explicit per-column settings for auditable profiles/reports.
+let ruleEditorDraft=[],ruleEditorMode='setup',ruleEditorReturn=null;
+function ruleDescription(rule){return [rule.trim?'Trim whitespace':'',rule.ignore_case?'Ignore case':'',rule.tolerance!==undefined?(Number(rule.tolerance)===0?'Same numeric value':'Tolerance '+rule.tolerance):'',rule.left_date_format?'Date formats: '+rule.left_date_format+' → '+rule.right_date_format:''].filter(Boolean).join(' · ')||'Exact text';}
+function ruleScope(){return ruleEditorMode==='rerun'?rerunDraft:{keys:[...selected],ignore_columns:[...ignoredColumns]};}
+function eligibleRuleColumns(){const scope=ruleScope();return (job?.columns||[]).filter(c=>!scope.keys.includes(c)&&!scope.ignore_columns.includes(c));}
+function mergeColumnRules(existing,columns,patch){
+  const merged=existing.map(r=>({...r}));
+  for(const column of columns){let rule=merged.find(r=>r.column===column);if(!rule){rule={column};merged.push(rule);}Object.assign(rule,patch);
+    if(rule.left_date_format&&rule.tolerance!==undefined)throw Error('Numeric and date rules cannot be combined for '+column+'. Remove its existing rule first.');
+  }return merged;
+}
+function renderRuleEditor(){
+  const target=$('comparisonRuleList');target.replaceChildren();
+  for(const rule of ruleEditorDraft){const row=document.createElement('div');row.className='comparison-rule-card';const title=document.createElement('strong'),desc=document.createElement('span'),remove=document.createElement('button');title.textContent=rule.column;desc.textContent=ruleDescription(rule);remove.textContent='Remove';remove.className='subtle';remove.setAttribute('aria-label','Remove rules for '+rule.column);remove.addEventListener('click',()=>{ruleEditorDraft=ruleEditorDraft.filter(r=>r.column!==rule.column);renderRuleEditor();});row.append(title,desc,remove);target.append(row);}
+  $('ruleEditorCount').textContent=ruleEditorDraft.length+' columns configured';
+  $('ruleEditorEmpty').hidden=!!ruleEditorDraft.length;
+}
+function renderRuleColumnChoices(){
+  const q=$('ruleColumnSearch').value.toLowerCase();let visible=0;
+  for(const label of $('ruleColumnChoices').children){label.hidden=!label.textContent.toLowerCase().includes(q);if(!label.hidden)visible++;}
+  $('ruleSelectionCount').textContent=$('ruleColumnChoices').querySelectorAll('input:checked').length+' selected · '+visible+' shown';
+}
+function openRuleEditor(mode='setup'){
+  ruleEditorMode=mode;ruleEditorReturn=document.activeElement;
+  const allowed=eligibleRuleColumns();ruleEditorDraft=structuredClone(mode==='rerun'?rerunDraft.comparison_rules:valueRules).filter(r=>allowed.includes(r.column));
+  $('ruleColumnChoices').replaceChildren();for(const column of allowed){const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.value=column;input.addEventListener('change',renderRuleColumnChoices);label.append(input,document.createTextNode(column));$('ruleColumnChoices').append(label);}
+  $('ruleTargetScope').value='selected';$('ruleColumnPicker').hidden=false;$('ruleColumnSearch').value='';$('ruleEditorError').textContent='';
+  for(const id of ['ruleTrim','ruleCase','ruleNumericFormat'])$(id).checked=false;
+  for(const id of ['ruleTolerance','ruleDateLeft','ruleDateRight'])$(id).value='';
+  $('ruleTolerance').disabled=false;renderRuleColumnChoices();renderRuleEditor();$('comparisonRulesDrawer').showModal();
+}
+function renderRerunRuleSummary(){const target=$('rerun-rules-list');target.replaceChildren();const p=document.createElement('p');p.textContent=rerunDraft.comparison_rules.length+' columns configured. Add rules to all compared columns or select specific columns.';target.append(p);for(const rule of rerunDraft.comparison_rules){const row=document.createElement('div');row.className='comparison-rule-card';const title=document.createElement('strong'),desc=document.createElement('span');title.textContent=rule.column;desc.textContent=ruleDescription(rule);row.append(title,desc);target.append(row);}}
+function initComparisonRulesDrawer(){
+  if(typeof document.createDocumentFragment!=='function')return;
+  document.body.insertAdjacentHTML('beforeend',`<dialog id="comparisonRulesDrawer" class="comparison-rules-drawer" aria-labelledby="comparisonRulesTitle"><div class="drawer-heading"><div><p class="eyebrow">COMPARISON CONFIGURATION</p><h2 id="comparisonRulesTitle">Comparison rules</h2></div><button id="closeComparisonRules" class="subtle" aria-label="Close comparison rules">✕</button></div><div class="comparison-rules-body"><p class="muted">Choose columns, combine rules, then apply. Keys and ignored columns are excluded.</p><section class="comparison-rule-builder"><label>Apply to<select id="ruleTargetScope"><option value="selected">Selected columns</option><option value="all">All compared value columns</option></select></label><div id="ruleColumnPicker"><input id="ruleColumnSearch" type="search" aria-label="Find rule columns" placeholder="Find columns"><div class="rule-selection-tools"><button id="ruleSelectVisible" class="subtle">Select shown</button><button id="ruleClearSelection" class="subtle">Clear</button><span id="ruleSelectionCount"></span></div><div id="ruleColumnChoices"></div></div><div class="rule-options"><label><input id="ruleTrim" type="checkbox">Trim whitespace</label><label><input id="ruleCase" type="checkbox">Ignore case</label><label><input id="ruleNumericFormat" type="checkbox">Ignore numeric formatting</label><label>Numeric tolerance<input id="ruleTolerance" placeholder="e.g. 0.01" inputmode="decimal"></label><label>File 1 date format<input id="ruleDateLeft" placeholder="%Y-%m-%d"></label><label>File 2 date format<input id="ruleDateRight" placeholder="%d/%m/%Y"></label></div><details class="compact-help"><summary>How rules combine</summary><p>Whitespace and case rules run before numeric or date comparison. Adding rules preserves other rules on the selected columns; a new tolerance or date format replaces that setting. Numeric and date rules cannot coexist. Remove a column’s rules to reset it to exact text. All columns means the current compared value columns; profiles save this explicit selection.</p></details><button id="addValueRule" class="subtle">Add rules to selection</button></section><div class="section-title"><h3>Configured rules</h3><span id="ruleEditorCount"></span></div><p id="ruleEditorEmpty" class="muted">No rules. Values are compared as exact text.</p><div id="comparisonRuleList"></div></div><footer class="rules-drawer-footer"><p id="ruleEditorError" role="status"></p><button id="applyComparisonRules" class="primary">Apply rules</button></footer></dialog>`);
+  const trigger=document.createElement('button');trigger.id='openComparisonRules';trigger.className='subtle';trigger.textContent='Comparison rules';trigger.setAttribute('aria-haspopup','dialog');trigger.addEventListener('click',()=>openRuleEditor());$('scopeNext').before(trigger);
+  const prior=$('addRerunRule'),replacement=prior.cloneNode(true);replacement.textContent='Configure comparison rules';prior.replaceWith(replacement);replacement.addEventListener('click',()=>openRuleEditor('rerun'));
+  $('closeComparisonRules').addEventListener('click',()=>$('comparisonRulesDrawer').close());$('comparisonRulesDrawer').addEventListener('close',()=>ruleEditorReturn?.focus());
+  $('ruleTargetScope').addEventListener('change',()=>{$('ruleColumnPicker').hidden=$('ruleTargetScope').value==='all';});$('ruleColumnSearch').addEventListener('input',renderRuleColumnChoices);
+  $('ruleSelectVisible').addEventListener('click',()=>{for(const label of $('ruleColumnChoices').children)if(!label.hidden)label.querySelector('input').checked=true;renderRuleColumnChoices();});$('ruleClearSelection').addEventListener('click',()=>{for(const input of $('ruleColumnChoices').querySelectorAll('input'))input.checked=false;renderRuleColumnChoices();});
+  $('ruleNumericFormat').addEventListener('change',()=>{$('ruleTolerance').disabled=$('ruleNumericFormat').checked;});
+  $('addValueRule').addEventListener('click',async()=>{try{
+    const columns=$('ruleTargetScope').value==='all'?eligibleRuleColumns():[...$('ruleColumnChoices').querySelectorAll('input:checked')].map(i=>i.value);if(!columns.length)throw Error('Select at least one value column.');
+    const patch={};if($('ruleTrim').checked)patch.trim=true;if($('ruleCase').checked)patch.ignore_case=true;
+    if($('ruleNumericFormat').checked)patch.tolerance='0';else if($('ruleTolerance').value!=='')patch.tolerance=$('ruleTolerance').value;
+    if($('ruleDateLeft').value||$('ruleDateRight').value){patch.left_date_format=$('ruleDateLeft').value;patch.right_date_format=$('ruleDateRight').value;}
+    if(!Object.keys(patch).length)throw Error('Choose at least one rule.');
+    const proposed=mergeColumnRules(ruleEditorDraft,columns,patch),scope=ruleScope();const result=await api(endpoint('/validate-rules'),{comparison_rules:proposed,keys:scope.keys,ignore_columns:scope.ignore_columns});ruleEditorDraft=result.rules;renderRuleEditor();$('ruleEditorError').textContent='Rules added. Apply to save this configuration.';
+  }catch(error){$('ruleEditorError').textContent=error.message;}});
+  $('applyComparisonRules').addEventListener('click',async()=>{const button=$('applyComparisonRules');button.disabled=true;try{const scope=ruleScope(),result=await api(endpoint('/validate-rules'),{comparison_rules:ruleEditorDraft,keys:scope.keys,ignore_columns:scope.ignore_columns});if(ruleEditorMode==='rerun'){rerunDraft.comparison_rules=result.rules;renderRerunRuleSummary();}else{if(job.state!=='ready')throw Error('Use Recompare to change rules for a completed comparison.');await api(endpoint('/config'),{...configuration(),comparison_rules:result.rules});valueRules=result.rules;} $('comparisonRulesDrawer').close();}catch(error){$('ruleEditorError').textContent=error.message;}finally{button.disabled=false;}});
+}
+initComparisonRulesDrawer();
+
+function detectedFileType(file){return !file?'':/\.json$/i.test(file.name)?'JSON':/\.(xlsx|xlsm)$/i.test(file.name)?'Excel':'CSV';}
+function updateDetectedFiles(){
+  if(!$('detectedFileStatus'))return;
+  const types=['left','right'].map(side=>detectedFileType(files[side]));
+  for(const side of ['left','right'])if(files[side])$(`${side}Size`).textContent=detectedFileType(files[side])+' · '+bytes(files[side].size);
+  const json=types.includes('JSON'),mixed=types.every(Boolean)&&json&&types[0]!==types[1];
+  $('detectedFileStatus').textContent=mixed?'Choose two JSON files, or two tabular files (CSV/Excel).':json?'JSON detected · up to 5 MiB per file. Configure array matching after loading.':types.every(Boolean)?types.join(' ↔ ')+' · column headers are read after upload.':'File format is detected automatically.';
+  $('upload').disabled=mixed||!files.left||!files.right;
+  $('delimiter').closest('.settings').hidden=json;
+  document.querySelector('.upload-profile').hidden=json;
+  if(currentView==='uploadPanel')$('comparisonFlow').hidden=json;
+}
+async function loadUnifiedJson(){
+  clearError();$('upload').disabled=true;uploading=true;
+  try{
+    const texts=[];for(const side of ['left','right']){const file=files[side];if(file.size>5*1024*1024)throw Error('Each JSON input must be at most 5 MiB.');const text=new TextDecoder('utf-8',{fatal:true}).decode(await file.arrayBuffer());try{JSON.parse(text);}catch{throw Error(file.name+' is not valid JSON. Check its syntax and try again.');}texts.push(text);}
+    $('jsonLeft').value=texts[0];$('jsonRight').value=texts[1];jsonRules=[];renderJsonRules();invalidateJson();resetJsonDiscovery();panel('jsonPanel');$('jsonSourceFiles').textContent=files.left.name+' ↔ '+files.right.name;$('jsonStatus').textContent='Files loaded. Choose array keys or compare using the original array order.';
+  }catch(error){showError(error);}finally{uploading=false;$('upload').disabled=false;syncNavigation();}
+}
+function initUnifiedUpload(){
+  if(typeof document.createDocumentFragment!=='function')return;
+  $('navJson').hidden=true;
+  $('navNew').querySelector('.side-description').textContent='CSV, Excel & JSON';
+  for(const side of ['left','right']){$(`${side}File`).accept='.csv,.xlsx,.xlsm,.json,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';$(`${side}File`).setAttribute('aria-label','Choose '+(side==='left'?'original':'updated')+' CSV, Excel or JSON');$(`${side}Name`).textContent='Choose '+(side==='left'?'original':'updated')+' CSV, Excel or JSON';}
+  $('uploadPanel').querySelector('.section-title').insertAdjacentHTML('afterend','<p id="detectedFileStatus" class="muted detected-file-status" role="status">File format is detected automatically.</p>');
+  $('jsonPanel').querySelector('h2').insertAdjacentHTML('afterend','<div class="json-source-bar"><span id="jsonSourceFiles"></span><button id="changeJsonFiles" class="subtle">Change files</button></div>');
+  $('changeJsonFiles').addEventListener('click',()=>{panel('uploadPanel');updateDetectedFiles();});
+  for(const side of ['Left','Right'])$('json'+side+'File').hidden=true;
+  updateDetectedFiles();
+}
+initUnifiedUpload();

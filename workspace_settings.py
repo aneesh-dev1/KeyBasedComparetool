@@ -17,6 +17,8 @@ def validate_settings(config,limit):
 
 def resolved_rules(settings,config,columns,keys,ignored):
     available={name.casefold():name for name in columns if name not in keys and name not in ignored}
+    if 'comparison_rules' in config:
+        return validate_rules(config.get('comparison_rules') or [],columns,keys,ignored)
     rules={available[r['column'].casefold()]:dict(r,column=available[r['column'].casefold()]) for r in settings.get('comparison_rules',[]) if r['column'].casefold() in available}
     rules.update({r['column']:r for r in (config.get('comparison_rules') or [])})
     return validate_rules(list(rules.values()),columns,keys,ignored)

@@ -87,3 +87,12 @@ vm.runInContext('consolePaused=false;paintConsole()',context);
 assert.equal(nodes.get('consoleLog').textContent,'Batch 1 complete\nBatch 2 complete');
 console.log('Analysis, direct start, fresh startup/restore, and console filter/pause checks passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Rules on overlapping selections accumulate without dropping prior normalization.
+const composed=vm.runInContext(`mergeColumnRules([{column:'a',trim:true}],['a','b'],{ignore_case:true,tolerance:'0'})`,context);
+assert.equal(composed.length,2);assert.equal(composed[0].trim,true);assert.equal(composed[0].ignore_case,true);assert.equal(composed[1].tolerance,'0');
+assert.throws(()=>vm.runInContext(`mergeColumnRules([{column:'a',tolerance:'0'}],['a'],{left_date_format:'%Y',right_date_format:'%Y'})`,context),/cannot be combined/);
+assert.equal(vm.runInContext(`mergeColumnRules([{column:'a',tolerance:'0'}],['a'],{tolerance:'0.1'})[0].tolerance`,context),'0.1');
+assert.equal(vm.runInContext("detectedFileType({name:'sample.JSON'})",context),'JSON');
+assert.equal(vm.runInContext("detectedFileType({name:'sample.xlsx'})",context),'Excel');
+assert.equal(vm.runInContext("detectedFileType({name:'sample.csv'})",context),'CSV');
