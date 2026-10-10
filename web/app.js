@@ -322,6 +322,15 @@ async function generateAndDownload(kind){
 }
 for(const kind of ['excel','html']) $(kind).addEventListener('click',()=>generateAndDownload(kind));
 let headerDraft=null, headerDraftJob=null, headerDirty=false, headerPage=0;
+const headerTitleGroup=$('headersPanel').querySelector('.section-title>div');headerTitleGroup.classList.add('header-title-group');
+const headerSearchBox=document.createElement('div');headerSearchBox.className='header-search-box';
+headerSearchBox.insertAdjacentHTML('beforeend','<button id="headerSearchToggle" type="button" aria-label="Search headers" title="Search headers" aria-expanded="false" aria-controls="headerSearch"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button>');
+headerSearchBox.append($('headerSearch'));headerTitleGroup.append(headerSearchBox);$('headerSearch').tabIndex=-1;$('headerSearch').inert=true;
+function setHeaderSearchOpen(open){headerSearchBox.classList.toggle('is-expanded',open);$('headerSearchToggle').setAttribute('aria-expanded',String(open));$('headerSearch').tabIndex=open?0:-1;$('headerSearch').inert=!open;}
+$('headerSearchToggle').addEventListener('click',()=>{setHeaderSearchOpen(true);$('headerSearch').focus();});
+$('headerSearch').addEventListener('focus',()=>setHeaderSearchOpen(true));
+$('headerSearch').addEventListener('blur',()=>{if(!$('headerSearch').value)setHeaderSearchOpen(false);});
+$('headerSearch').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();$('headerSearch').value='';headerPage=0;renderHeaders();setHeaderSearchOpen(false);$('headerSearchToggle').focus();}});
 function headerSources(){return job.source_headers||{left:job.columns,right:job.columns};}
 function renderHeaders(){
   if(headerDraftJob!==job.id){headerDraft=structuredClone(job.column_headers||headerSources());headerDraftJob=job.id;headerDirty=false;headerPage=0;}
