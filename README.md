@@ -46,8 +46,10 @@ are the five phases within New comparison. **Preview files** is optional; start
 comparison directly from Keys & scope. Completed pipelines offer a gently pulsing
 **View results** button. Results compact the steps into a vertical circle rail;
 hover or focus reveals labels and each circle returns to its phase.
-**Analyze mismatches** opens column/key analysis in a drawer over Results.
-The **Recompare** floating action opens tabs for Keys & scope, Value overrides,
+Selecting a column under **Differences by column** opens its mismatch analysis
+in a right-side drawer. Results offer one Excel report and one HTML report.
+The **Recompare** prompt has a thin moving border and contracts to an icon after
+five idle seconds; hovering or focusing expands it again. It opens tabs for Keys & scope, Value overrides,
 and Comparison rules. It creates a separate run with the same files and preserves
 the original job. Escape closes overlays; reduced-motion preferences disable animation.
 The bottom **Collapse sidebar** control switches
@@ -310,6 +312,13 @@ python3 compare.py left.csv right.csv --keys id --output results \
 ```
 
 ## File previews, pipeline, and job history
+
+The console supports text filtering, pausing/resuming the display, following the
+latest output, and copying visible lines. Pausing the display does not pause the
+comparison. Scrolling upward stops automatic following. Pipeline stage cards keep
+their DOM nodes as progress updates, allowing smooth active/completed transitions.
+Returning to Pipeline restores horizontal steps so View results can replay the
+circle-then-vertical transition.
 
 HTML exports use a compact desktop dashboard: summary cards stay visible while
 section buttons switch between overview, mismatching columns, matching columns,

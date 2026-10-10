@@ -272,7 +272,7 @@ function renderSummary() {
   }
   $('changedColumnCount').textContent=`${changes.length} columns`;$('columnSummary').replaceChildren();
   for(const [name,count] of changes) {
-    const row=document.createElement('div');row.className='column-row';
+    const row=document.createElement('button');row.type='button';row.className='column-row';row.setAttribute('aria-label',`Analyze ${name}, ${number(count)} mismatches`);row.addEventListener('click',()=>showAnalysisDrawer(name).catch(showError));
     const label=document.createElement('span');label.textContent=name;
     const value=document.createElement('strong');value.textContent=number(count);row.append(label,value);$('columnSummary').append(row);
   }
@@ -517,11 +517,13 @@ async function renderPipeline(){
   const stage=job.state==='complete'?'complete':job.progress?.stage||'validate';const index=stages.findIndex(([id])=>id===stage);
   $('phase').textContent=job.state==='complete'?'Comparison complete':job.state==='error'?'Comparison failed':job.state==='queued'?'Queued':job.progress?.phase||'Starting worker';
   $('processed').textContent=job.state==='error'?job.error:job.progress?.rows!==undefined?`${number(job.progress.rows)} rows processed in the current phase`:job.state==='queued'?'Waiting for a server worker. Your files and results are kept in your own job.':'Stages update as the worker processes the files.';
-  $('pipelineState').textContent=job.state;$('pipelineStages').replaceChildren();
-  stages.forEach(([id,label],i)=>{const item=document.createElement('li');const state=job.state==='queued'?'pending':job.state==='complete'||i<index?'done':i===index?(job.state==='error'?'failed':'active'):'pending';item.className=state;item.textContent=`${state==='done'?'✓':state==='failed'?'!':i+1}  ${label}`;$('pipelineStages').append(item);});
-  if(logJobId!==job.id){logJobId=job.id;logCursor=0;logText='';}
+  $('pipelineState').textContent=job.state;
+  const signature=job.id+':'+stages.map(s=>s[0]).join(',');
+  if($('pipelineStages').dataset.signature!==signature){$('pipelineStages').replaceChildren();stages.forEach(()=>{const item=document.createElement('li');$('pipelineStages').append(item);});$('pipelineStages').dataset.signature=signature;}
+  stages.forEach(([id,label],i)=>{const item=$('pipelineStages').children[i];const state=job.state==='queued'?'pending':job.state==='complete'||i<index?'done':i===index?(job.state==='error'?'failed':'active'):'pending';if(item.className!==state){item.className=state;item.textContent=`${state==='done'?'✓':state==='failed'?'!':i+1}  ${label}`;}});
+  if(logJobId!==job.id){logJobId=job.id;logCursor=0;logText='';consolePaused=false;consoleFollow=true;if($('consolePause')){$('consolePause').textContent='Pause display';$('consolePause').setAttribute('aria-pressed','false');$('consoleFollow').setAttribute('aria-pressed','true');}}
   const id=job.id;const log=await api(endpoint('/logs')+'?cursor='+logCursor);if(job.id!==id)return;
-  logCursor=log.cursor;logText=(logText+log.text).split('\n').slice(-1000).join('\n');$('consoleLog').textContent=logText||'Waiting for worker output…';$('consoleLog').scrollTop=$('consoleLog').scrollHeight;
+  logCursor=log.cursor;logText=(logText+log.text).split('\n').slice(-1000).join('\n');paintConsole();
   $('logDownload').href=downloadUrl('run.log');
   if(log.text.length>=60000)pollTimer=setTimeout(()=>refresh().catch(pollError),300);
 }
@@ -1063,14 +1065,29 @@ for(const help of document.querySelectorAll('.inline-help')){
 }
 
 // Review overlays preserve the result underneath and never edit the completed job.
-var reviewUI=false, reviewRailJob=null, rerunDraft=null, resultsTransitionRunning=false;
+var reviewUI=false, reviewRailJob=null, rerunDraft=null, resultsTransitionRunning=false, fabIdleTimer=null, consolePaused=false, consoleFollow=true, analysisReturnTarget=null;
+function paintConsole(){
+  if(consolePaused)return;
+  const search=$('consoleSearch')?.value.toLowerCase()||'';
+  const lines=logText.split('\n'),shown=search?lines.filter(line=>line.toLowerCase().includes(search)):lines;
+  $('consoleLog').textContent=shown.join('\n')||(search?'No matching log lines.':'Waiting for worker output…');
+  if(consoleFollow)$('consoleLog').scrollTop=$('consoleLog').scrollHeight;
+  if($('consoleStatus'))$('consoleStatus').textContent=`${shown.filter(Boolean).length} lines${search?' matching filter':''} · ${consoleFollow?'Following latest':'Scroll position held'}`;
+}
+function scheduleFabCollapse(){
+  clearTimeout(fabIdleTimer);
+  if(!$('recompareFab')||$('recompareFab').hidden||!$('recompareFab').classList.contains('fab-ready'))return;
+  fabIdleTimer=setTimeout(()=>{$('recompareFab').classList.add('fab-compact');},5000);
+}
 function updateReviewWorkspace(name){
   if(!reviewUI)return;
+  if(name==='runningPanel')reviewRailJob=null;
   if(name==='results'&&job?.state==='complete')reviewRailJob=job.id;
   const rail=reviewRailJob===job?.id&&job?.state==='complete'&&phaseViews.includes(name);
   $('mainWorkspace').classList.toggle('review-rail',rail);
   $('recompareFab').hidden=name!=='results'||job?.state!=='complete';
   $('recompareFab').classList.toggle('fab-ready',!$('recompareFab').hidden&&!resultsTransitionRunning);
+  $('recompareFab').classList.remove('fab-compact');scheduleFabCollapse();
   if($('analysisDrawer').open)$('analysisDrawer').close();
 }
 async function transitionToResults(){
@@ -1111,14 +1128,15 @@ async function transitionToResults(){
     window.removeEventListener('resize',finishMotion);
     for(const {flight} of flights)flight.remove();for(const animation of animations)animation.cancel();
     document.body.classList.remove('steps-in-flight');workspace.inert=false;sidebar.inert=false;resultsTransitionRunning=false;
-    if(currentView==='results'){$('recompareFab').classList.add('fab-ready');$('resultTitle').tabIndex=-1;$('resultTitle').focus({preventScroll:true});}
+    if(currentView==='results'){$('recompareFab').classList.add('fab-ready');scheduleFabCollapse();$('resultTitle').tabIndex=-1;$('resultTitle').focus({preventScroll:true});}
   }
 }
-async function showAnalysisDrawer(){
+async function showAnalysisDrawer(column=''){
   if(!reviewUI||job?.state!=='complete')return;
+  analysisReturnTarget=document.activeElement;
   currentView='analysisPanel';$('analysisPanel').hidden=false;
   $('analysisDrawer').showModal();
-  try{await openAnalysis();}catch(error){$('analysisStatus').textContent=error.message;}
+  try{await openAnalysis();if(column&&$('analysisDrawer').open){$('analysisColumn').value=column;analysisOffset=0;renderColumnChoices();await loadAnalysis();}}catch(error){$('analysisStatus').textContent=error.message;}
 }
 function rerunField(label,value='',type='text'){
   const wrap=document.createElement('label'),input=document.createElement('input');wrap.textContent=label;input.type=type;
@@ -1167,15 +1185,28 @@ function initReviewWorkspace(){
   <dialog id="analysisDrawer" class="analysis-drawer" aria-label="Mismatch analysis"><div class="drawer-heading"><h2>Analyze mismatches</h2><button id="closeAnalysisDrawer" class="subtle" aria-label="Close analysis">✕</button></div></dialog>
   <dialog id="rerunDialog" class="rerun-dialog" aria-labelledby="rerunTitle"><div class="drawer-heading"><div><h2 id="rerunTitle">Recompare</h2><p>New run · same files · original results preserved</p></div><button id="closeRerun" class="subtle" aria-label="Close recomparison">✕</button></div><div class="rerun-tabs" role="tablist" aria-label="Recomparison settings"><button id="rerun-tab-scope" role="tab" aria-controls="rerun-scope">Keys & scope</button><button id="rerun-tab-overrides" role="tab" aria-controls="rerun-overrides">Value overrides</button><button id="rerun-tab-rules" role="tab" aria-controls="rerun-rules">Comparison rules</button></div><div class="rerun-body"><section id="rerun-scope" role="tabpanel" aria-labelledby="rerun-tab-scope"></section><section id="rerun-overrides" role="tabpanel" aria-labelledby="rerun-tab-overrides" hidden><div id="rerun-overrides-list"></div><button id="addRerunOverride" class="subtle">Add override</button></section><section id="rerun-rules" role="tabpanel" aria-labelledby="rerun-tab-rules" hidden><div id="rerun-rules-list"></div><button id="addRerunRule" class="subtle">Add column rule</button></section></div><p id="rerunError" role="alert"></p><div class="rerun-footer"><button id="startRerun" class="primary">Start recomparison →</button></div></dialog>`);
   $('analysisDrawer').append($('analysisPanel'));
-  $('results').querySelector('.result-heading').append($('openAnalysis'));
+  $('openAnalysis').hidden=true;
+  $('results').querySelector('.csv-links').hidden=true;
+  $('results').querySelector('.column-panel .section-title p').textContent='Select a column to analyze its mismatches.';
+  $('recompareFab').innerHTML='<span aria-hidden="true">↻</span><span class="fab-caption">Recompare</span>';$('recompareFab').setAttribute('aria-label','Recompare');
+  for(const event of ['pointerenter','focus'])$('recompareFab').addEventListener(event,()=>{clearTimeout(fabIdleTimer);$('recompareFab').classList.remove('fab-compact');});
+  for(const event of ['pointerleave','blur'])$('recompareFab').addEventListener(event,scheduleFabCollapse);
+  $('consoleLog').insertAdjacentHTML('beforebegin','<div class="console-controls"><input id="consoleSearch" type="search" placeholder="Search logs…" aria-label="Search comparison logs"><button id="consolePause" class="subtle" aria-pressed="false">Pause display</button><button id="consoleFollow" class="subtle" aria-pressed="true">Follow latest</button><button id="consoleCopy" class="subtle">Copy visible logs</button></div><p id="consoleStatus" class="muted" role="status"></p>');
+  $('consoleLog').tabIndex=0;
+  $('consoleSearch').addEventListener('input',()=>{const paused=consolePaused;consolePaused=false;paintConsole();consolePaused=paused;});
+  $('consolePause').addEventListener('click',()=>{consolePaused=!consolePaused;$('consolePause').textContent=consolePaused?'Resume display':'Pause display';$('consolePause').setAttribute('aria-pressed',String(consolePaused));if(consolePaused)$('consoleStatus').textContent='Display paused · comparison continues in the background';else paintConsole();});
+  $('consoleFollow').addEventListener('click',()=>{consoleFollow=!consoleFollow;$('consoleFollow').setAttribute('aria-pressed',String(consoleFollow));paintConsole();});
+  $('consoleLog').addEventListener('scroll',()=>{if($('consoleLog').scrollHeight-$('consoleLog').clientHeight-$('consoleLog').scrollTop>20){consoleFollow=false;$('consoleFollow').setAttribute('aria-pressed','false');}});
+  $('consoleCopy').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('consoleLog').textContent);$('consoleStatus').textContent='Visible logs copied';}catch(error){$('consoleStatus').textContent='Copy unavailable. Select the console text to copy manually.';}});
   const reportHelp=document.createElement('details');reportHelp.className='report-help';const helpTitle=document.createElement('summary');helpTitle.textContent='Report details';reportHelp.append(helpTitle);
   const downloadPanel=$('results').querySelector('.download-panel');
   for(const p of downloadPanel.querySelectorAll('p:not([id]):not(.eyebrow)'))reportHelp.append(p);
+  reportHelp.querySelector('.fine').textContent='Excel includes detailed column mismatches and configured exclusion audits. HTML contains the leadership summary and mismatch samples. Excel sheet and cell limits apply.';
   downloadPanel.append(reportHelp);
   const closeOverlay=async(dialog,drawer=false)=>{if(!dialog.open||(dialog.id==='rerunDialog'&&$('startRerun').disabled))return;if(!matchMedia('(prefers-reduced-motion: reduce)').matches)await dialog.animate([{opacity:1,transform:'translate(0)'},{opacity:0,transform:drawer?'translateX(60px)':'translateY(12px)'}],{duration:180,easing:'ease-in',fill:'forwards'}).finished;dialog.close();dialog.getAnimations().forEach(a=>a.cancel());};
   $('closeAnalysisDrawer').addEventListener('click',()=>closeOverlay($('analysisDrawer'),true));
   $('analysisDrawer').addEventListener('cancel',event=>{event.preventDefault();closeOverlay($('analysisDrawer'),true);});
-  $('analysisDrawer').addEventListener('close',()=>{clearTimeout(analysisTimer);analysisGeneration++;$('analysisPanel').hidden=true;if(currentView==='analysisPanel')currentView='results';$('openAnalysis').focus();});
+  $('analysisDrawer').addEventListener('close',()=>{clearTimeout(analysisTimer);analysisGeneration++;$('analysisPanel').hidden=true;if(currentView==='analysisPanel')currentView='results';if(analysisReturnTarget?.isConnected)analysisReturnTarget.focus();});
   $('closeRerun').addEventListener('click',()=>closeOverlay($('rerunDialog')));
   $('rerunDialog').addEventListener('cancel',event=>{event.preventDefault();closeOverlay($('rerunDialog'));});
   $('recompareFab').addEventListener('click',openRecomparison);
