@@ -105,6 +105,7 @@ async function goView(name){
   panel(name);
   if(name==='settingsPanel')await loadSettings();
   if(name==='projectsPanel')await loadProjects();
+  if(name==='uploadPanel')await loadUploadProjects();
   if(name==='profilesPanel')await loadProfiles();
   if(name==='storagePanel')await loadStorage();
   if(name==='analysisPanel')await openAnalysis();
@@ -165,6 +166,7 @@ $('upload').addEventListener('click', async () => {
       job = await api('/api/jobs',{delimiter:$('delimiter').value==='tab'?'\t':$('delimiter').value,encoding:$('encoding').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))});
       localStorage.setItem('keywise-job',job.id);
     }
+    await attachUploadProject(job.id);
     if($('quickProfile').value)localStorage.setItem('upload-profile:'+job.id,$('quickProfile').value);
     job=await api(endpoint());
     for(const side of ['left','right']) {
@@ -543,7 +545,7 @@ async function loadHistory(){
 async function openJob(id){
   if(uploading){showError('Pause the upload before opening another job.');return;}
   $('uploadActivity').hidden=true;
-  clearTimeout(pollTimer);await saveDraft();clearError();viewingHistoryJob=true;job=await api('/api/jobs/'+id);localStorage.setItem('keywise-job',id);renderedId=null;hydratedId=null;hydrate();
+  clearTimeout(pollTimer);await saveDraft();clearError();viewingHistoryJob=true;job=await api('/api/jobs/'+id);await loadUploadProjects();localStorage.setItem('keywise-job',id);renderedId=null;hydratedId=null;hydrate();
   for(const side of ['left','right']){files[side]=null;$(`${side}File`).value='';$(`${side}Name`).textContent=job.files[side].name;$(`${side}Size`).textContent=bytes(job.files[side].size);}
   $('sourceLeftTable').replaceChildren();$('sourceRightTable').replaceChildren();
   $('sourceLeftTitle').textContent='File 1';$('sourceRightTitle').textContent='File 2';
@@ -755,6 +757,7 @@ $('jsonCompare').addEventListener('click',async()=>{
   try{
     for(const id of ['jsonLeft','jsonRight'])if(new Blob([$(id).value]).size>5*1024*1024)throw new Error('Each JSON input must be at most 5 MiB.');
     jsonResult=await api('/api/json-compare',{left:$('jsonLeft').value,right:$('jsonRight').value,default_order:$('jsonDefault').value,rules:jsonRules,source_names:[files.left?.name||'File 1 JSON',files.right?.name||'File 2 JSON']});
+    await attachUploadProject(jsonResult.audit_id);
     $('jsonResult').hidden=false;$('jsonResultTitle').textContent=jsonResult.equal?'JSON documents match':'JSON differences found';
     $('jsonCounts').textContent=`${jsonResult.counts.changed} changed · ${jsonResult.counts.added} added · ${jsonResult.counts.removed} removed`;
     $('jsonWarnings').textContent=jsonResult.warnings.join(' · ');
@@ -1478,7 +1481,7 @@ async function selectProject(identity,offset=0){
   const prev=projectButton('← Previous',()=>selectProject(identity,Math.max(0,offset-25))),next=projectButton('Next →',()=>selectProject(identity,offset+25));prev.disabled=offset===0;next.disabled=offset+25>=detail.total;$('projectRecordPager').append(prev,next);animateWorkspacePane(d);
 }
 function openProjectDrawer(title){projectDrawerReturn=document.activeElement;$('projectDrawerTitle').textContent=title;$('projectDrawerError').textContent='';$('projectDrawerBody').replaceChildren();if(!$('projectDrawer').open)$('projectDrawer').showModal();}
-function createProjectDrawer(){openProjectDrawer('New project');const body=$('projectDrawerBody');body.innerHTML='<label>Project name<input id="newProjectName" maxlength="100" placeholder="e.g. Monthly reconciliation"></label><label>Description<textarea id="newProjectDescription" maxlength="2000" rows="4" placeholder="Purpose and scope"></textarea></label>';body.append(projectButton('Create project',async()=>{const result=await api('/api/projects',{name:$('newProjectName').value,description:$('newProjectDescription').value});activeProject=result.id;projectOffset=0;$('projectDrawer').close();await loadProjects();},'primary'));$('newProjectName').focus();}
+function createProjectDrawer(onCreated){openProjectDrawer('New project');const body=$('projectDrawerBody');body.innerHTML='<label>Project name<input id="newProjectName" maxlength="100" placeholder="e.g. Monthly reconciliation"></label><label>Description<textarea id="newProjectDescription" maxlength="2000" rows="4" placeholder="Purpose and scope"></textarea></label>';body.append(projectButton('Create project',async()=>{const result=await api('/api/projects',{name:$('newProjectName').value,description:$('newProjectDescription').value});activeProject=result.id;projectOffset=0;$('projectDrawer').close();if(typeof onCreated==='function')await onCreated(result.id);else await loadProjects();},'primary'));$('newProjectName').focus();}
 async function showProjectCandidates(offset=0){
   projectRecordPage=offset;openProjectDrawer('Attach comparison');const result=await api('/api/projects/records?offset='+offset);const body=$('projectDrawerBody');
   const hint=document.createElement('p');hint.className='muted';hint.textContent='Select a comparison to attach and review. JSON entries retain audit summaries, not source documents.';body.append(hint);
@@ -1493,8 +1496,26 @@ async function openProjectAudit(identity,attach=false){
   $('auditActions').append(projectButton('Save audit',async()=>{await api('/api/projects/records',{comparison_id:identity,project_id:$('auditProject').value||null,status:$('auditState').value,note:$('auditNote').value,reviewer:$('auditReviewer').value});$('projectDrawer').close();if(currentView==='projectsPanel')await loadProjects();},'primary'));
   if(record.kind==='table'&&record.source_available!==false)$('auditActions').append(projectButton('Open comparison',async()=>{$('projectDrawer').close();await openJob(identity);}));
 }
+async function loadUploadProjects(selectedId){
+  const select=$('uploadProject'), previous=selectedId===undefined?select.value:selectedId;
+  const catalog=await api('/api/projects');
+  select.replaceChildren(new Option('No project',''));
+  for(const p of catalog.projects)select.add(new Option(p.name,p.id));
+  select.value=previous;
+  if(job && selectedId===undefined){const data=await api('/api/projects/records?id='+job.id);select.value=data.records[0]?.project_id||'';}
+}
+async function attachUploadProject(identity){
+  const data=await api('/api/projects/records?id='+identity),record=data.records[0];
+  if(!record)throw Error('Comparison audit is unavailable. Retry attaching the project.');
+  const chosen=$('uploadProject').value||null;
+  if((record.project_id||null)===chosen)return;
+  await api('/api/projects/records',{comparison_id:identity,project_id:chosen,status:record.audit_status,note:record.audit_note,reviewer:record.reviewer});
+}
 function initProjects(){
   if(typeof document.createDocumentFragment!=='function')return;
+  $('uploadCreateProject').addEventListener('click',()=>createProjectDrawer(async id=>{await loadUploadProjects(id);if(job)await attachUploadProject(job.id);}));
+  $('uploadProject').addEventListener('change',()=>{if(job)attachUploadProject(job.id).catch(showError);});
+  loadUploadProjects().catch(showError);
   $('createProject').addEventListener('click',createProjectDrawer);$('refreshProjects').addEventListener('click',()=>loadProjects().catch(showError));$('projectSearch').addEventListener('input',renderProjectLibrary);
   $('closeProjectDrawer').addEventListener('click',()=>$('projectDrawer').close());$('projectDrawer').addEventListener('close',()=>{if(projectDrawerReturn?.isConnected)projectDrawerReturn.focus();});
   $('results').querySelector('.result-heading').append(projectButton('Project & audit',()=>openProjectAudit(job.id)));
