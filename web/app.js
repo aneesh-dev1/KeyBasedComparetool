@@ -115,7 +115,7 @@ async function goView(name){
   if(name==='overridesPanel'){renderOverrideColumns();renderOverrides();renderValueRules();}
   if(name==='historyPanel')await loadHistory();
   if(name==='runningPanel'){await refresh();await loadDiagnostics();}
-  if(name==='results'){renderSummary();renderExports();await preview();}
+  if(name==='results'){renderSummary();renderExports();}
 }
 for(const [view,nav] of Object.entries(views))$(nav).addEventListener('click',()=>goView(view).catch(showError));
 function choose(side, file) {
@@ -262,6 +262,7 @@ async function startComparison(){
 $('compare').addEventListener('click',startComparison);
 function renderSummary() {
   const s=job.summary;
+  renderResultChart(s);
   const changes=Object.entries(s.changed_cells_by_column).filter(([,count])=>count>0).sort((a,b)=>b[1]-a[1]);
   $('resultTitle').textContent=s.changed_rows||s.left_only||s.right_only?'Your comparison is ready.':'Both files match within the selected scope.';
   $('resultSubtitle').textContent=`${number(s.left_rows)} left rows · ${number(s.right_rows)} right rows · Keys: ${s.keys.join(', ')}`;
@@ -285,16 +286,15 @@ function renderSummary() {
   if(!changes.length)$('columnSummary').textContent='No changed values for matching keys.';
   for(const [id,file] of [['csvDownload','differences.csv'],['leftDownload','left_only.csv'],['rightDownload','right_only.csv'],['summaryDownload','summary.html']]) $(id).href=downloadUrl(file);
 }
-async function preview() {
-  const result=await api(endpoint('/preview')+'?category='+$('previewCategory').value);
-  const table=$('previewTable');table.replaceChildren();
-  const head=document.createElement('thead');const hr=document.createElement('tr');
-  for(const name of result.headers){const th=document.createElement('th');th.textContent=name;hr.append(th);}head.append(hr);table.append(head);
-  const body=document.createElement('tbody');
-  for(const values of result.rows){const tr=document.createElement('tr');for(const value of values){const td=document.createElement('td');td.textContent=value;tr.append(td);}body.append(tr);}
-  if(!result.rows.length){const tr=document.createElement('tr');const td=document.createElement('td');td.colSpan=result.headers.length;td.textContent='No records in this category.';tr.append(td);body.append(tr);}table.append(body);
+function renderResultChart(s){
+  const rows=[['Matching keys',s.equal_rows||0,'#009bbd'],['Mismatching keys',s.changed_rows||0,'#d87520'],['Left-only keys',s.left_only||0,'#7857a5'],['Right-only keys',s.right_only||0,'#bd4567']];
+  const total=rows.reduce((n,r)=>n+r[1],0);let offset=0;
+  const slices=rows.filter(r=>r[1]>0).map(([label,value,color])=>{const size=value/total*100;const segment=`<circle cx="80" cy="80" r="62" pathLength="100" fill="none" stroke="${color}" stroke-width="22" stroke-dasharray="${size} ${100-size}" stroke-dashoffset="${-offset}" transform="rotate(-90 80 80)"><title>${label}: ${number(value)} (${(size).toFixed(2)}%)</title></circle>`;offset+=size;return segment;});
+  $('resultKeyTotal').textContent=number(total)+' unique keys';
+  $('resultDonut').innerHTML=`<svg viewBox="0 0 160 160" role="img" aria-label="${rows.map(([label,value])=>label+': '+number(value)).join(', ')}"><circle cx="80" cy="80" r="62" fill="none" stroke="#e5edf0" stroke-width="22"/>${slices.join('')}<text x="80" y="77" text-anchor="middle" class="result-chart-number">${total?((s.equal_rows||0)/total*100).toFixed(1)+'%':'—'}</text><text x="80" y="96" text-anchor="middle" class="result-chart-caption">keys matched</text></svg>`;
+  $('resultChartLegend').innerHTML=rows.map(([label,value,color])=>`<div><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="${color}"/></svg><span>${label}</span><strong>${number(value)}</strong></div>`).join('')+`<p><strong>${number(s.changed_cells||0)}</strong> mismatched cells · <strong>${Object.values(s.changed_cells_by_column).filter(n=>n>0).length}</strong> columns with differences</p>`;
+  if(!matchMedia('(prefers-reduced-motion: reduce)').matches)$('resultDonut').animate([{opacity:0,transform:'scale(.88) rotate(-18deg)'},{opacity:1,transform:'scale(1) rotate(0)'}],{duration:700,easing:'cubic-bezier(.22,1,.36,1)'});
 }
-$('previewCategory').addEventListener('change',()=>preview().catch(showError));
 const pendingExports=new Set();
 function renderExports() {
   for(const kind of ['excel','html']) {
@@ -426,7 +426,7 @@ async function refresh() {
     if(currentView==='runningPanel'&&['running','queued'].includes(previousState))await renderPipeline();
     if(currentView==='results'){
       renderExports();
-      if(renderedId!==job.id){renderSummary();await preview();renderedId=job.id;}
+      if(renderedId!==job.id){renderSummary();renderedId=job.id;}
     } else if(currentView==='runningPanel')await renderPipeline();
     if(Object.values(job.exports).some(value=>['queued','running'].includes(value.state)))pollTimer=setTimeout(()=>refresh().catch(pollError),1500);
   } else if(['error','cancelled'].includes(job.state)){
@@ -1110,7 +1110,7 @@ async function transitionToResults(){
     // Once the setup labels have folded away, use the same icons as the review rail.
     flights.forEach(({number},index)=>{const icon=buttons[index].querySelector('.step-rail-icon');if(icon){number.replaceChildren(icon.cloneNode(true));number.classList.add('flight-icon');}});
     // Keep the circles in place while Results establishes the destination geometry.
-    panel('results');renderSummary();renderExports();$('previewTable').replaceChildren();preview().catch(showError);
+    panel('results');renderSummary();renderExports();
     if(job?.id!==identity)return;
     if(!interrupted){
       await Promise.all(flights.map(({flight,rect,circleX},index)=>{
