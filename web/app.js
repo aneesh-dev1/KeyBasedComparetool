@@ -1250,6 +1250,14 @@ function updateEnterpriseShell(name){
     const animation=target.animate([{opacity:.4,transform:'translateY(8px)'},{opacity:1,transform:'translateY(0)'}],{duration:240,easing:'cubic-bezier(.22,1,.36,1)'});animation.id='workspace-enter';
   }
 }
+function applicationShortcut(event){
+  if(!event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.repeat||event.isComposing||event.getModifierState?.('AltGraph'))return null;
+  if(event.target?.closest?.('input,textarea,select,[contenteditable="true"],[role="textbox"]'))return null;
+  // Option produces symbols on macOS; physical codes keep these shortcuts usable.
+  const codes={KeyB:'b',KeyF:'f',KeyR:'r',Slash:'/',Digit1:'1',Digit2:'2',Digit3:'3',Digit4:'4',Digit5:'5'};
+  const logical=String(event.key||'').toLowerCase();
+  return ['b','f','r','/','1','2','3','4','5'].includes(logical)?logical:codes[event.code]||null;
+}
 function initEnterpriseShell(){
   // The controller unit harness has no layout DOM. Browser checks cover this shell.
   if(typeof document.createDocumentFragment!=='function')return;
@@ -1345,6 +1353,12 @@ function initEnterpriseShell(){
   $('analysisSearch').addEventListener('click',()=>{if($('analysisKeyFields').querySelector('input')?.value)filterDisclosure.open=false;});
 
   document.body.insertAdjacentHTML('beforeend','<dialog id="shortcutsDialog" class="shortcuts-dialog" aria-labelledby="shortcutsTitle"><div class="drawer-heading"><h2 id="shortcutsTitle">Keyboard shortcuts</h2><button id="closeShortcuts" class="subtle" aria-label="Close keyboard shortcuts">Close</button></div><dl><dt>Move between controls</dt><dd>Tab / Shift + Tab</dd><dt>Activate selected control</dt><dd>Enter / Space</dd><dt>Toggle sidebar</dt><dd>Alt + B</dd><dt>Comparison steps</dt><dd>Alt + 1–5</dd><dt>Search current page</dt><dd>Alt + F</dd><dt>Recompare completed job</dt><dd>Alt + R</dd><dt>Open shortcut guide</dt><dd>Alt + /</dd><dt>Move within tabs / stages</dt><dd>Arrow keys · Home / End</dd><dt>Close drawer or menu</dt><dd>Escape</dd></dl><p>Shortcuts never start, cancel, delete or export a job. Activate those actions explicitly.</p></dialog>');
+  const macPlatform=/Mac|iPhone|iPad/.test(navigator.userAgentData?.platform||navigator.platform||'');
+  const modifier=macPlatform?'⌥ Option':'Alt';
+  $('keyboardHelp').querySelector('kbd').textContent=modifier+' /';
+  for(const item of $('shortcutsDialog').querySelectorAll('dd'))item.textContent=item.textContent.replace(/Alt/g,modifier);
+  const platformNote=document.createElement('p');platformNote.textContent='Windows: Alt · Mac: ⌥ Option. App shortcuts are inactive while typing. Tab, Shift + Tab, Enter, Space and Escape work on both platforms.';$('shortcutsDialog').append(platformNote);
+  for(const [id,key] of [['sidebarToggle','B'],['recompareFab','R'],['navFiles','1'],['navHeaders','2'],['navScope','3'],['navPipeline','4'],['navResults','5']])$(id)?.setAttribute('aria-keyshortcuts','Alt+'+key);
   let helpReturn;
   $('keyboardHelp').addEventListener('click',()=>{helpReturn=document.activeElement;$('shortcutsDialog').showModal();});$('closeShortcuts').addEventListener('click',()=>$('shortcutsDialog').close());$('shortcutsDialog').addEventListener('close',()=>helpReturn?.focus());
   const visible=el=>el&&!el.disabled&&!el.closest('[hidden],[inert],.enterprise-inactive')&&el.getClientRects().length>0;
@@ -1354,8 +1368,9 @@ function initEnterpriseShell(){
     if(group&&event.target.tagName==='BUTTON'&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key)){
       const controls=[...group.querySelectorAll('button')].filter(visible),index=controls.indexOf(event.target);if(!controls.length)return;event.preventDefault();const delta=['ArrowLeft','ArrowUp'].includes(event.key)?-1:1;controls[event.key==='Home'?0:event.key==='End'?controls.length-1:(index+delta+controls.length)%controls.length].focus();return;
     }
-    if(!event.altKey||event.ctrlKey||event.metaKey||localStorage.getItem('compare-shortcuts')==='off'||document.querySelector('dialog[open]')||resultsTransitionRunning)return;
-    const key=event.key.toLowerCase();let control;
+    const key=applicationShortcut(event);
+    if(!key||localStorage.getItem('compare-shortcuts')==='off'||document.querySelector('dialog[open]')||resultsTransitionRunning)return;
+    let control;
     if(key==='b')control=$('sidebarToggle');
     if(key==='/')control=$('keyboardHelp');
     if(key==='r')control=$('recompareFab');

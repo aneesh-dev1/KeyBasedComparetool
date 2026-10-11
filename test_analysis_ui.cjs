@@ -96,3 +96,13 @@ assert.equal(vm.runInContext(`mergeColumnRules([{column:'a',tolerance:'0'}],['a'
 assert.equal(vm.runInContext("detectedFileType({name:'sample.JSON'})",context),'JSON');
 assert.equal(vm.runInContext("detectedFileType({name:'sample.xlsx'})",context),'Excel');
 assert.equal(vm.runInContext("detectedFileType({name:'sample.csv'})",context),'CSV');
+
+const shortcut=(key,code,extra={})=>context.applicationShortcut({key,code,altKey:true,target:{closest:()=>null},...extra});
+assert.equal(shortcut('b','KeyB'),'b');
+assert.equal(shortcut('∫','KeyB'),'b','Mac Option+B');
+assert.equal(shortcut('ƒ','KeyF'),'f','Mac Option+F');
+assert.equal(shortcut('®','KeyR'),'r','Mac Option+R');
+assert.equal(shortcut('¡','Digit1'),'1','Mac Option+1');
+assert.equal(shortcut('÷','Slash'),'/','Mac Option+/');
+for(const extra of [{ctrlKey:true},{metaKey:true},{shiftKey:true},{repeat:true},{isComposing:true},{getModifierState:()=>true},{target:{closest:()=>({})}}])assert.equal(shortcut('b','KeyB',extra),null);
+console.log('Windows Alt and macOS Option shortcut mapping and typing guards passed.');
