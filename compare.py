@@ -504,6 +504,8 @@ def _compare(args):
             writers = {}
             for name, fields in [('differences', ['key_json', 'column', 'left_value', 'right_value']),
                                  ('left_only', args.keys), ('right_only', args.keys),
+                                 ('matched_keys', ['key_json']),
+                                 ('raw_differences', ['key_json','column','left_value','right_value','left_null','right_null']),
                                  ('duplicate_keys', ['side', 'key_json', 'occurrences', 'skipped_rows', 'kept_occurrence'])]:
                 stream = stack.enter_context(open(out / f'{name}.csv', 'w', encoding='utf-8', newline=''))
                 writers[name] = csv.writer(stream)
@@ -531,12 +533,14 @@ def _compare(args):
                     b = next(right, None)
                 else:
                     stats['matched_keys'] += 1
+                    writers['matched_keys'].writerow([a[0].decode('utf-8')])
                     if a[1] == b[1]:
                         stats['equal_rows'] += 1
                     else:
                         changed = False
                         for name, av, bv in zip(canonical, unpack_values(a[1]), unpack_values(b[1])):
                             if av != bv:
+                                writers['raw_differences'].writerow([a[0].decode('utf-8'),name,av,bv,int(av is None),int(bv is None)])
                                 if (av, bv) in override_lookup.get(name, ()):
                                     stats['override_equivalent_cells'] += 1
                                     continue

@@ -88,7 +88,7 @@ class Application:
     def mark_cancelled(self,identity,kind):
         job=self.load(identity)
         if kind=='comparison' and job['state']=='complete':return
-        if kind in ('excel','html'):
+        if kind in ('excel','html','ai'):
             job['exports'][kind]=dict(state='cancelled',updated=time.time(),message='Export cancelled. Generate it again when ready.')
         elif kind=='analysis':job['analysis']=dict(state='cancelled',updated=time.time(),message='Analysis cancelled. Use Retry to prepare it again.')
         else:job.update(state='cancelled',error='Cancelled by user. Resume saved sort batches when ready.' if (self.directory(identity)/'checkpoints/identity.json').exists() else 'Cancelled by user. Start a new comparison.',finished=time.time())
@@ -255,7 +255,27 @@ class Application:
         except Exception as error:
             self.patch(identity, state='error', error=str(error))
 
+    def run_review(self,identity):
+        from review_revision import revise
+        directory=self.directory(identity)
+        self.patch(identity,state='running',started=time.time())
+        job=self.load(identity)
+        def notify(message):
+            check_cancel(directory/'cancel-comparison')
+            atomic_write_text(directory/'progress.json',json.dumps(dict(stage='compare',phase=message)))
+            with (directory/'run.log').open('a') as log:log.write(f'{time.strftime("%H:%M:%S")}  {message}\n')
+        try:
+            notify('Applying rules to retained evidence; no source reads or sorting')
+            summary=revise(directory/'baseline',directory/'report',job,job['columns'],notify)
+            (directory/'report/summary.html').write_text(make_summary_html(summary),encoding='utf-8')
+            self.patch(identity,summary=summary)
+            for kind in ('html','excel'):self.run_export(identity,kind,pipeline=True)
+            check_cancel(directory/'cancel-comparison')
+            self.patch(identity,state='complete',finished=time.time())
+        except Exception as error:self.patch(identity,state='error',error=str(error),finished=time.time())
+
     def run_comparison(self, identity):
+        if self.load(identity).get('execution_mode')=='review':return self.run_review(identity)
         self.patch(identity, state='running', started=time.time())
         job = self.load(identity)
         directory = self.directory(identity)
@@ -302,6 +322,27 @@ class Application:
             temporary.unlink(missing_ok=True)
             self.patch(identity,analysis=dict(state='error',message=str(error),updated=time.time()))
 
+    def supporting_values(self,identity,sample_keys,columns,notify):
+        from compare import input_rows,encode
+        from types import SimpleNamespace
+        job=self.load(identity)
+        wanted={encode(json.loads(k)):k for k in sample_keys}
+        fields=job['keys']+columns;width=len(job['keys'])
+        args=SimpleNamespace(encoding=job['encoding'],delimiter=job['delimiter'],memory_mb=64,read_batch_size=10000)
+        for side in ('left','right'):
+            names=job['column_headers'][side];indices=[names.index(c) for c in fields]
+            path=self.comparison_path(job,side);found={}
+            with input_rows(path,args,indices=indices) as (_,rows):
+                for i,row in enumerate(rows,1):
+                    if i%10000==0:notify(f'Reading {side} supporting fields: {i:,} rows')
+                    values=row if path.suffix=='.parquet' else [row[index] for index in indices]
+                    key=encode(values[:width])
+                    if key in wanted and (key not in found or job.get('duplicate_policy')=='last'):
+                        found[key]=[(v[:300] if v is not None else '',int(v is None),len(v) if v is not None else 0) for v in values[width:]]
+                    if len(found)==len(wanted) and job.get('duplicate_policy','first')=='first':break
+            for key,values in found.items():
+                for column,(value,null,length) in zip(columns,values):yield [side,wanted[key],column,value,null,length]
+
     def run_export(self, identity, kind, pipeline=False):
         def status(state, **values):
             with self.lock:
@@ -309,7 +350,7 @@ class Application:
                 job['exports'][kind] = dict(state=state, updated=time.time(), **values)
                 self.save(job)
         directory = self.directory(identity)
-        target = directory / ('mismatches.xlsx' if kind == 'excel' else 'comparison-report.html')
+        target = directory / ('ai-analysis.zip' if kind=='ai' else 'mismatches.xlsx' if kind == 'excel' else 'comparison-report.html')
         temporary = target.with_suffix(target.suffix + '.part')
         last_update = [0.0]
         def notify(message):
@@ -324,7 +365,11 @@ class Application:
         status('running', message='Preparing report')
         try:
             notify('Preparing report')
-            (export_excel if kind == 'excel' else export_html)(directory / 'report', temporary, notify)
+            if kind=='ai':
+                from ai_package import export_package
+                options=self.load(identity).get('ai_options',{})
+                export_package(directory/'report',temporary,notify,supporting_reader=lambda keys,columns:self.supporting_values(identity,keys,columns,notify),**options)
+            else:(export_excel if kind == 'excel' else export_html)(directory / 'report', temporary, notify)
             if pipeline:check_cancel(directory/'cancel-comparison')
             replace_retry(temporary, target)
             if pipeline:
@@ -585,7 +630,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({'error': 'Comparison not found in this browser workspace'}, 404)
             self.authorized_job = identity
             directory = self.app.directory(identity)
-            if action == 'review-copy' and self.command == 'POST':
+            if action in ('review-plan','review-copy') and self.command == 'POST':
                 config=self.body()
                 with self.app.lock:
                     job=self.app.load(identity)
@@ -596,6 +641,18 @@ class Handler(BaseHTTPRequestHandler):
                     ignored,_=validate_scope(keys,job['columns'],draft.get('ignore_columns') or [],draft.get('ignore_keys') or '')
                     draft['comparison_rules']=validate_rules(draft.get('comparison_rules') or [],job['columns'],keys,ignored)
                     rules,_=validate_overrides(config.get('value_overrides',job.get('value_overrides',[])),job['columns'],keys,ignored)
+                    draft['value_overrides']=rules
+                    ids=draft.get('ignore_container_ids') or []
+                    library=self.container_path()
+                    available={c['id']:c for c in json.loads(library.read_text())} if library.exists() else {}
+                    if not isinstance(ids,list) or any(i not in available for i in ids):raise ValueError('An ignore container no longer exists')
+                    draft['ignore_key_containers']=[available[i] for i in dict.fromkeys(ids)]
+                    if draft.get('duplicate_policy') not in ('first','last'):raise ValueError('Choose first or last duplicate occurrence')
+                    from review_revision import plan
+                    baseline=directory/'baseline' if (directory/'baseline').exists() else directory/'report'
+                    decision=plan(job,baseline,draft)
+                    if action=='review-plan':return self.json_response(decision)
+                    if config.get('execution_mode') and config['execution_mode']!=decision['mode']:raise ValueError('Review settings changed. Check the execution plan again.')
                     new_id=uuid.uuid4().hex
                     target=self.app.directory(new_id)
                     target.mkdir()
@@ -608,6 +665,12 @@ class Handler(BaseHTTPRequestHandler):
                         copy={k:job[k] for k in fields if k in job}
                         draft['value_overrides']=rules
                         copy.update(id=new_id,state='ready',created=time.time(),exports={},headers_reviewed=True,draft=draft,review_of=identity)
+                        copy['execution_mode']=decision['mode']
+                        if decision['mode']=='review':
+                            retained=target/'baseline';retained.mkdir()
+                            for name in ('summary.json','differences.csv','raw_differences.csv','matched_keys.csv','left_only.csv','right_only.csv','duplicate_keys.csv'):
+                                if (baseline/name).exists():os.link(baseline/name,retained/name)
+                            if (directory/'report/annotations.json').exists():shutil.copy2(directory/'report/annotations.json',retained/'annotations.json')
                         self.app.save(copy)
                         ProjectStore(project_database(self.app.root,self.workspace)).inherit(identity,new_id)
                     except Exception:
@@ -646,6 +709,21 @@ class Handler(BaseHTTPRequestHandler):
                     job.update(column_headers=layout,columns=common,draft=draft,headers_reviewed=True,header_layout_changes=changes)
                     self.app.save(job)
                 return self.json_response(job)
+            if action=='ai-findings' and self.command in ('GET','POST'):
+                if job['state']!='complete':raise ValueError('Complete the comparison first')
+                target=directory/'report/ai-findings.json'
+                if self.command=='POST':
+                    data=self.body(4*1024*1024);findings=data.get('findings')
+                    if not isinstance(findings,list) or len(findings)>2000:raise ValueError('Import a JSON array of up to 2,000 findings')
+                    cleaned=[]
+                    for f in findings:
+                        if not isinstance(f,dict) or f.get('column') not in job['summary']['changed_cells_by_column']:raise ValueError('Each finding must name a compared column')
+                        row={k:f.get(k,'') for k in ('column','pattern','reason','evidence','confidence','recommended_action')}
+                        if any(not isinstance(v,str) or len(v)>2000 for v in row.values()) or not row['reason']:raise ValueError('Findings need a reason and text fields of at most 2,000 characters')
+                        if row['confidence'] not in ('low','medium','high',''):raise ValueError('Confidence must be low, medium or high')
+                        row['review_status']='AI suggestion — unreviewed';cleaned.append(row)
+                    atomic_write_text(target,json.dumps(cleaned,ensure_ascii=False))
+                return self.json_response(dict(findings=json.loads(target.read_text()) if target.exists() else []))
             if action == 'annotations' and self.command in ('GET','POST'):
                 if job['state']!='complete':raise ValueError('Complete a comparison before adding analysis notes')
                 target=directory/'report/annotations.json'
@@ -870,17 +948,30 @@ class Handler(BaseHTTPRequestHandler):
                     job.update(**execution_settings(config),comparison_rules=rules,state='queued', keys=keys, memory_mb=memory, sort_workers=sort_workers,
                                ignore_columns=ignored_columns, ignore_keys=config.get('ignore_keys', ''), value_overrides=overrides,
                                ignore_container_ids=ids, ignore_key_containers=containers)
+                    if job.get('execution_mode')=='review':
+                        from review_revision import plan
+                        decision=plan(job,directory/'baseline',job)
+                        if decision['mode']!='review':raise ValueError('A full comparison is required: '+decision['reason'])
                     self.app.save(job)
                     with (directory / 'run.log').open('a') as log:
                         log.write(f'{time.strftime("%H:%M:%S")}  Comparison queued\n')
                     self.app.submit(identity,'comparison',self.app.run_comparison)
                 return self.json_response(job, 202)
-            if self.command == 'POST' and action in ('export/excel', 'export/html'):
+            if self.command == 'POST' and action in ('export/excel', 'export/html','export/ai'):
                 kind = action.split('/')[1]
+                options=self.body() if kind=='ai' else {}
                 with self.app.lock:
                     job = self.app.load(identity)
                     if job['state'] != 'complete':
                         raise ValueError('Wait for comparison to complete')
+                    if kind=='ai':
+                        options={k:options.get(k,v) for k,v in [('token_budget',32000),('examples',3),('supporting_columns',[])]}
+                        if not isinstance(options['supporting_columns'],list) or len(options['supporting_columns'])>5 or len(set(options['supporting_columns']))!=len(options['supporting_columns']) or any(c not in job['columns'] or c in job['keys'] for c in options['supporting_columns']):raise ValueError('Choose up to five distinct supporting value columns')
+                        if options['token_budget'] not in (8000,32000,128000) or options['examples'] not in (1,3,5):raise ValueError('Invalid AI package options')
+                        if options!=job.get('ai_options'):
+                            if job['exports'].get(kind,{}).get('state') in ('queued','running'):raise ValueError('Wait for the current AI package to finish')
+                            job['exports'].pop(kind,None)
+                        job['ai_options']=options
                     if job['exports'].get(kind, {}).get('state') not in ('queued', 'running', 'complete'):
                         job['exports'][kind] = {'state': 'queued'}
                         self.app.save(job)
@@ -938,7 +1029,7 @@ class Handler(BaseHTTPRequestHandler):
                 name = action.split('/')[1]
                 if job['state'] != 'complete' and name != 'run.log':
                     raise ValueError('Results are not ready')
-                kind = {'mismatches.xlsx': 'excel', 'comparison-report.html': 'html'}.get(name)
+                kind = {'mismatches.xlsx': 'excel', 'comparison-report.html': 'html','ai-analysis.zip':'ai'}.get(name)
                 if name == 'run.log' and (directory / name).exists():
                     target = directory / name
                 elif kind and job['exports'].get(kind, {}).get('state') == 'complete':

@@ -270,6 +270,7 @@ function renderSummary() {
   const duplicates=(s.left_duplicate_rows_skipped||0)+(s.right_duplicate_rows_skipped||0);
   $('duplicateDownload').hidden=!duplicates;$('duplicateDownload').href=downloadUrl('duplicate_keys.csv');
   if(duplicates){$('resultTitle').textContent='Comparison complete — duplicate keys found';$('scopeSummary').textContent+=` Warning: ${number(s.left_duplicate_rows_skipped||0)} file 1 rows and ${number(s.right_duplicate_rows_skipped||0)} file 2 rows skipped as duplicates. Kept the ${s.duplicate_policy||'first'} source occurrence per key. Download the duplicate audit for details.`;}
+  if(s.review_revision){const r=s.review_revision;$('scopeSummary').textContent+=` Review revision: ${number(r.original_mismatches)} original mismatches · ${number(r.accepted_by_rules)} accepted · ${number(r.excluded_from_scope)} excluded · ${number(r.remaining_mismatches)} remaining.`;}
   $('duration').textContent=`${s.elapsed_seconds.toFixed(s.elapsed_seconds<1?3:1)} seconds`;
   $('metrics').replaceChildren();
   for(const [label,value,style] of [['Equal rows',s.equal_rows,'accent'],['Changed rows',s.changed_rows,'amber'],['Changed cells',s.changed_cells,'amber'],['Left-only keys',s.left_only,''],['Right-only keys',s.right_only,'']]) {
@@ -519,7 +520,7 @@ $('sourceNext').addEventListener('click',()=>{if(sourceColumnOffset+20<job.colum
 async function renderPipeline(){
   if($('viewResults'))$('viewResults').hidden=job.state!=='complete';
   $('resumeComparison').hidden=!job.can_resume;
-  const stages=[['validate','Validate configuration'],...(job.sort_workers===2?[['sort','Read & sort both files']]:[['left','Read & sort file 1'],['right','Read & sort file 2']]),['compare','Compare matching keys'],['reports','Write results & reports'],['complete','Complete']];
+  const stages=job.execution_mode==='review'?[['compare','Apply rules to retained results'],['reports','Write results & reports'],['complete','Complete']]:[['validate','Validate configuration'],...(job.sort_workers===2?[['sort','Read & sort both files']]:[['left','Read & sort file 1'],['right','Read & sort file 2']]),['compare','Compare matching keys'],['reports','Write results & reports'],['complete','Complete']];
   const stage=job.state==='complete'?'complete':job.progress?.stage||'validate';const index=stages.findIndex(([id])=>id===stage);
   $('phase').textContent=job.state==='complete'?'Comparison complete':job.state==='error'?'Comparison failed':job.state==='queued'?'Queued':job.progress?.phase||'Starting worker';
   $('processed').textContent=job.state==='error'?job.error:job.progress?.rows!==undefined?`${number(job.progress.rows)} rows processed in the current phase`:job.state==='queued'?'Waiting for a server worker. Your files and results are kept in your own job.':'Stages update as the worker processes the files.';
@@ -923,6 +924,7 @@ async function openAnalysis(){
   commentSelection='';columnChoicesPage=0;await loadNotes();await loadAnalysis();
 }
 async function loadAnalysis(){
+  if(typeof renderAiFindings==='function')renderAiFindings().catch(showError);
   clearTimeout(analysisTimer);const generation=++analysisGeneration,id=job.id;
   analysisContext();
   const column=$('analysisColumn').value,keyText=$('analysisKey').value,mode=$('analysisMode').value;
@@ -1158,6 +1160,11 @@ function renderRerunRows(kind){
   });
   if(!rules.length)target.textContent='No rules added.';
 }
+let reviewPlanTimer,reviewPlanRequest=0,reviewPlanMode=null;
+function scheduleReviewPlan(){clearTimeout(reviewPlanTimer);reviewPlanMode=null;$('startRerun').textContent='Check changes →';reviewPlanTimer=setTimeout(updateReviewPlan,250);}
+async function updateReviewPlan(){
+  const seq=++reviewPlanRequest;try{const decision=await api(endpoint('/review-plan'),structuredClone(rerunDraft));if(seq!==reviewPlanRequest||!$('rerunDialog').open)return;reviewPlanMode=decision.mode;$('reviewPlan').textContent=decision.reason;$('startRerun').textContent=decision.mode==='review'?'Apply rules →':'Run new comparison →';}catch(e){if(seq===reviewPlanRequest){reviewPlanMode=null;$('reviewPlan').textContent=e.message;}}
+}
 function openRecomparison(){
   if(job?.state!=='complete')return;
   rerunDraft=structuredClone({keys:job.keys,ignore_columns:job.ignore_columns||[],ignore_keys:job.ignore_keys||'',ignore_container_ids:job.ignore_container_ids||[],duplicate_policy:job.duplicate_policy||'first',value_overrides:job.value_overrides||[],comparison_rules:job.comparison_rules||[]});
@@ -1168,7 +1175,7 @@ function openRecomparison(){
   const manual=rerunField('Ignored keys (comma separated; JSON tuples for composite keys)',rerunDraft.ignore_keys);manual.input.addEventListener('input',()=>rerunDraft.ignore_keys=manual.input.value);scope.append(manual.wrap);
   const policy=document.createElement('label'),select=document.createElement('select');policy.textContent='Duplicate keys';select.append(new Option('Keep first row','first'),new Option('Keep last row','last'));select.value=rerunDraft.duplicate_policy;select.addEventListener('change',()=>rerunDraft.duplicate_policy=select.value);policy.append(select);scope.append(policy);
   for(const container of keyContainers){const f=rerunField(container.name,rerunDraft.ignore_container_ids.includes(container.id),'checkbox');f.input.addEventListener('change',()=>{rerunDraft.ignore_container_ids=rerunDraft.ignore_container_ids.filter(id=>id!==container.id);if(f.input.checked)rerunDraft.ignore_container_ids.push(container.id);});scope.append(f.wrap);}
-  renderRerunRows('overrides');renderRerunRows('rules');showRerunTab('scope');$('rerunError').textContent='';$('rerunDialog').showModal();
+  renderRerunRows('overrides');renderRerunRows('rules');showRerunTab('scope');$('rerunError').textContent='';$('rerunDialog').showModal();updateReviewPlan();
 }
 function initReviewWorkspace(){
   if(typeof document.createElement('dialog').showModal!=='function')return;
@@ -1178,7 +1185,7 @@ function initReviewWorkspace(){
   $('runningPanel').insertAdjacentHTML('afterbegin','<button id="viewResults" class="primary heartbeat-results" hidden>View results →</button>');
   document.body.insertAdjacentHTML('beforeend',`<button id="recompareFab" class="recompare-fab" hidden aria-haspopup="dialog" title="Recompare with updated settings"><span aria-hidden="true">↻</span> Recompare</button>
   <dialog id="analysisDrawer" class="analysis-drawer" aria-label="Mismatch analysis"><div class="drawer-heading"><h2>Analyze mismatches</h2><button id="closeAnalysisDrawer" class="subtle" aria-label="Close analysis">✕</button></div></dialog>
-  <dialog id="rerunDialog" class="rerun-dialog" aria-labelledby="rerunTitle"><div class="drawer-heading"><div><h2 id="rerunTitle">Recompare</h2><p>New run · same files · original results preserved</p></div><button id="closeRerun" class="subtle" aria-label="Close recomparison">✕</button></div><div class="rerun-tabs" role="tablist" aria-label="Recomparison settings"><button id="rerun-tab-scope" role="tab" aria-controls="rerun-scope">Keys & scope</button><button id="rerun-tab-overrides" role="tab" aria-controls="rerun-overrides">Value overrides</button><button id="rerun-tab-rules" role="tab" aria-controls="rerun-rules">Comparison rules</button></div><div class="rerun-body"><section id="rerun-scope" role="tabpanel" aria-labelledby="rerun-tab-scope"></section><section id="rerun-overrides" role="tabpanel" aria-labelledby="rerun-tab-overrides" hidden><div id="rerun-overrides-list"></div><button id="addRerunOverride" class="subtle">Add override</button></section><section id="rerun-rules" role="tabpanel" aria-labelledby="rerun-tab-rules" hidden><div id="rerun-rules-list"></div><button id="addRerunRule" class="subtle">Add column rule</button></section></div><p id="rerunError" role="alert"></p><div class="rerun-footer"><button id="startRerun" class="primary">Start recomparison →</button></div></dialog>`);
+  <dialog id="rerunDialog" class="rerun-dialog" aria-labelledby="rerunTitle"><div class="drawer-heading"><div><h2 id="rerunTitle">Recompare</h2><p>Apply rules to retained evidence · original results preserved</p></div><button id="closeRerun" class="subtle" aria-label="Close recomparison">✕</button></div><div class="rerun-tabs" role="tablist" aria-label="Recomparison settings"><button id="rerun-tab-scope" role="tab" aria-controls="rerun-scope">Keys & scope</button><button id="rerun-tab-overrides" role="tab" aria-controls="rerun-overrides">Value overrides</button><button id="rerun-tab-rules" role="tab" aria-controls="rerun-rules">Comparison rules</button></div><div class="rerun-body"><section id="rerun-scope" role="tabpanel" aria-labelledby="rerun-tab-scope"></section><section id="rerun-overrides" role="tabpanel" aria-labelledby="rerun-tab-overrides" hidden><div id="rerun-overrides-list"></div><button id="addRerunOverride" class="subtle">Add override</button></section><section id="rerun-rules" role="tabpanel" aria-labelledby="rerun-tab-rules" hidden><div id="rerun-rules-list"></div><button id="addRerunRule" class="subtle">Add column rule</button></section></div><p id="rerunError" role="alert"></p><p id="reviewPlan" role="status"></p><div class="rerun-footer"><button id="startRerun" class="primary">Check changes →</button></div></dialog>`);
   $('analysisDrawer').append($('analysisPanel'));
   $('openAnalysis').hidden=true;
   $('results').querySelector('.csv-links').hidden=true;
@@ -1214,16 +1221,20 @@ function initReviewWorkspace(){
     $('rerun-tab-'+name).addEventListener('keydown',event=>{const names=['scope','overrides','rules'];if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const index=event.key==='Home'?0:event.key==='End'?2:(names.indexOf(name)+(event.key==='ArrowRight'?1:2))%3;showRerunTab(names[index]);$('rerun-tab-'+names[index]).focus();}});
   }
   for(const kind of ['overrides','rules'])$('addRerun'+(kind==='overrides'?'Override':'Rule')).addEventListener('click',()=>{const column=job.columns.find(c=>!rerunDraft.keys.includes(c)&&!rerunDraft.ignore_columns.includes(c)&&(kind==='overrides'||!rerunDraft.comparison_rules.some(r=>r.column===c)));if(!column){$('rerunError').textContent='No unused value columns available.';return;}if(kind==='overrides')rerunDraft.value_overrides.push({column,left:'',right:''});else rerunDraft.comparison_rules.push({column,trim:true});renderRerunRows(kind);});
+  $('rerunDialog').addEventListener('input',scheduleReviewPlan);$('rerunDialog').addEventListener('change',scheduleReviewPlan);
   $('startRerun').addEventListener('click',async()=>{
     if($('startRerun').disabled)return;
     const config=structuredClone(rerunDraft);
     $('startRerun').disabled=true;$('closeRerun').disabled=true;$('rerunDialog').querySelector('.rerun-body').inert=true;$('startRerun').textContent='Starting…';$('rerunError').textContent='';
     try{
+      const decision=await api(endpoint('/review-plan'),config);
+      if(decision.mode==='full'&&reviewPlanMode!=='full'){reviewPlanMode='full';$('reviewPlan').textContent=decision.reason+' A new comparison is required.';return;}
+      config.execution_mode=decision.mode;
       const copy=await api(endpoint('/review-copy'),config);
       job=copy;localStorage.setItem('keywise-job',job.id);hydratedId=null;headerDraftJob=null;renderedId=null;hydrate();
       job=await api(endpoint('/start'),config);$('rerunDialog').close();viewingHistoryJob=false;panel('runningPanel');await refresh();
     }catch(error){$('rerunError').textContent=error.message;if(job?.state==='ready'){$('rerunDialog').close();panel('keysPanel');renderKeys();renderIgnoredColumns();showError(error);}}
-    finally{$('startRerun').disabled=false;$('closeRerun').disabled=false;$('rerunDialog').querySelector('.rerun-body').inert=false;$('startRerun').textContent='Start recomparison →';}
+    finally{$('startRerun').disabled=false;$('closeRerun').disabled=false;$('rerunDialog').querySelector('.rerun-body').inert=false;$('startRerun').textContent=reviewPlanMode==='full'?'Run new comparison →':'Apply rules →';}
   });
   updateReviewWorkspace(currentView);
 }
@@ -1537,3 +1548,30 @@ function initProjects(){
   $('jsonResult').querySelector('.preview-controls').append(projectButton('Project & audit',()=>openProjectAudit(jsonResult.audit_id)));
 }
 initProjects();
+
+let aiFindingsJob=null,aiFindings=[];
+async function renderAiFindings(){
+  if(!$('aiSuggestions')||!job)return;const identity=job.id;
+  if(aiFindingsJob!==identity){const data=await api(endpoint('/ai-findings'));if(job.id!==identity)return;aiFindings=data.findings;aiFindingsJob=identity;}
+  const column=$('analysisColumn').value,box=$('aiSuggestions');box.replaceChildren();
+  const rows=aiFindings.filter(f=>!column||f.column===column);box.hidden=!rows.length;
+  const title=document.createElement('summary');title.textContent=`AI suggestions · ${rows.length} · Unreviewed`;box.append(title);
+  for(const f of rows.slice(0,50)){const item=document.createElement('article');item.className='ai-finding';const heading=document.createElement('strong');heading.textContent=f.column+' · '+(f.confidence||'unspecified')+' confidence';item.append(heading);for(const [label,value] of [['Reason',f.reason],['Evidence',f.evidence],['Suggested action',f.recommended_action]]){if(value){const p=document.createElement('p');p.textContent=label+': '+value;item.append(p);}}box.append(item);}
+}
+function initAiPackage(){
+  if(typeof document.createDocumentFragment!=='function')return;
+  const button=document.createElement('button');button.className='subtle';button.textContent='AI analysis package';button.id='aiPackageOpen';$('results').querySelector('.download-panel').append(button);
+  document.body.insertAdjacentHTML('beforeend',`<dialog id="aiPackageDialog" class="rerun-dialog" aria-labelledby="aiPackageTitle"><div class="drawer-heading"><h2 id="aiPackageTitle">AI analysis package</h2><button id="aiPackageClose" class="subtle">Close</button></div><div class="ai-package-body"><p>Compact CSV evidence, grouped patterns and scoped reviewer comments. Download locally, then give the ZIP contents to your AI app.</p><div class="ai-detail-heading"><label for="aiBudget">Report detail</label><button type="button" id="aiDetailInfo" class="subtle info-button" aria-label="Explain report detail levels" aria-expanded="false" aria-controls="aiDetailHelp">ⓘ</button></div><div id="aiDetailHelp" class="ai-detail-help" hidden><p><strong>Brief</strong> — Quick triage: up to 1 example per column and mismatch pattern, with essential context and comments.</p><p><strong>Medium</strong> — Balanced investigation: up to 3 examples per column and pattern, with more room for comments and supporting values.</p><p><strong>Detailed</strong> — Deeper investigation: up to 5 examples per column and pattern, with the most room for comments and supporting values.</p><p>All levels retain mismatching-column totals and pattern counts. Samples may be shortened or omitted to keep the package compact; coverage is documented. Detailed is still a sample, not every mismatch.</p></div><select id="aiBudget"><option value="8000">Brief — concise patterns and key examples</option><option value="32000" selected>Medium — balanced evidence and comments</option><option value="128000">Detailed — more examples and supporting context</option></select><label>Supporting columns (optional, up to 5)<select id="aiSupportingColumns" multiple size="3"></select></label><p class="muted">Selecting supporting columns reads the source files for sampled keys and may take longer on large CSVs.</p><p class="muted">Every level includes column and pattern counts. Higher detail levels allow more examples and comments. Any omitted or shortened evidence is noted in the package.</p><button id="aiPackageDownload" class="primary">Create & download package</button><p id="aiPackageStatus" role="status"></p><hr><label>Import AI findings (JSON)<input id="aiFindingsFile" type="file" accept=".json,application/json"></label><p class="muted">Import an array with column, pattern, reason, evidence, confidence and recommended_action. Imported findings remain unreviewed suggestions in column analysis. They never apply rules automatically.</p></div></dialog>`);
+  const suggestions=document.createElement('details');suggestions.id='aiSuggestions';suggestions.hidden=true;$('analysisPanel').append(suggestions);
+  button.addEventListener('click',()=>{$('aiSupportingColumns').replaceChildren();for(const c of job.columns.filter(c=>!job.keys.includes(c)))$('aiSupportingColumns').add(new Option(c,c));$('aiPackageDialog').showModal();});$('aiPackageClose').addEventListener('click',()=>$('aiPackageDialog').close());
+  $('aiPackageDialog').addEventListener('close',()=>button.focus());
+  $('aiDetailInfo').addEventListener('click',()=>{const open=$('aiDetailHelp').hidden;$('aiDetailHelp').hidden=!open;$('aiDetailInfo').setAttribute('aria-expanded',String(open));});
+  $('aiPackageDownload').addEventListener('click',async()=>{
+    const identity=job.id,control=$('aiPackageDownload');control.disabled=true;control.classList.add('export-busy');control.setAttribute('aria-busy','true');
+    try{await api(`/api/jobs/${identity}/export/ai`,{token_budget:Number($('aiBudget').value),examples:({'8000':1,'32000':3,'128000':5})[$('aiBudget').value],supporting_columns:[...$('aiSupportingColumns').selectedOptions].map(o=>o.value)});
+      for(;;){const latest=await api('/api/jobs/'+identity),state=latest.exports.ai;$('aiPackageStatus').textContent=state?.message||'Preparing package…';if(state?.state==='complete'){download('ai-analysis.zip',identity);$('aiPackageStatus').textContent='Downloaded. Sampling limits and comment coverage are listed in context.txt.';break;}if(['error','cancelled','outdated'].includes(state?.state))throw Error(state.error||state.message||'Package stopped');await new Promise(r=>setTimeout(r,1500));}
+    }catch(e){$('aiPackageStatus').textContent=e.message.replace(/budget/gi,'detail level').replace(/larger AI package detail level/gi,'higher report detail level');}finally{control.disabled=false;control.classList.remove('export-busy');control.setAttribute('aria-busy','false');}
+  });
+  $('aiFindingsFile').addEventListener('change',async()=>{const file=$('aiFindingsFile').files[0];if(!file)return;try{if(file.size>4*1024*1024)throw Error('Use a findings file smaller than 4 MiB');const findings=JSON.parse(await file.text());await api(endpoint('/ai-findings'),{findings});aiFindingsJob=null;$('aiPackageStatus').textContent='Imported as unreviewed AI suggestions. Open a column to review them.';}catch(e){$('aiPackageStatus').textContent=e.message;}finally{$('aiFindingsFile').value='';}});
+}
+initAiPackage();

@@ -20,8 +20,9 @@ STYLE = '''body{font:15px system-ui,sans-serif;color:#004364;background:#f7f9fa;
 def summary_rows(summary):
     yield ['Metric', 'Value']
     for key, value in summary.items():
-        if key not in ('changed_cells_by_column', 'ignore_key_containers','analysis_notes'):
+        if key not in ('changed_cells_by_column', 'ignore_key_containers','analysis_notes','review_revision'):
             yield [key.replace('_', ' ').capitalize(), json.dumps(value, ensure_ascii=False) if isinstance(value, list) else value]
+    for key,value in summary.get('review_revision',{}).items():yield ['Review: '+key.replace('_',' '),value]
     yield ['Column', 'Changed cells']
     for name, count in summary['changed_cells_by_column'].items():
         yield [name, count]
@@ -158,6 +159,8 @@ def make_summary_html(summary, samples=None):
     for title,value in [('Matched keys',matched),('Keys only in File 1',summary.get('left_only',0)),('Keys only in File 2',summary.get('right_only',0)),('Source rows · File 1',summary.get('left_rows','N/A')),('Source rows · File 2',summary.get('right_rows','N/A'))]:
         out += '<p>'+title+': <strong>'+esc(f'{value:,}' if isinstance(value,int) else value)+'</strong></p>'
     out += '<p>Key columns: <strong>'+esc(', '.join(summary['keys']))+'</strong></p></section></div>'
+    if summary.get('review_revision'):
+        out += '<section class="callout"><h2>Review revision</h2><p>'+esc(' · '.join(k.replace('_',' ')+': '+str(v) for k,v in summary['review_revision'].items()))+'</p><p>Re-evaluated retained evidence; original comparison preserved.</p></section>'
     if summary.get('left_duplicate_keys') or summary.get('right_duplicate_keys'):
         out += '<section class="callout"><h2>Warning: duplicate keys</h2><p>'+esc(f"Kept the {summary.get('duplicate_policy','first')} source occurrence per key. File 1: {summary.get('left_duplicate_keys',0):,} duplicate keys / {summary.get('left_duplicate_rows_skipped',0):,} skipped rows. File 2: {summary.get('right_duplicate_keys',0):,} duplicate keys / {summary.get('right_duplicate_rows_skipped',0):,} skipped rows.")+'</p><p>Skipped duplicates are outside the match-rate denominator. The detailed duplicate audit remains available in the app and Excel workbook.</p></section>'
     notes={n['column']:n['status']+': '+n['comment'] for n in summary.get('analysis_notes',[]) if n['key'] is None}
