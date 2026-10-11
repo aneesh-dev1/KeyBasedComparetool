@@ -274,6 +274,11 @@ class Application:
             summary['sources'] = [dict(side=side, file=job['files'][side]['name'], sheet=job['files'][side].get('sheet')) for side in ('left', 'right')]
             atomic_write_text(directory / 'report/summary.json',json.dumps(summary, indent=2))
             (directory / 'report/summary.html').write_text(make_summary_html(summary), encoding='utf-8')
+            self.patch(identity, summary=summary)
+            for kind in ('html', 'excel'):
+                check_cancel(directory/'cancel-comparison')
+                self.run_export(identity, kind, pipeline=True)
+            check_cancel(directory/'cancel-comparison')
             with (directory / 'run.log').open('a') as log:
                 log.write(f'{time.strftime("%H:%M:%S")}  Comparison complete | changed cells={summary["changed_cells"]:,}\n')
             self.patch(identity, state='complete', summary=summary, finished=time.time())
@@ -297,7 +302,7 @@ class Application:
             temporary.unlink(missing_ok=True)
             self.patch(identity,analysis=dict(state='error',message=str(error),updated=time.time()))
 
-    def run_export(self, identity, kind):
+    def run_export(self, identity, kind, pipeline=False):
         def status(state, **values):
             with self.lock:
                 job = self.load(identity)
@@ -309,17 +314,26 @@ class Application:
         last_update = [0.0]
         def notify(message):
             check_cancel(directory/('cancel-'+kind))
+            if pipeline:check_cancel(directory/'cancel-comparison')
             if time.monotonic() - last_update[0] > 1:
                 status('running', message=message)
+                if pipeline:
+                    atomic_write_text(directory/'progress.json',json.dumps(dict(stage='reports',phase=f'Writing {kind.upper()} report: {message}')))
+                    with (directory/'run.log').open('a') as log:log.write(f'{time.strftime("%H:%M:%S")}  {kind.upper()} report | {message}\n')
                 last_update[0] = time.monotonic()
         status('running', message='Preparing report')
         try:
+            notify('Preparing report')
             (export_excel if kind == 'excel' else export_html)(directory / 'report', temporary, notify)
+            if pipeline:check_cancel(directory/'cancel-comparison')
             replace_retry(temporary, target)
+            if pipeline:
+                with (directory/'run.log').open('a') as log:log.write(f'{time.strftime("%H:%M:%S")}  {kind.upper()} report complete | {target.stat().st_size:,} bytes\n')
             status('complete', size=target.stat().st_size, report_version=REPORT_VERSION)
         except Exception as error:
             temporary.unlink(missing_ok=True)
             status('error', error=str(error))
+            if pipeline:raise
 
 
 class Handler(BaseHTTPRequestHandler):

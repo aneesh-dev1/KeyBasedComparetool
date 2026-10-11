@@ -28,6 +28,17 @@ class FeatureTests(unittest.TestCase):
         self.client.request(path+'/start',dict(keys=['id'],memory_mb=64,sort_workers=1,**config))
         result=self.client.wait(path,lambda j:j['state'] in ('complete','error','cancelled'))
         self.assertEqual(result['state'],'complete',result);return result
+    def test_reports_ready_when_comparison_completes(self):
+        path=self.upload()
+        job=self.complete(path)
+        for kind,filename in [('html','comparison-report.html'),('excel','mismatches.xlsx')]:
+            self.assertEqual(job['exports'][kind]['state'],'complete')
+            target=self.server.app.directory(job['id'])/filename
+            self.assertGreater(target.stat().st_size,0)
+        log=(self.server.app.directory(job['id'])/'run.log').read_text()
+        self.assertLess(log.index('HTML report complete'),log.rindex('Comparison complete'))
+        self.assertLess(log.index('EXCEL report complete'),log.rindex('Comparison complete'))
+
     def test_profile_storage_and_isolation(self):
         path=self.upload();job=self.client.request(path)
         self.client.request(path+'/headers',dict(column_headers=job['column_headers']))
