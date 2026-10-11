@@ -61,6 +61,23 @@ class ReviewAiTests(FeatureTests):
             rows=list(csv.DictReader(io.StringIO(z.read('supporting.csv').decode())))
         self.assertEqual(len(rows),2);self.assertTrue(all(r['value']=='last' for r in rows))
 
+    def test_ai_column_scope_filters_evidence_and_comments(self):
+        path=self.upload(b'id,v,x,y\n1,a,same,a\n2,same,a,a\n',b'id,v,x,y\n1,b,same,b\n2,same,b,b\n');job=self.complete(path)
+        for column,key,comment in [('v',None,'v note'),('x',None,'x note'),('', ['1'],'key one'),('', ['2'],'key two')]:
+            self.client.request(path+'/annotations',dict(column=column,key=key,comment=comment,status='Needs investigation'))
+        for selected,expected in [(['v'],{'v'}),(['v','x'],{'v','x'}),(None,{'v','x','y'})]:
+            self.client.request(path+'/export/ai',dict(token_budget=8000,examples=1,selected_columns=selected))
+            ready=self.client.wait(path,lambda j:j.get('exports',{}).get('ai',{}).get('state') in ('complete','error'))
+            self.assertEqual(ready['exports']['ai']['state'],'complete',ready)
+            with zipfile.ZipFile(self.server.app.directory(job['id'])/'ai-analysis.zip') as z:
+                patterns=list(csv.DictReader(io.StringIO(z.read('patterns.csv').decode())))
+                comments=list(csv.DictReader(io.StringIO(z.read('comments.csv').decode())))
+            self.assertEqual({r['column'] for r in patterns},expected)
+            if selected==['v']:self.assertEqual({r['comment'] for r in comments},{'v note','key one'})
+        from urllib.error import HTTPError
+        with self.assertRaises(HTTPError):self.client.request(path+'/export/ai',dict(selected_columns=[]))
+        with self.assertRaises(HTTPError):self.client.request(path+'/export/ai',dict(selected_columns=['missing']))
+
     def test_ai_package_and_findings(self):
         path=self.upload(b'id,v\n1,0\n2,0\n3,0\n',b'id,v\n1,0.00\n2,0.00\n3,0.00\n');job=self.complete(path)
         self.client.request(path+'/annotations',dict(column='',key=['1'],comment='Hypothesis, not confirmed',status='Needs investigation'))

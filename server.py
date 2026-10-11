@@ -965,7 +965,9 @@ class Handler(BaseHTTPRequestHandler):
                     if job['state'] != 'complete':
                         raise ValueError('Wait for comparison to complete')
                     if kind=='ai':
-                        options={k:options.get(k,v) for k,v in [('token_budget',32000),('examples',3),('supporting_columns',[])]}
+                        options={k:options.get(k,v) for k,v in [('token_budget',32000),('examples',3),('supporting_columns',[]),('selected_columns',None)]}
+                        chosen=options['selected_columns']
+                        if chosen is not None and (not isinstance(chosen,list) or not chosen or len(chosen)>2000 or any(not isinstance(c,str) or c not in job['summary']['changed_cells_by_column'] for c in chosen) or len(set(chosen))!=len(chosen)):raise ValueError('Select at least one valid compared column')
                         if not isinstance(options['supporting_columns'],list) or len(options['supporting_columns'])>5 or len(set(options['supporting_columns']))!=len(options['supporting_columns']) or any(c not in job['columns'] or c in job['keys'] for c in options['supporting_columns']):raise ValueError('Choose up to five distinct supporting value columns')
                         if options['token_budget'] not in (8000,32000,128000) or options['examples'] not in (1,3,5):raise ValueError('Invalid AI package options')
                         if options!=job.get('ai_options'):
