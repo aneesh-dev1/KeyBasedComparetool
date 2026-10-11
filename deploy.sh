@@ -8,7 +8,11 @@ if [[ -f "$CONFIG_FILE" ]]; then
   # This is your own trusted shell configuration file, not an uploaded file.
   source "$CONFIG_FILE"
 fi
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
+  PYTHON_BIN="${PYTHON_BIN:-$APP_DIR/.venv/bin/python}"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python3}"
+fi
 BIND_HOST="${BIND_HOST:-0.0.0.0}"
 PORT="${PORT:-8765}"
 DATA_DIR="${DATA_DIR:-$APP_DIR/data}"

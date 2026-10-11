@@ -2,6 +2,10 @@
 setlocal
 cd /d "%~dp0"
 set "PYTHONIOENCODING=utf-8"
+if exist "%~dp0.venv\Scripts\python.exe" (
+  "%~dp0.venv\Scripts\python.exe" "%~dp0server.py" --open
+  goto done
+)
 py -3 -c "import sys; sys.exit(sys.version_info < (3, 10) or sys.maxsize <= 2**32)" >nul 2>&1
 if errorlevel 1 goto try_python
 py -3 "%~dp0server.py" --open

@@ -25,6 +25,7 @@ import webbrowser
 from workspace_settings import PERFORMANCE, validate_settings, resolved_rules
 from task_control import check_cancel
 from comparison_rules import validate_rules
+from projects import Store as ProjectStore, database as project_database, job_snapshot
 from analysis import build_index, query_index
 from json_compare import compare_json, discover_arrays
 from excel_input import sheets as excel_sheets, convert as convert_excel
@@ -129,6 +130,7 @@ class Application:
         with self.lock:
             path = self.directory(job['id']) / 'job.json'
             atomic_write_text(path, json.dumps(job))
+            ProjectStore(project_database(self.root,job.get('owner'))).sync(job_snapshot(job))
 
     def patch(self, identity, **values):
         with self.lock:
@@ -144,13 +146,16 @@ class Application:
         files = config.get('files', {})
         for side in ('left', 'right'):
             if not isinstance(files.get(side), dict) or not isinstance(files[side].get('size'), int) or not 0 < files[side]['size'] <= 100 * 1024**3:
-                raise ValueError('Select two nonempty CSV or Excel files (up to 100 GB each)')
+                raise ValueError('Select two nonempty CSV, Excel or Parquet files (up to 100 GB each)')
             name = str(files[side].get('name', side))[:255]
             suffix = Path(name).suffix.lower()
-            if suffix not in ('.csv', '.xlsx', '.xlsm'):
-                raise ValueError('Choose CSV, .xlsx or .xlsm files. Save older .xls workbooks as .xlsx first.')
+            if suffix not in ('.csv', '.xlsx', '.xlsm', '.parquet'):
+                raise ValueError('Choose CSV, Parquet, .xlsx or .xlsm files. Save older .xls workbooks as .xlsx first.')
             files[side] = dict(name=name, size=files[side]['size'], uploaded=0, complete=False,
-                               format='excel' if suffix in ('.xlsx', '.xlsm') else 'csv')
+                               format='excel' if suffix in ('.xlsx', '.xlsm') else 'parquet' if suffix=='.parquet' else 'csv')
+        if any(f['format']=='parquet' for f in files.values()):
+            from parquet_input import arrow
+            arrow()
         identity = uuid.uuid4().hex
         self.directory(identity).mkdir()
         job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, exports={})
@@ -177,6 +182,7 @@ class Application:
             source = self.directory(identity)
             trash = self.root / ('.deleting-' + identity)
             source.rename(trash)
+            ProjectStore(project_database(self.root,job.get('owner'))).mark_removed(identity)
         # Rename atomically removes the job from history before reclaiming large files.
         shutil.rmtree(trash)
 
@@ -199,6 +205,7 @@ class Application:
                         # Hold the lock through rename so a new request cannot acquire this job.
                         trash = self.root / ('.deleting-' + job['id'])
                         self.directory(job['id']).rename(trash)
+                        ProjectStore(project_database(self.root,job.get('owner'))).mark_removed(job['id'])
                     shutil.rmtree(trash)
                     print(f"Cleanup removed expired job {job['id']}", flush=True)
                 except (ValueError, OSError) as error:
@@ -212,7 +219,10 @@ class Application:
                     print(f'Cleanup deferred: {error}', flush=True)
 
     def upload_path(self, job, side):
-        return self.directory(job['id']) / (f'{side}.xlsx' if job['files'][side].get('format') == 'excel' else f'{side}.csv')
+        return self.directory(job['id']) / (f'{side}.xlsx' if job['files'][side].get('format') == 'excel' else f'{side}.parquet' if job['files'][side].get('format')=='parquet' else f'{side}.csv')
+
+    def comparison_path(self,job,side):
+        return self.directory(job['id']) / (f'{side}.parquet' if job['files'][side].get('format')=='parquet' else f'{side}.csv')
 
     def prepare_sheets(self, identity):
         job = self.load(identity)
@@ -228,6 +238,8 @@ class Application:
                 source = self.upload_path(job, side)
                 if job['files'][side].get('format') == 'excel':
                     columns[side], _ = convert_excel(source, job['files'][side]['sheet'], directory / f'{side}.csv', notify)
+                elif job['files'][side].get('format')=='parquet':
+                    columns[side]=header(source,',','utf-8')
                 else:
                     notify(f'Preparing {side} CSV for mixed-format comparison')
                     temporary = directory / f'{side}.normalized'
@@ -404,12 +416,40 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            if path.startswith('/api/projects'):
+                store=ProjectStore(project_database(self.app.root,self.workspace))
+                if path=='/api/projects' and self.command=='GET':
+                    # Index old jobs lazily once; only small job metadata is read.
+                    marker=store.path.with_suffix('.indexed')
+                    with self.app.lock:
+                        if not marker.exists():
+                            for entry in self.app.root.glob('*/job.json'):
+                                try:
+                                    item=self.app.load(entry.parent.name)
+                                    if item.get('owner')==self.workspace:store.sync(job_snapshot(item))
+                                except (ValueError,OSError):continue
+                            marker.touch()
+                    return self.json_response(dict(projects=store.overview()))
+                if path=='/api/projects' and self.command=='POST':return self.json_response(dict(id=store.create(self.body())),201)
+                if path=='/api/projects/records':
+                    if self.command=='GET':return self.json_response(store.records(offset=max(0,int(query.get('offset',['0'])[0])),identity=query.get('id',[None])[0]))
+                    if self.command=='POST':store.update_record(self.body());return self.json_response(dict(saved=True))
+                match_project=re.fullmatch(r'/api/projects/([a-f0-9]{32})',path)
+                if match_project and self.command=='GET':return self.json_response(store.detail(match_project.group(1),max(0,int(query.get('offset',['0'])[0]))))
+                return self.json_response({'error':'Not found'},404)
             if path in ('/api/json-compare', '/api/json-arrays') and self.command == 'POST':
                 config = self.body(64 * 1024 * 1024)
                 if not self.app.json_lock.acquire(blocking=False):
                     return self.json_response({'error': 'Another JSON comparison is running. Try again shortly.'}, 429)
                 try:
                     result = discover_arrays(config.get('left'), config.get('right')) if path == '/api/json-arrays' else compare_json(config.get('left'), config.get('right'), config.get('default_order', 'ordered'), config.get('rules', []), True)
+                    if path=='/api/json-compare':
+                        identity=uuid.uuid4().hex
+                        names=config.get('source_names',[])
+                        title=' ↔ '.join(str(n)[:255] for n in names[:2]) if isinstance(names,list) and len(names)==2 else 'JSON comparison'
+                        snapshot=dict(id=identity,kind='json',created=time.time(),finished=time.time(),state='complete',title=title,formats=['json','json'],changed_cells=sum(result['counts'].values()),json_counts=result['counts'])
+                        ProjectStore(project_database(self.app.root,self.workspace)).sync(snapshot)
+                        result['audit_id']=identity
                     return self.json_response(result)
                 finally:
                     self.app.json_lock.release()
@@ -458,7 +498,7 @@ class Handler(BaseHTTPRequestHandler):
                             if target.is_symlink():continue
                             try:size=target.stat().st_size
                             except FileNotFoundError:continue
-                            category='analysis' if name.startswith('analysis') else 'reports' if 'report' in target.relative_to(file.parent).parts or name in ('mismatches.xlsx','comparison-report.html') else 'uploads' if name in ('left.csv','right.csv','left.xlsx','right.xlsx','left.source.csv','right.source.csv') else 'temporary'
+                            category='analysis' if name.startswith('analysis') else 'reports' if 'report' in target.relative_to(file.parent).parts or name in ('mismatches.xlsx','comparison-report.html') else 'uploads' if name in ('left.csv','right.csv','left.xlsx','right.xlsx','left.source.csv','right.source.csv','left.parquet','right.parquet') else 'temporary'
                             sizes[category]+=size
                     with self.app.lock:
                         tasks=[dict(kind=kind,state='running' if entry['future'].running() else 'queued',queued_at=entry['queued_at'],cancelling=(file.parent/('cancel-'+kind)).exists()) for (identity,kind),entry in self.app.tasks.items() if identity==item['id']]
@@ -548,12 +588,14 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         # Finalized inputs are immutable. Linking keeps review runs from copying gigabytes.
                         for side in ('left','right'):
-                            os.link(directory/f'{side}.csv',target/f'{side}.csv')
+                            source=self.app.comparison_path(job,side)
+                            os.link(source,target/source.name)
                         fields=('owner','files','delimiter','encoding','source_headers','column_headers','columns','header_changes','header_layout_changes')
                         copy={k:job[k] for k in fields if k in job}
                         draft['value_overrides']=rules
                         copy.update(id=new_id,state='ready',created=time.time(),exports={},headers_reviewed=True,draft=draft,review_of=identity)
                         self.app.save(copy)
+                        ProjectStore(project_database(self.app.root,self.workspace)).inherit(identity,new_id)
                     except Exception:
                         shutil.rmtree(target)
                         raise
@@ -618,7 +660,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({'deleted': True})
             if self.command == 'GET' and action is None:
                 if 'source_headers' not in job and job['state'] in ('ready', 'queued', 'running', 'complete'):
-                    job['source_headers'] = {side: header(directory / f'{side}.csv', job['delimiter'], job['encoding']) for side in ('left', 'right')}
+                    job['source_headers'] = {side: header(self.app.comparison_path(job,side), job['delimiter'], job['encoding']) for side in ('left', 'right')}
                     job.setdefault('column_headers', job['source_headers'])
                 progress = directory / 'progress.json'
                 if progress.exists():
@@ -644,21 +686,21 @@ class Handler(BaseHTTPRequestHandler):
                 if side not in ('left', 'right') or not 1 <= limit <= 1000 or start < 0:
                     raise ValueError('Choose file 1 or file 2 and between 1 and 1,000 preview rows')
                 rows, size = [], 0
-                with (directory / f'{side}.csv').open(encoding=job['encoding'], newline='') as source:
-                    reader = csv.reader(source, delimiter=job['delimiter'], strict=True)
-                    original_names = normalize_headers(next(reader, None))
-                    names = job.get('column_headers', {}).get(side, original_names)
-                    if start >= len(names):
-                        raise ValueError('Invalid column page')
-                    for row in itertools.islice(reader, limit):
-                        if len(row) != len(names):
-                            raise ValueError('Invalid row width in preview')
-                        values = [cell[:500] for cell in row[start:start+20]]
-                        added = sum(len(cell.encode('utf-8')) for cell in values)
-                        if size + added > 2 * 1024 * 1024:
-                            break
-                        size += added
-                        rows.append(values)
+                source_path=self.app.comparison_path(job,side)
+                names=job.get('column_headers',{}).get(side) or header(source_path,job['delimiter'],job['encoding'])
+                if start >= len(names): raise ValueError('Invalid column page')
+                from compare import input_rows
+                from types import SimpleNamespace
+                from parquet_input import is_parquet
+                parquet=is_parquet(source_path)
+                options=SimpleNamespace(encoding=job['encoding'],delimiter=job['delimiter'],read_batch_size=limit,memory_mb=16)
+                with input_rows(source_path,options,indices=list(range(start,min(start+20,len(names))))) as (_,reader):
+                    for row in itertools.islice(reader,limit):
+                        if not parquet and len(row)!=len(names): raise ValueError('Invalid row width in preview')
+                        values=[('[NULL]' if cell is None else cell[:500]) for cell in (row if parquet else row[start:start+20])]
+                        added=sum(len(cell.encode('utf-8')) for cell in values)
+                        if size+added>2*1024*1024:break
+                        size+=added;rows.append(values)
                 return self.json_response(dict(headers=names[start:start+20], rows=rows, requested_rows=limit,
                     total_columns=len(names), column_offset=start, limited=len(rows)<limit))
             if self.command == 'POST' and action == 'headers':
@@ -667,7 +709,7 @@ class Handler(BaseHTTPRequestHandler):
                     job = self.app.load(identity)
                     if job['state'] != 'ready':
                         raise ValueError('Column headers are locked after comparison starts')
-                    source = job.get('source_headers') or {side: header(directory / f'{side}.csv', job['delimiter'], job['encoding']) for side in ('left', 'right')}
+                    source = job.get('source_headers') or {side: header(self.app.comparison_path(job,side), job['delimiter'], job['encoding']) for side in ('left', 'right')}
                     layout = config.get('column_headers')
                     if layout is None:
                         raise ValueError('Column headers are required')
@@ -741,6 +783,9 @@ class Handler(BaseHTTPRequestHandler):
                             job['files'][side]['sheets'] = excel_sheets(file)
                         else:
                             columns[side], changes = read_header(file, job['delimiter'], job['encoding'])
+                            if job['files'][side].get('format')=='parquet':
+                                from parquet_input import metadata
+                                job['files'][side]['parquet']=metadata(file)
                             header_changes.extend(dict(side=side, **change) for change in changes)
                     job['header_changes'] = header_changes
                     if any(item.get('format') == 'excel' for item in job['files'].values()):
@@ -777,7 +822,7 @@ class Handler(BaseHTTPRequestHandler):
                     job = self.app.load(identity)
                     if job['state'] != 'ready':
                         raise ValueError('Comparison is not ready to start')
-                    source = job.get('source_headers') or {side: header(directory / f'{side}.csv', job['delimiter'], job['encoding']) for side in ('left', 'right')}
+                    source = job.get('source_headers') or {side: header(self.app.comparison_path(job,side), job['delimiter'], job['encoding']) for side in ('left', 'right')}
                     align_headers(source, job.get('column_headers'))
                     keys = config.get('keys', [])
                     if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys) or len(set(keys)) != len(keys) or any(k not in job['columns'] for k in keys):

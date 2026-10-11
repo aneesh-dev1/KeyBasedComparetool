@@ -36,6 +36,7 @@ def validate_rules(rules, columns, keys, ignored):
 
 
 def equivalent(left,right,rule):
+    if left is None or right is None: return left is right
     if rule.get('trim'): left,right=left.strip(),right.strip()
     if rule.get('ignore_case'): left,right=left.casefold(),right.casefold()
     if left==right:return True

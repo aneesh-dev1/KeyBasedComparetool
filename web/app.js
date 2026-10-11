@@ -33,7 +33,7 @@ let previewExpanded=false;
 $('analysisPanel').insertAdjacentHTML('afterbegin','<button id="reviewOverrides" class="subtle review-overrides-action">Review value overrides</button>');
 const phaseLabels=['Files','Column headers','Keys & scope','Pipeline & logs','Results'];
 const phaseViews=['uploadPanel','headersPanel','keysPanel','runningPanel','results'];
-const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',settingsPanel:'navSettings'};
+const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',settingsPanel:'navSettings',projectsPanel:'navProjects'};
 const number = value => Number(value).toLocaleString();
 const bytes = value => value >= 1024**3 ? `${(value / 1024**3).toFixed(2)} GB` : value >= 1024**2 ? `${(value / 1024**2).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
 function showError(error) { $('error').textContent = error.message || String(error); $('error').hidden = false; }
@@ -73,11 +73,11 @@ function panel(name) {
   $('sheetPanel').hidden=name!=='uploadPanel'||!['selecting_sheets','preparing'].includes(job?.state);
   $('reset').hidden=false;
   const history=currentView==='historyPanel';
-  const library=['containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','settingsPanel'].includes(currentView);
+  const library=['projectsPanel','containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','settingsPanel'].includes(currentView);
   $('comparisonFlow').hidden=history||library;
   $('navNew').classList.toggle('active',name==='jsonPanel'||(!history&&!library&&!viewingHistoryJob));
   $('navHistory').classList.toggle('active',history||(!library&&viewingHistoryJob));
-  for(const id of ['navNew','navJson','navContainers','navHistory','navDocs','navStorage','navProfiles','navSettings']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
+  for(const id of ['navProjects','navNew','navJson','navContainers','navHistory','navDocs','navStorage','navProfiles','navSettings']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
   if(typeof closeSidebarDrawer==='function')closeSidebarDrawer();
   $('flowTitle').textContent=viewingHistoryJob?'Saved comparison':'New comparison';
   const phase=phaseViews.indexOf(name);
@@ -104,6 +104,7 @@ async function goView(name){
   if(headerDirty&&headerDraftJob===job?.id&&['keysPanel','overridesPanel','sourcePanel'].includes(name))await applyHeaders();
   panel(name);
   if(name==='settingsPanel')await loadSettings();
+  if(name==='projectsPanel')await loadProjects();
   if(name==='profilesPanel')await loadProfiles();
   if(name==='storagePanel')await loadStorage();
   if(name==='analysisPanel')await openAnalysis();
@@ -118,9 +119,9 @@ async function goView(name){
 for(const [view,nav] of Object.entries(views))$(nav).addEventListener('click',()=>goView(view).catch(showError));
 function choose(side, file) {
   if (uploading || (job && job.state!=='uploading')) return;
-  if(file&&!/\.(csv|xlsx|xlsm|json)$/i.test(file.name)){showError('Choose CSV, JSON, .xlsx or .xlsm. Save older .xls files as .xlsx first.');return;}
+  if(file&&!/\.(csv|xlsx|xlsm|json|parquet)$/i.test(file.name)){showError('Choose CSV, Parquet, JSON, .xlsx or .xlsm. Save older .xls files as .xlsx first.');return;}
   files[side] = file || null;
-  $(`${side}Name`).textContent = file ? file.name : `Choose ${side==='left'?'original':'updated'} CSV, Excel or JSON`;
+  $(`${side}Name`).textContent = file ? file.name : `Choose ${side==='left'?'original':'updated'} CSV, Excel, Parquet or JSON`;
   $(`${side}Size`).textContent = file ? bytes(file.size) : 'Click to browse or drop a file here';
   $('upload').disabled = !files.left || !files.right;
   updateDetectedFiles();
@@ -150,7 +151,7 @@ function sendChunk(side, blob, offset, update) {
 }
 $('upload').addEventListener('click', async () => {
   if(uploading)return;
-  if(files.left&&files.right){const left=detectedFileType(files.left),right=detectedFileType(files.right);if((left==='JSON')!==(right==='JSON')){showError('Choose two JSON files, or a pair of CSV/Excel files. JSON cannot be compared to a table.');return;}if(left==='JSON'){await loadUnifiedJson();return;}}
+  if(files.left&&files.right){const left=detectedFileType(files.left),right=detectedFileType(files.right);if((left==='JSON')!==(right==='JSON')){showError('Choose two JSON files, or a pair of CSV/Excel/Parquet files. JSON cannot be compared to a table.');return;}if(left==='JSON'){await loadUnifiedJson();return;}}
   clearError(); uploading = true;pauseUploadRequested=false;lastUploadPaint=0;
   $('pauseUpload').hidden=false;$('pauseUpload').disabled=false;$('pauseUpload').textContent='Pause upload';$('uploadActivity').hidden=false;
   syncNavigation(); $('upload').disabled = true; $('reset').disabled = true;
@@ -753,7 +754,7 @@ $('jsonCompare').addEventListener('click',async()=>{
   controls.forEach(id=>$(id).disabled=true);renderJsonRules();$('jsonStatus').textContent='Comparing JSON…';
   try{
     for(const id of ['jsonLeft','jsonRight'])if(new Blob([$(id).value]).size>5*1024*1024)throw new Error('Each JSON input must be at most 5 MiB.');
-    jsonResult=await api('/api/json-compare',{left:$('jsonLeft').value,right:$('jsonRight').value,default_order:$('jsonDefault').value,rules:jsonRules});
+    jsonResult=await api('/api/json-compare',{left:$('jsonLeft').value,right:$('jsonRight').value,default_order:$('jsonDefault').value,rules:jsonRules,source_names:[files.left?.name||'File 1 JSON',files.right?.name||'File 2 JSON']});
     $('jsonResult').hidden=false;$('jsonResultTitle').textContent=jsonResult.equal?'JSON documents match':'JSON differences found';
     $('jsonCounts').textContent=`${jsonResult.counts.changed} changed · ${jsonResult.counts.added} added · ${jsonResult.counts.removed} removed`;
     $('jsonWarnings').textContent=jsonResult.warnings.join(' · ');
@@ -1234,7 +1235,7 @@ function animateWorkspacePane(element){
 function updateEnterpriseShell(name){
   const heading=document.querySelector('.heading h1');
   if(!$('workspaceContext'))return;
-  const titles={uploadPanel:'New comparison',headersPanel:'Column headers',keysPanel:'Keys & scope',runningPanel:'Pipeline & logs',results:'Comparison results',jsonPanel:'JSON comparison',historyPanel:'Job history',containersPanel:'Ignore key containers',profilesPanel:'Profile templates',settingsPanel:'Settings',docsPanel:'Docs & FAQ',storagePanel:'Storage & queue',overridesPanel:'Value overrides'};
+  const titles={projectsPanel:'Projects',uploadPanel:'New comparison',headersPanel:'Column headers',keysPanel:'Keys & scope',runningPanel:'Pipeline & logs',results:'Comparison results',jsonPanel:'JSON comparison',historyPanel:'Job history',containersPanel:'Ignore key containers',profilesPanel:'Profile templates',settingsPanel:'Settings',docsPanel:'Docs & FAQ',storagePanel:'Storage & queue',overridesPanel:'Value overrides'};
   heading.textContent=titles[name]||'Comparison workspace';
   $('workspaceContext').textContent=phaseViews.includes(name)?'Compare files':titles[name]||'Workspace';
   const changed=document.body.dataset.workspaceView!==name;
@@ -1418,13 +1419,13 @@ function initComparisonRulesDrawer(){
 }
 initComparisonRulesDrawer();
 
-function detectedFileType(file){return !file?'':/\.json$/i.test(file.name)?'JSON':/\.(xlsx|xlsm)$/i.test(file.name)?'Excel':'CSV';}
+function detectedFileType(file){return !file?'':/\.json$/i.test(file.name)?'JSON':/\.(xlsx|xlsm)$/i.test(file.name)?'Excel':/\.parquet$/i.test(file.name)?'Parquet':'CSV';}
 function updateDetectedFiles(){
   if(!$('detectedFileStatus'))return;
   const types=['left','right'].map(side=>detectedFileType(files[side]));
   for(const side of ['left','right'])if(files[side])$(`${side}Size`).textContent=detectedFileType(files[side])+' · '+bytes(files[side].size);
   const json=types.includes('JSON'),mixed=types.every(Boolean)&&json&&types[0]!==types[1];
-  $('detectedFileStatus').textContent=mixed?'Choose two JSON files, or two tabular files (CSV/Excel).':json?'JSON detected · up to 5 MiB per file. Configure array matching after loading.':types.every(Boolean)?types.join(' ↔ ')+' · column headers are read after upload.':'File format is detected automatically.';
+  $('detectedFileStatus').textContent=mixed?'Choose two JSON files, or two tabular files (CSV/Excel/Parquet).':json?'JSON detected · up to 5 MiB per file. Configure array matching after loading.':types.every(Boolean)?types.join(' ↔ ')+' · column headers are read after upload.':'File format is detected automatically.';
   $('upload').disabled=mixed||!files.left||!files.right;
   $('delimiter').closest('.settings').hidden=json;
   document.querySelector('.upload-profile').hidden=json;
@@ -1440,8 +1441,8 @@ async function loadUnifiedJson(){
 function initUnifiedUpload(){
   if(typeof document.createDocumentFragment!=='function')return;
   $('navJson').hidden=true;
-  $('navNew').querySelector('.side-description').textContent='CSV, Excel & JSON';
-  for(const side of ['left','right']){$(`${side}File`).accept='.csv,.xlsx,.xlsm,.json,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';$(`${side}File`).setAttribute('aria-label','Choose '+(side==='left'?'original':'updated')+' CSV, Excel or JSON');$(`${side}Name`).textContent='Choose '+(side==='left'?'original':'updated')+' CSV, Excel or JSON';}
+  $('navNew').querySelector('.side-description').textContent='CSV, Excel, Parquet & JSON';
+  for(const side of ['left','right']){$(`${side}File`).accept='.csv,.xlsx,.xlsm,.parquet,.json,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';$(`${side}File`).setAttribute('aria-label','Choose '+(side==='left'?'original':'updated')+' CSV, Excel, Parquet or JSON');$(`${side}Name`).textContent='Choose '+(side==='left'?'original':'updated')+' CSV, Excel, Parquet or JSON';}
   $('uploadPanel').querySelector('.section-title').insertAdjacentHTML('afterend','<p id="detectedFileStatus" class="muted detected-file-status" role="status">File format is detected automatically.</p>');
   $('jsonPanel').querySelector('h2').insertAdjacentHTML('afterend','<div class="json-source-bar"><span id="jsonSourceFiles"></span><button id="changeJsonFiles" class="subtle">Change files</button></div>');
   $('changeJsonFiles').addEventListener('click',()=>{panel('uploadPanel');updateDetectedFiles();});
@@ -1449,3 +1450,54 @@ function initUnifiedUpload(){
   updateDetectedFiles();
 }
 initUnifiedUpload();
+
+function projectEscape(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+let projectCatalog=[],activeProject=null,projectOffset=0,projectDetail=null,projectDrawerReturn=null,projectRecordPage=0;
+const auditColors={'Unreviewed':'#a8bac4','In review':'#009bbd','Approved':'#2b8b65','Changes requested':'#d7922b'};
+function projectTime(value){return value?new Date(value*1000).toLocaleString(): '—';}
+function projectButton(text,action,className='subtle'){const button=document.createElement('button');button.textContent=text;button.className=className;button.addEventListener('click',()=>Promise.resolve(action()).catch(error=>{$('projectDrawer').open?$('projectDrawerError').textContent=error.message:showError(error);}));return button;}
+async function loadProjects(){
+  const result=await api('/api/projects');projectCatalog=result.projects;renderProjectLibrary();
+  if(activeProject&&projectCatalog.some(p=>p.id===activeProject))await selectProject(activeProject,projectOffset);
+  else if(projectCatalog.length)await selectProject(projectCatalog[0].id);
+  $('projectStatus').textContent=projectCatalog.length+' projects · Audit status is recorded manually; comparison results are calculated.';
+}
+function renderProjectLibrary(){const target=$('projectList');target.replaceChildren();const q=$('projectSearch').value.toLowerCase();for(const p of projectCatalog.filter(p=>p.name.toLowerCase().includes(q))){const button=projectButton('',()=>selectProject(p.id),'project-item');button.setAttribute('aria-pressed',String(p.id===activeProject));const title=document.createElement('strong'),count=document.createElement('span');title.textContent=p.name;count.textContent=p.comparisons+' comparisons · '+(p.approved||0)+' approved';button.append(title,count);target.append(button);}}
+function auditDonut(counts){
+  let start=0;const total=Object.values(counts).reduce((a,b)=>a+b,0);
+  const segments=Object.entries(counts).map(([label,value])=>{const length=total?value/total*100:0,arc=`<circle cx="56" cy="56" r="48" pathLength="100" fill="none" stroke="${auditColors[label]}" stroke-width="14" stroke-dasharray="${length} ${100-length}" stroke-dashoffset="${-start}" transform="rotate(-90 56 56)"/>`;start+=length;return value?arc:'';});
+  return `<div class="audit-chart"><div class="audit-ring" role="img" aria-label="${projectEscape(Object.entries(counts).map(([s,n])=>s+': '+n).join(', '))}"><svg viewBox="0 0 112 112" aria-hidden="true"><circle cx="56" cy="56" r="48" fill="none" stroke="#e4ebef" stroke-width="14"/>${segments.join('')}</svg><div><strong>${number(total)}</strong><span>audits</span></div></div><div class="audit-legend">${Object.entries(counts).map(([s,n])=>`<div><svg width="8" height="8" aria-hidden="true"><circle cx="4" cy="4" r="3.5" fill="${auditColors[s]}"/></svg><span>${projectEscape(s)}</span><strong>${number(n)}</strong></div>`).join('')}</div></div>`;
+}
+function projectTrend(rows){if(!rows.length)return '<p class="muted">Complete a comparison to see the trend.</p>';const max=Math.max(1,...rows.map(r=>r.changed_cells||0));const points=rows.map((r,i)=>`${24+i*(332/Math.max(1,rows.length-1))},${92-(r.changed_cells||0)/max*68}`);return `<svg class="project-trend" viewBox="0 0 380 118" role="img" aria-label="Differences across the last ${rows.length} completed runs: ${rows.map(r=>r.changed_cells||0).join(', ')}"><path d="M24 20V92H360" fill="none" stroke="#d9e5eb"/><polyline points="${points.join(' ')}" fill="none" stroke="#009bbd" stroke-width="2.5"/>${points.map((p,i)=>`<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="4" fill="#007c9d"><title>${projectEscape(rows[i].title)}: ${number(rows[i].changed_cells||0)} differences</title></circle>`).join('')}<text x="24" y="112">Older</text><text x="326" y="112">Latest</text><text x="3" y="15">${number(max)}</text></svg>`;}
+async function selectProject(identity,offset=0){
+  activeProject=identity;projectOffset=offset;renderProjectLibrary();const detail=await api('/api/projects/'+identity+'?offset='+offset);if(activeProject!==identity)return;projectDetail=detail;
+  const d=$('projectDashboard'),latest=detail.latest,complete=detail.states.complete||0,approved=detail.audit_counts.Approved;
+  d.innerHTML=`<div class="project-heading"><div><h3>${projectEscape(detail.project.name)}</h3><p>${projectEscape(detail.project.description||'Project audit workspace')}</p></div><div id="projectAttachAction"></div></div><div class="project-metrics"><div><span>Comparisons</span><strong>${number(detail.total)}</strong></div><div><span>Completed</span><strong>${number(complete)}</strong></div><div><span>Approved audits</span><strong>${number(approved)}<small> / ${number(detail.total)}</small></strong></div><div><span>Latest run differences</span><strong>${latest?number(latest.changed_cells||0):'—'}</strong></div></div><div class="project-charts"><section><h4>Audit status</h4>${auditDonut(detail.audit_counts)}</section><section><h4>Comparison trend <span>Last ${detail.trend.length} completed runs</span></h4>${projectTrend(detail.trend)}</section></div><div class="project-bottom"><section class="project-records"><div class="section-title"><h4>Comparisons</h4><span>${detail.total?offset+1:0}–${Math.min(offset+25,detail.total)} of ${detail.total}</span></div><div id="projectRecordList"></div><div id="projectRecordPager" class="project-pager"></div></section><section class="project-timeline"><h4>Timeline <span>Latest 100 events</span></h4><ol>${detail.events.map(e=>`<li><span class="event-dot"></span><strong>${projectEscape(e.message)}</strong><time>${projectEscape(projectTime(e.at))}</time>${e.record_id?'<small>'+projectEscape(e.record_id.slice(0,8))+'</small>':''}</li>`).join('')||'<li>No activity yet.</li>'}</ol></section></div>`;
+  $('projectAttachAction').append(projectButton('Timeline',()=>{openProjectDrawer('Project timeline');const list=document.createElement('ol');list.className='project-event-drawer';for(const e of projectDetail.events){const item=document.createElement('li');item.textContent=projectTime(e.at)+' · '+e.message;list.append(item);}$('projectDrawerBody').append(list);}),projectButton('＋ Attach comparison',()=>showProjectCandidates()));
+  for(const r of detail.records){const button=projectButton('',()=>openProjectAudit(r.id),'project-record');button.innerHTML=`<span><strong>${projectEscape(r.title)}</strong><small>${projectEscape(r.formats.join(' / ').toUpperCase())} · ${projectEscape(r.state)} · ${projectEscape(projectTime(r.finished||r.created))}</small></span><span class="audit-badge audit-${Object.keys(auditColors).indexOf(r.audit_status)}">${projectEscape(r.audit_status)}</span><span class="project-difference">${r.changed_cells===null||r.changed_cells===undefined?'—':number(r.changed_cells)}<small>differences</small></span>`;$('projectRecordList').append(button);}
+  const prev=projectButton('← Previous',()=>selectProject(identity,Math.max(0,offset-25))),next=projectButton('Next →',()=>selectProject(identity,offset+25));prev.disabled=offset===0;next.disabled=offset+25>=detail.total;$('projectRecordPager').append(prev,next);animateWorkspacePane(d);
+}
+function openProjectDrawer(title){projectDrawerReturn=document.activeElement;$('projectDrawerTitle').textContent=title;$('projectDrawerError').textContent='';$('projectDrawerBody').replaceChildren();if(!$('projectDrawer').open)$('projectDrawer').showModal();}
+function createProjectDrawer(){openProjectDrawer('New project');const body=$('projectDrawerBody');body.innerHTML='<label>Project name<input id="newProjectName" maxlength="100" placeholder="e.g. Monthly reconciliation"></label><label>Description<textarea id="newProjectDescription" maxlength="2000" rows="4" placeholder="Purpose and scope"></textarea></label>';body.append(projectButton('Create project',async()=>{const result=await api('/api/projects',{name:$('newProjectName').value,description:$('newProjectDescription').value});activeProject=result.id;projectOffset=0;$('projectDrawer').close();await loadProjects();},'primary'));$('newProjectName').focus();}
+async function showProjectCandidates(offset=0){
+  projectRecordPage=offset;openProjectDrawer('Attach comparison');const result=await api('/api/projects/records?offset='+offset);const body=$('projectDrawerBody');
+  const hint=document.createElement('p');hint.className='muted';hint.textContent='Select a comparison to attach and review. JSON entries retain audit summaries, not source documents.';body.append(hint);
+  for(const r of result.records){const button=projectButton('',()=>openProjectAudit(r.id,true),'project-candidate');const title=document.createElement('strong'),meta=document.createElement('span');title.textContent=r.title;meta.textContent=r.formats.join(' / ').toUpperCase()+' · '+r.state+' · '+projectTime(r.created);button.append(title,meta);body.append(button);}
+  const pager=document.createElement('div');pager.className='project-pager';const prev=projectButton('← Previous',()=>showProjectCandidates(Math.max(0,offset-25))),next=projectButton('Next →',()=>showProjectCandidates(offset+25));prev.disabled=offset===0;next.disabled=offset+25>=result.total;pager.append(prev,next);body.append(pager);
+}
+async function openProjectAudit(identity,attach=false){
+  const [recordData,catalog]=await Promise.all([api('/api/projects/records?id='+identity),api('/api/projects')]);const record=recordData.records[0];if(!record)throw Error('Comparison audit is not available.');
+  openProjectDrawer('Comparison audit');const body=$('projectDrawerBody');
+  body.innerHTML=`<div class="project-audit-summary"><h3>${projectEscape(record.title)}</h3><p>${projectEscape(record.formats.join(' / ').toUpperCase())} · ${projectEscape(record.state)} · ${projectEscape(projectTime(record.finished||record.created))}</p><strong>${record.changed_cells===null||record.changed_cells===undefined?'—':number(record.changed_cells)} <small>differences</small></strong></div><label>Project<select id="auditProject"><option value="">No project</option></select></label><label>Audit status<select id="auditState">${Object.keys(auditColors).map(s=>`<option>${s}</option>`).join('')}</select></label><label>Recorded by <span class="muted">Optional name; no authenticated identity</span><input id="auditReviewer" maxlength="100"></label><label>Review notes<textarea id="auditNote" maxlength="2000" rows="4"></textarea></label><div id="auditActions" class="project-actions"></div><p class="muted">${record.source_available===false?'Source files and reports were removed by cleanup; this audit summary is retained.':record.kind==='json'?'JSON audit summaries are retained here. The original JSON and full result stay in the comparison session.':'Audit approval does not alter mismatch results. Original reports and comments remain attached to the comparison.'}</p>`;
+  for(const p of catalog.projects)$('auditProject').append(new Option(p.name,p.id));$('auditProject').value=attach?activeProject||'':record.project_id||'';$('auditState').value=record.audit_status;$('auditReviewer').value=record.reviewer;$('auditNote').value=record.audit_note;
+  $('auditActions').append(projectButton('Save audit',async()=>{await api('/api/projects/records',{comparison_id:identity,project_id:$('auditProject').value||null,status:$('auditState').value,note:$('auditNote').value,reviewer:$('auditReviewer').value});$('projectDrawer').close();if(currentView==='projectsPanel')await loadProjects();},'primary'));
+  if(record.kind==='table'&&record.source_available!==false)$('auditActions').append(projectButton('Open comparison',async()=>{$('projectDrawer').close();await openJob(identity);}));
+}
+function initProjects(){
+  if(typeof document.createDocumentFragment!=='function')return;
+  $('createProject').addEventListener('click',createProjectDrawer);$('refreshProjects').addEventListener('click',()=>loadProjects().catch(showError));$('projectSearch').addEventListener('input',renderProjectLibrary);
+  $('closeProjectDrawer').addEventListener('click',()=>$('projectDrawer').close());$('projectDrawer').addEventListener('close',()=>{if(projectDrawerReturn?.isConnected)projectDrawerReturn.focus();});
+  $('results').querySelector('.result-heading').append(projectButton('Project & audit',()=>openProjectAudit(job.id)));
+  $('jsonResult').querySelector('.preview-controls').append(projectButton('Project & audit',()=>openProjectAudit(jsonResult.audit_id)));
+}
+initProjects();

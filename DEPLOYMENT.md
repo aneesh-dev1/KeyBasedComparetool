@@ -16,7 +16,7 @@ network access control. Keep the service off the public internet.
 ## Install and start
 
 Requirements: Linux, 64-bit Python 3.10+, Bash, `nohup`, and `flock` (util-linux).
-No pip packages are needed. Run under an ordinary account with read access to the
+CSV, Excel and JSON use the standard library. Parquet requires PyArrow: create `.venv` with `python3 -m venv .venv`, then run `.venv/bin/python -m pip install -r requirements.txt`. `deploy.sh` prefers that environment. Run under an ordinary account with read access to the
 application and write access to the data/run directories. Use a local SSD.
 
 ```bash

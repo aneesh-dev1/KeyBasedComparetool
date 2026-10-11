@@ -18,6 +18,7 @@ import time
 from file_io import atomic_write_text
 from task_control import check_cancel
 from comparison_rules import validate_rules, equivalent
+from parquet_input import is_parquet
 
 
 def encode(value):
@@ -93,6 +94,10 @@ def common_headers(aligned):
 
 
 def read_header(path, delimiter, encoding):
+    if is_parquet(path):
+        from parquet_input import metadata
+        original=metadata(path)['columns'];normalized=normalize_headers(original)
+        return normalized,[dict(column=i,original=a,normalized=b) for i,(a,b) in enumerate(zip(original,normalized),1) if a!=b]
     with open(path, encoding=encoding, newline='') as stream:
         original = next(csv.reader(stream, delimiter=delimiter, strict=True), None)
     normalized = normalize_headers(original)
@@ -159,6 +164,7 @@ SEPARATOR = '\x1f'
 
 
 def pack_values(values):
+    if any(v is None for v in values): return b'\x01'+encode(values)
     joined = SEPARATOR.join(values)
     if joined.count(SEPARATOR) == len(values)-1:
         return b'\x00' + joined.encode('utf-8')
@@ -213,8 +219,24 @@ def sort_csv(path, names, canonical, keys, temp, prefix, args):
     return _sort_csv(path,names,canonical,keys,temp,prefix,args)
 
 
+@contextlib.contextmanager
+def input_rows(path,args,position=0,indices=None):
+    if is_parquet(path):
+        from parquet_input import Rows
+        with Rows(path,indices,position,getattr(args,'read_batch_size',100000),args.memory_mb) as source:
+            yield source,iter(source)
+    else:
+        with open(path,encoding=args.encoding,newline='',buffering=1024*1024) as source:
+            if position: source.seek(position)
+            reader=csv.reader(iter(source.readline,''),delimiter=args.delimiter,strict=True)
+            if not position: next(reader)
+            yield source,reader
+
+
 def _sort_csv(path, names, canonical, keys, temp, prefix, args):
     progress(args, f'Reading {prefix} file', rows=0)
+    projection=[names.index(name) for name in canonical] if is_parquet(path) else None
+    if projection is not None: names=canonical
     order = [names.index(name) for name in canonical]
     key_positions = [names.index(name) for name in keys]
     same_order = names == canonical
@@ -249,12 +271,7 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
         chunk, size = [], 0
 
     if not reading_complete:
-        with open(path, encoding=args.encoding, newline='', buffering=1024*1024) as stream:
-            reader = csv.reader(iter(stream.readline, '') if checkpoint else stream, delimiter=args.delimiter, strict=True)
-            if position: stream.seek(position)
-            else:
-                next(reader)
-                if checkpoint: position=stream.tell()
+        with input_rows(path,args,position,projection) as (stream,reader):
             for row in reader:
                 count += 1
                 if len(row) != len(names):
@@ -266,7 +283,7 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
                 if encoded_key in args.excluded_keys:
                     excluded += 1
                     continue
-                if not args.allow_empty_keys and any(value == '' for value in key):
+                if not args.allow_empty_keys and any(value is None or value == '' for value in key):
                     raise ValueError(f'{path}: record {count}: empty key component')
                 if not chunk:
                     progress(args, f'{prefix} sort batch started', batch=serial+1, rows=count-1, status='ongoing')
@@ -409,7 +426,7 @@ def unique(rows, label, diagnostics=None, args=None, stats=None, audit=None):
             if audit: audit.writerow([label, key.decode('utf-8'), count, count - 1, policy])
             if capture_sample and not Path(diagnostics).exists():
                 atomic_write_text(diagnostics, json.dumps(dict(side=label, key=json.loads(key), count=count,
-                    sample_columns=getattr(args, 'diagnostic_columns', [])[:20], samples=[[v[:500] for v in row[:20]] for row in samples],
+                    sample_columns=getattr(args, 'diagnostic_columns', [])[:20], samples=[['[NULL]' if v is None else v[:500] for v in row[:20]] for row in samples],
                     note=f'Comparison continues using the {policy} source occurrence per key. Extra rows are skipped. This is the first duplicate group; download the duplicate audit for all keys.')))
             capture_sample = False
         yield selected
@@ -529,7 +546,7 @@ def _compare(args):
                                 changed = True
                                 columns[name] += 1
                                 stats['changed_cells'] += 1
-                                writers['differences'].writerow([a[0].decode('utf-8'), name, av, bv])
+                                writers['differences'].writerow([a[0].decode('utf-8'), name, '[NULL]' if av is None else '[NULL] (text)' if av=='[NULL]' else av, '[NULL]' if bv is None else '[NULL] (text)' if bv=='[NULL]' else bv])
                         stats['changed_rows' if changed else 'equal_rows'] += 1
                     a, b = next(left, None), next(right, None)
                 if processed % batch_size == 0 or (a is None and b is None):
@@ -539,7 +556,7 @@ def _compare(args):
         progress(args, 'WARNING: duplicate keys found; extra rows skipped', policy=args.duplicate_policy, left_skipped=stats['left_duplicate_rows_skipped'], right_skipped=stats['right_duplicate_rows_skipped'])
     progress(args, 'Writing reports')
     stats.update(settings)
-    stats.update(comparison_rules=rules, unmatched_columns=unmatched_columns, keys=args.keys, comparison='exact text with configured rules and/or overrides' if rules or overrides else 'exact text', changed_cells_by_column=columns,
+    stats.update(input_formats={side:('parquet' if is_parquet(path) else 'csv') for side,path in [('left',args.left),('right',args.right)]}, comparison_rules=rules, unmatched_columns=unmatched_columns, keys=args.keys, comparison='exact text with configured rules and/or overrides' if rules or overrides else 'exact text', changed_cells_by_column=columns,
                  value_overrides=overrides, ignore_key_containers=exclusion_audit,
                  column_headers=aligned, header_layout_changes=layout_changes,
                  header_changes=[dict(side=side, **change) for side, changes in (("left", left_header_changes), ("right", right_header_changes)) for change in changes],

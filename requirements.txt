@@ -1,0 +1,2 @@
+# Required for Parquet support; other input formats use the standard library.
+pyarrow>=18,<26

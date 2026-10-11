@@ -734,3 +734,34 @@ Keyboard: Tab / Shift+Tab move between controls; Enter / Space activate them; ar
 All pages reflow at narrow widths. Data tables and long lists use bounded scrolling; controls remain reachable rather than being clipped to enforce a fixed page height.
 
 The shared Files picker detects CSV, Excel and JSON by file extension and validates JSON syntax before opening the JSON workspace. JSON pairs use the existing array alignment and side-by-side comparison flow (5 MiB per input). CSV/Excel pairs retain sheet selection, headers and key comparison. Mixed JSON/tabular pairs are rejected. JSON remains session-only and is not added to tabular Job history.
+
+## Parquet comparisons
+
+The shared Files picker accepts `.parquet` alongside CSV, Excel and JSON. Install Parquet support with the server's 64-bit Python (Python 3.10+):
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+On Windows use `.venv\Scripts\python.exe -m pip install -r requirements.txt`. The launchers prefer this environment when it exists. Restart a running server after installing or updating dependencies. Tested with PyArrow 25.0.1.
+
+Parquet headers come from schema metadata. The comparison worker reads only selected key/value columns using Arrow batches, then feeds the existing bounded external sort and merge engine directly. It never converts the whole file to CSV or loads a full dataframe. CSV/Parquet and Excel/Parquet pairs are supported too. Native batch rows adapt to the selected columns' uncompressed metadata estimate and share the configured read/sort limit. File sorting concurrency, cancellation, duplicate handling, rules, reports and restart checkpoints still apply. Resuming skips completed row groups and resumes inside the next group; existing source fingerprint validation is retained.
+
+Parquet values are rendered deterministically as text: booleans `true`/`false`, dates/times in ISO form, binary in base64, nested values as JSON (object fields sorted, array order preserved). Physical numeric widths are not treated as differences; numeric-format rules are optional as with CSV. Null is distinct from empty text and is displayed as `[NULL]` in reports; a literal string `[NULL]` is marked `[NULL] (text)` in mismatches. Null keys are rejected. Duplicate Parquet field names must be fixed before upload; ordinary blank/case-colliding headers use the existing header normalization.
+
+The sort budget is not a process-wide RAM cap: Arrow buffers, schema metadata, decompression and unusually large individual cells add overhead. Compressed inputs may expand substantially in scratch storage. Use a fast local SSD, keep server concurrency conservative, and benchmark representative files before committing to a 6 GB SLA.
+
+```sh
+.venv/bin/python benchmark.py --format parquet --output benchmark-parquet --rows 10000 --columns 2000 --memory-mb 64 --sort-workers 1
+```
+
+This generates shuffled keys and known mismatches, validates counts, and saves timing/input/scratch measurements. Increase `--rows` for a representative machine test. Timing excludes generation and export; RAM is not measured by this script.
+
+## Projects and audit workspace
+
+Projects provides a compact desktop dashboard with comparison counts, manually recorded audit statuses, a latest-run difference metric, a difference trend and an event timeline. Large lists scroll within the workspace; create, attach and review actions use keyboard-accessible drawers. Smaller screens reflow. Use **Project & audit** on a result, or **Projects → Attach comparison** to assign an existing comparison. One comparison belongs to at most one project. Recomparison inherits the project but starts with an Unreviewed audit.
+
+Audit statuses are Unreviewed, In review, Approved and Changes requested. Approval requires a completed comparison and does not change computed mismatch results. Reviewer names are optional labels, not authenticated identities. Projects follow the existing browser-workspace isolation; no login was added. JSON comparisons persist a compact audit summary, not the original JSON, full differences or rendered report. CSV/Excel/Parquet results remain accessible until normal job cleanup; cleanup preserves project audit summaries and marks the source/report as removed.
+
+Project records and events are stored in a workspace-scoped SQLite database. The dashboard reads metadata only; it does not scan source CSV/Parquet files. Project charts report differing cells for tabular runs and changed/added/removed nodes for JSON, not a combined cross-format match percentage. Use Refresh to load changes while viewing a project. Existing tabular jobs are indexed on the first Projects visit.
