@@ -164,7 +164,7 @@ SEPARATOR = '\x1f'
 
 
 def pack_values(values):
-    if any(v is None for v in values): return b'\x01'+encode(values)
+    if None in values: return b'\x01'+encode(values)
     joined = SEPARATOR.join(values)
     if joined.count(SEPARATOR) == len(values)-1:
         return b'\x00' + joined.encode('utf-8')
@@ -175,6 +175,9 @@ def pack_values(values):
 def unpack_values(payload):
     if payload[:1] == b'\x00':
         return payload[1:].decode('utf-8').split(SEPARATOR)
+    if payload[:1] == b'\x02':
+        flags,values=payload[1:].split(b'\x1e',1)
+        return [None if flag==49 else value for flag,value in zip(flags,values.decode('utf-8').split(SEPARATOR))]
     if payload[:1] == b'\x01':
         return json.loads(payload[1:])
     raise ValueError('Invalid temporary comparison payload')
@@ -201,13 +204,19 @@ def merge(paths):
 
 
 def write_run(path, rows, args=None):
+    import hashlib
+    checksum=hashlib.sha256() if getattr(args,'checkpoint_dir',None) else None
     with open(path, 'wb', buffering=1024*1024) as stream:
         for index,(key, payload) in enumerate(rows):
             if index%10000==0: check_cancel(getattr(args,'cancel_file',None))
-            stream.write(FRAME.pack(len(key), len(payload)))
+            frame=FRAME.pack(len(key), len(payload))
+            stream.write(frame)
             stream.write(key)
             stream.write(payload)
-        if getattr(args,'checkpoint_dir',None): stream.flush();os.fsync(stream.fileno())
+            if checksum is not None:checksum.update(frame);checksum.update(key);checksum.update(payload)
+        size=stream.tell()
+        if checksum is not None:stream.flush();os.fsync(stream.fileno())
+    return dict(name=Path(path).name,size=size,sha256=checksum.hexdigest()) if checksum is not None else None
 
 
 def sort_csv(path, names, canonical, keys, temp, prefix, args):
@@ -264,19 +273,28 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
         chunk.sort(key=itemgetter(0))
         target = temp / f'{prefix}-{serial}.run'
         serial += 1
-        write_run(target, chunk, args)
+        written=write_run(target, chunk, args)
+        if checkpoint:checkpoint.metadata[target.name]=written
         paths.append(target)
         if checkpoint: checkpoint.save(paths,count,excluded,serial,position,False)
         progress(args, f'{prefix} sort batch complete', batch=serial, batch_rows=len(chunk), rows=count, status='completed', elapsed_seconds=round(time.monotonic()-batch_started, 3))
         chunk, size = [], 0
 
     if not reading_complete:
-        with input_rows(path,args,position,projection) as (stream,reader):
+        native=is_parquet(path) and not getattr(args,'reference_parquet_reader',False)
+        @contextlib.contextmanager
+        def source_rows():
+            if native:
+                from parquet_input import PackedRows
+                with PackedRows(path,projection,key_positions,position,args.read_batch_size,args.memory_mb) as source:yield source,iter(source)
+            else:
+                with input_rows(path,args,position,projection) as pair:yield pair
+        with source_rows() as (stream,reader):
             for row in reader:
                 count += 1
-                if len(row) != len(names):
+                if not native and len(row) != len(names):
                     raise ValueError(f'{path}: record {count}: expected {len(names)} fields, got {len(row)}')
-                key = [row[i] for i in key_positions]
+                key = row[0] if native else [row[i] for i in key_positions]
                 if count % 10000 == 0:
                     progress(args, f'Reading {prefix} file', rows=count, excluded=excluded, batch=serial+1, batch_rows=len(chunk), status='ongoing')
                 encoded_key = encode(key)
@@ -287,8 +305,10 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
                     raise ValueError(f'{path}: record {count}: empty key component')
                 if not chunk:
                     progress(args, f'{prefix} sort batch started', batch=serial+1, rows=count-1, status='ongoing')
-                values = row if same_order else project(row) if project is not None else [row[order[0]]]
-                item = (encoded_key, pack_values(values))
+                if native:item=(encoded_key,row[1])
+                else:
+                    values = row if same_order else project(row) if project is not None else [row[order[0]]]
+                    item = (encoded_key, pack_values(values))
                 # Includes byte objects, tuple, list pointer and sorting headroom.
                 size += len(item[0]) + len(item[1]) + 192
                 chunk.append(item)
@@ -313,7 +333,8 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
             total_batches = (len(paths)+args.fan_in-1)//args.fan_in
             progress(args, f'{prefix} merge batch started', merge_pass=merge_pass, batch=batch, total_batches=total_batches, input_runs=len(group), status='ongoing')
             with contextlib.closing(merge(group)) as rows:
-                write_run(target, rows, args)
+                written=write_run(target, rows, args)
+            if checkpoint:checkpoint.metadata[target.name]=written
             if not checkpoint:
                 for source in group: source.unlink()
             replacement.append(target)

@@ -775,3 +775,18 @@ Results → AI analysis package downloads a ZIP containing `context.txt`, `colum
 AI findings can be imported as a JSON array of `column`, `pattern`, `reason`, `evidence`, `confidence` (`low`, `medium`, `high`) and `recommended_action`. They appear in the analysis drawer as unreviewed suggestions and never overwrite human comments or apply rules. Read the suggestion, then use the existing review-note controls to record your own assessment. Revisions do not automatically carry AI suggestions across changed scope.
 
 AI packages can target all compared columns or a searchable selection of one or more. Pattern counts, examples, rule context and comments follow that scope; key comments are included only for keys with selected-column mismatches in scoped exports. Supporting columns remain a separate optional context choice. The detail-level info control opens on hover or keyboard focus and supports click/touch and Escape.
+
+## Wide-file performance validation
+
+The Parquet reader caches the Arrow schema and packs string, integer and boolean columns with native Arrow kernels, materializing only keys and packed rows in Python. Other types retain the existing text conversion to preserve comparison semantics. Nulls and embedded separators remain distinct. CSV, Excel and Parquet share a cheaper null check and sort-run checksums calculated during writes, avoiding a second scratch-file read. Resume still verifies saved checksums. Reading and external key sorting remain necessary in this implementation; it does not assume row order or equal row counts.
+
+Measured on local Mac storage with synthetic integer Parquet data (not a server SLA):
+
+| Fixture | Original engine | Optimized engine |
+| --- | ---: | ---: |
+| 100,000 rows × 694 columns per file, shuffled keys, 100,000 changed cells | 35.777 s | 10.366 s |
+| 500,000 / 499,200 rows × 694 columns, independently shuffled keys, checkpoints enabled | Not measured | 39.244 s |
+
+The larger fixture used two approximately 2.35 GB files, a 512 MB sort budget and two sort workers. It correctly reported 499,000 changed cells, 1,000 left-only keys and 200 right-only keys. Including the Excel workbook and HTML report took 46.115 s. Timings exclude upload and fixture generation. The smaller comparison excludes reports and checkpoints. Text distributions, nested values, Excel parsing, mismatch volume, storage and concurrent jobs can materially change performance; two minutes is not guaranteed for every format.
+
+Run `python benchmark_wide_parquet.py --output <new-directory>` to reproduce the larger fixture, comparison and report timings. This consumes several GB of disk space. Scratch files using the new null bitmap format require this version or newer to resume; when rolling back, start a fresh comparison.

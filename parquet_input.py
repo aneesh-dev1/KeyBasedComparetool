@@ -43,7 +43,8 @@ class Rows:
     """Resume via a row offset, skipping complete row groups using metadata."""
     def __init__(self,path,indices,position=0,batch_rows=100000,memory_mb=64):
         self.file=open_file(path);self.position=position
-        self.names=[self.file.schema_arrow.names[i] for i in indices]
+        schema_names=self.file.schema_arrow.names
+        self.names=[schema_names[i] for i in indices]
         self.batch_rows=batch_rows;self.memory_mb=memory_mb
     def __enter__(self): return self
     def __exit__(self,*args): self.file.close()
@@ -81,3 +82,52 @@ class Rows:
 
 
 def is_parquet(path): return Path(path).suffix.lower()=='.parquet'
+
+class PackedRows(Rows):
+    """Assemble row payloads inside Arrow; materialize only keys and packed rows."""
+    def __init__(self,path,indices,key_positions,position=0,batch_rows=100000,memory_mb=64):
+        super().__init__(path,indices,position,batch_rows,memory_mb)
+        self.key_positions=key_positions
+    def __iter__(self):
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        from compare import pack_values
+        skipped=0
+        for group in range(self.file.num_row_groups):
+            meta=self.file.metadata.row_group(group)
+            if skipped+meta.num_rows<=self.position:
+                skipped+=meta.num_rows;continue
+            offset=max(0,self.position-skipped)
+            # Keep the same conservative decode budget as the reference reader.
+            selected=set(self.names);size=0
+            for i in range(meta.num_columns):
+                column=meta.column(i);parts=column.path_in_schema.split('.')
+                if any('.'.join(parts[:j]) in selected for j in range(1,len(parts)+1)):size+=column.total_uncompressed_size
+            per_row=max(1,size/max(1,meta.num_rows));target=min(16*1024**2,self.memory_mb*1024**2/4)
+            batch=max(1,min(self.batch_rows,65536,int(target/(per_row*8))))
+            for block in self.file.iter_batches(batch_size=batch,row_groups=[group],columns=self.names,use_threads=False):
+                if offset>=block.num_rows:offset-=block.num_rows;continue
+                if offset:block=block.slice(offset);offset=0
+                columns=[]
+                for name in self.names:
+                    array=block.column(block.schema.get_field_index(name));kind=array.type
+                    if pa.types.is_string(kind):text=array
+                    elif pa.types.is_large_string(kind):text=pc.cast(array,pa.string())
+                    elif pa.types.is_integer(kind) or pa.types.is_boolean(kind):text=pc.cast(array,pa.string())
+                    else:
+                        # Preserve exact existing float/date/binary/nested formatting.
+                        text=pa.array([text_value(v) for v in array.to_pylist()],type=pa.string())
+                    columns.append(text)
+                joined=pc.binary_join_element_wise(*columns,'\x1f',null_handling='replace',null_replacement='')
+                special=pc.not_equal(pc.count_substring(joined,'\x1f'),len(columns)-1).to_pylist()
+                if any(c.null_count for c in columns):
+                    flags=pc.binary_join_element_wise(*[pc.if_else(pc.is_null(c),'1','0') for c in columns],'')
+                    packed=pc.if_else(pc.greater(pc.count_substring(flags,'1'),0),pc.binary_join_element_wise('\x02',flags,'\x1e',joined,''),pc.binary_join_element_wise('\x00',joined,''))
+                else:packed=pc.binary_join_element_wise('\x00',joined,'')
+                payloads=pc.cast(packed,pa.binary()).to_pylist()
+                keys=[columns[i].to_pylist() for i in self.key_positions]
+                for i,key in enumerate(zip(*keys)):
+                    if special[i]:payloads[i]=pack_values([c[i].as_py() for c in columns])
+                    self.position+=1
+                    yield key,payloads[i]
+            skipped+=meta.num_rows
