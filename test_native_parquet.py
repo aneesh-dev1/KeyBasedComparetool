@@ -18,6 +18,20 @@ class NativeParquetTests(unittest.TestCase):
                     actual=list(source);self.assertEqual(source.tell(),4 if position<4 else position)
                 self.assertEqual([unpack_values(p) for _,p in actual],expected)
                 self.assertEqual([list(k) for k,_ in actual],[[r[0]] for r in expected])
+    def test_decimal_scales_and_float_formats(self):
+        arrays={'id':pa.array(['a','b','c','d','e','f','g'])}
+        for scale in (0,2,6,7,18,30,38):
+            arrays[f'decimal_{scale}']=pa.array([None]+[Decimal(v).scaleb(-scale) for v in (0,1,-1,123456,1234567,999999)],type=pa.decimal256(60,scale))
+        for kind in (pa.float32(),pa.float64()):
+            arrays[str(kind)]=pa.array([None,0.0,-0.0,float('nan'),float('inf'),-1e-7,1e20],type=kind)
+        table=pa.table(arrays)
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'numeric.parquet';pq.write_table(table,path,row_group_size=3)
+            for batch in (1,10000):
+                with Rows(path,list(range(table.num_columns)),batch_rows=batch) as source:expected=list(source)
+                with PackedRows(path,list(range(table.num_columns)),[0],batch_rows=batch) as source:actual=[unpack_values(p) for _,p in source]
+                self.assertEqual(actual,expected)
+
     def test_native_equals_reference_with_reordered_missing_duplicate_keys(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)

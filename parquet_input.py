@@ -98,12 +98,13 @@ class PackedRows(Rows):
             if skipped+meta.num_rows<=self.position:
                 skipped+=meta.num_rows;continue
             offset=max(0,self.position-skipped)
-            # Keep the same conservative decode budget as the reference reader.
+            # Native packing avoids the reference reader's per-cell Python objects.
+            # Allow a larger bounded working set to amortize wide-schema kernel calls.
             selected=set(self.names);size=0
             for i in range(meta.num_columns):
                 column=meta.column(i);parts=column.path_in_schema.split('.')
                 if any('.'.join(parts[:j]) in selected for j in range(1,len(parts)+1)):size+=column.total_uncompressed_size
-            per_row=max(1,size/max(1,meta.num_rows));target=min(16*1024**2,self.memory_mb*1024**2/4)
+            per_row=max(1,size/max(1,meta.num_rows));target=min(64*1024**2,self.memory_mb*1024**2/4)
             batch=max(1,min(self.batch_rows,65536,int(target/(per_row*8))))
             for block in self.file.iter_batches(batch_size=batch,row_groups=[group],columns=self.names,use_threads=False):
                 if offset>=block.num_rows:offset-=block.num_rows;continue
@@ -113,7 +114,10 @@ class PackedRows(Rows):
                     array=block.column(block.schema.get_field_index(name));kind=array.type
                     if pa.types.is_string(kind):text=array
                     elif pa.types.is_large_string(kind):text=pc.cast(array,pa.string())
-                    elif pa.types.is_integer(kind) or pa.types.is_boolean(kind):text=pc.cast(array,pa.string())
+                    elif pa.types.is_integer(kind) or pa.types.is_boolean(kind) or (pa.types.is_decimal(kind) and kind.scale>=0):text=pc.cast(array,pa.string())
+                    elif pa.types.is_floating(kind):
+                        # Python's float formatting is part of the text comparison contract.
+                        text=pa.array([None if v is None else str(v) for v in array.to_pylist()],type=pa.string())
                     else:
                         # Preserve exact existing float/date/binary/nested formatting.
                         text=pa.array([text_value(v) for v in array.to_pylist()],type=pa.string())
