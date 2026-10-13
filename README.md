@@ -819,4 +819,4 @@ The 1,000,000 × 1,780 fixture (5.16 GB per input, 100,000 changed cells, indepe
 
 The existing 500,000-row × 694-column integer Parquet benchmark remained comparable after enabling shared compression: 33.710 s comparison / 40.708 s including reports, versus 32.983 / 39.857 s before. The purpose of compression is to reduce scratch I/O on slower disks; it can add a small CPU overhead on fast storage.
 
-The default read/sort batch limit is 50,000 rows for CSV, imported Excel and Parquet; the configured memory budget may flush smaller batches. Saved workspace settings remain configurable. Comparison progress batches default to 10,000 keys.
+Read progress is logged every 50,000 source rows for CSV, imported Excel and Parquet. These updates do not sort or flush a batch. The default read/sort batch limit remains 100,000 rows, configurable in Settings; the memory budget may flush smaller batches. Comparison progress batches default to 10,000 keys.

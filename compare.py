@@ -240,7 +240,7 @@ def sort_csv(path, names, canonical, keys, temp, prefix, args):
 def input_rows(path,args,position=0,indices=None):
     if is_parquet(path):
         from parquet_input import Rows
-        with Rows(path,indices,position,getattr(args,'read_batch_size',50000),args.memory_mb) as source:
+        with Rows(path,indices,position,getattr(args,'read_batch_size',100000),args.memory_mb) as source:
             yield source,iter(source)
     else:
         with open(path,encoding=args.encoding,newline='',buffering=1024*1024) as source:
@@ -309,11 +309,11 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
                 if not native and len(row) != len(names):
                     raise ValueError(f'{path}: record {count}: expected {len(names)} fields, got {len(row)}')
                 key = row[0] if native else [row[i] for i in key_positions]
-                if count % 10000 == 0:
-                    progress(args, f'Reading {prefix} file', rows=count, excluded=excluded, batch=serial+1, batch_rows=len(chunk), status='ongoing')
                 encoded_key = encode(key)
                 if encoded_key in args.excluded_keys:
                     excluded += 1
+                    if count % 50000 == 0:
+                        progress(args, f'{prefix} read progress', rows=count, excluded=excluded, batch=serial+1, batch_rows=len(chunk), status='ongoing')
                     continue
                 if not args.allow_empty_keys and any(value is None or value == '' for value in key):
                     raise ValueError(f'{path}: record {count}: empty key component')
@@ -326,7 +326,9 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
                 # Includes byte objects, tuple, list pointer and sorting headroom.
                 size += len(item[0]) + len(item[1]) + 192
                 chunk.append(item)
-                if size >= budget or len(chunk) >= getattr(args, 'read_batch_size', 50000):
+                if count % 50000 == 0:
+                    progress(args, f'{prefix} read progress', rows=count, excluded=excluded, batch=serial+1, batch_rows=len(chunk), status='ongoing')
+                if size >= budget or len(chunk) >= getattr(args, 'read_batch_size', 100000):
                     if checkpoint: position=stream.tell()
                     flush()
             if checkpoint: position=stream.tell()
@@ -428,7 +430,7 @@ def sort_inputs(args, left_names, right_names, canonical, temp):
 
 def execution_settings(config):
     settings = {}
-    for name, default in [('read_batch_size', 50000), ('compare_batch_size', 10000)]:
+    for name, default in [('read_batch_size', 100000), ('compare_batch_size', 10000)]:
         value = config.get(name, default)
         if type(value) is not int or not 1 <= value <= 1000000:
             raise ValueError(f'{name} must be an integer between 1 and 1,000,000')
@@ -618,7 +620,7 @@ def parser():
     p.add_argument('--output', required=True, help='New report directory; must not exist')
     p.add_argument('--memory-mb', type=int, default=256, help='Sort chunk budget, not total process RSS')
     p.add_argument('--sort-workers', type=int, choices=(1,2), default=1, help='Parallel file-sorting processes; memory-mb is split between them')
-    p.add_argument('--read-batch-size', type=int, default=50000)
+    p.add_argument('--read-batch-size', type=int, default=100000)
     p.add_argument('--compare-batch-size', type=int, default=10000)
     p.add_argument('--duplicate-policy', choices=('first', 'last'), default='first')
     p.add_argument('--checkpoint-dir', help='Persistent validated sort batches for restart recovery')

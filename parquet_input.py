@@ -41,7 +41,7 @@ def text_value(value):
 
 class Rows:
     """Resume via a row offset, skipping complete row groups using metadata."""
-    def __init__(self,path,indices,position=0,batch_rows=50000,memory_mb=64):
+    def __init__(self,path,indices,position=0,batch_rows=100000,memory_mb=64):
         self.file=open_file(path);self.position=position
         schema_names=self.file.schema_arrow.names
         self.names=[schema_names[i] for i in indices]
@@ -85,7 +85,7 @@ def is_parquet(path): return Path(path).suffix.lower()=='.parquet'
 
 class PackedRows(Rows):
     """Assemble row payloads inside Arrow; materialize only keys and packed rows."""
-    def __init__(self,path,indices,key_positions,position=0,batch_rows=50000,memory_mb=64):
+    def __init__(self,path,indices,key_positions,position=0,batch_rows=100000,memory_mb=64):
         super().__init__(path,indices,position,batch_rows,memory_mb)
         self.key_positions=key_positions
     def __iter__(self):
