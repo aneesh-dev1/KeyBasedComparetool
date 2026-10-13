@@ -1,4 +1,4 @@
-"""Generate a reproducible wide CSV pair and validate/timestamp the current engine.
+"""Generate a reproducible wide CSV or Parquet pair and validate/timestamp the current engine.
 
 Example: py -3 benchmark.py --output benchmark-100k --rows 100000
 Use a new output directory. No user files are read or overwritten.
@@ -22,6 +22,8 @@ def main():
     p.add_argument('--columns',type=int,default=2000)
     p.add_argument('--memory-mb',type=int,default=4096)
     p.add_argument('--sort-workers',type=int,choices=(1,2),default=2)
+    p.add_argument('--checkpoints',action='store_true',help='Include source validation and persistent sort checkpoints')
+    p.add_argument('--reports',action='store_true',help='Also time Excel and HTML generation')
     args=p.parse_args()
     if not 1<=args.rows<=1000000 or not 2<=args.columns<=10000 or args.memory_mb<1:
         p.error('Use 1–1,000,000 rows, 2–10,000 columns, and a positive memory budget')
@@ -56,11 +58,12 @@ def main():
                         columns[f'c{col}']=['changed' if side=='right' and k%10==0 and col==(args.columns-1)//2 else templates[k%97][col] for k in keys]
                     writer.write_table(pa.table(columns,schema=schema))
     configuration=comparison_parser().parse_args([str(root/f'left.{args.format}'),str(root/f'right.{args.format}'),'--keys','id','--output',str(root/'report'),'--temp-dir',str(root),'--memory-mb',str(args.memory_mb),'--sort-workers',str(args.sort_workers),'--fan-in','32'])
+    if args.checkpoints:configuration.checkpoint_dir=root/'checkpoints'
     peak=[0];stop=threading.Event()
     def monitor():
         while not stop.is_set():
             size=0
-            for directory in root.glob('csv-compare-*'):
+            for directory in [*root.glob('csv-compare-*'),root/'checkpoints']:
                 for file in directory.glob('*.run'):
                     try:size+=file.stat().st_size
                     except FileNotFoundError:pass
@@ -68,17 +71,24 @@ def main():
             stop.wait(.25)
     sampler=threading.Thread(target=monitor,daemon=True);sampler.start()
     started=time.monotonic()
-    try:summary=compare(configuration)
+    try:
+        summary=compare(configuration)
+        comparison_seconds=time.monotonic()-started
     finally:stop.set();sampler.join()
     expected=(args.rows+9)//10
     if summary['changed_cells']!=expected or summary['changed_rows']!=expected or summary['equal_rows']!=args.rows-expected or summary['left_only'] or summary['right_only']:
         raise AssertionError('Benchmark comparison result was incorrect')
+    if args.reports:
+        from reports import export_excel,export_html
+        export_excel(root/'report',root/'mismatches.xlsx',lambda message:None)
+        export_html(root/'report',root/'comparison-report.html',lambda message:None)
     result=dict(format=args.format,platform=platform.platform(),python=platform.python_version(),rows_per_file=args.rows,columns=args.columns,
                 input_bytes={side:(root/f'{side}.{args.format}').stat().st_size for side in ('left','right')},
                 total_sort_memory_mb=args.memory_mb,sort_workers=args.sort_workers,
+                checkpoints=args.checkpoints,reports=args.reports,comparison_seconds=round(comparison_seconds,3),
                 elapsed_seconds=round(time.monotonic()-started,3),sampled_peak_scratch_bytes=peak[0],
                 expected_changed_cells=expected,correctness_verified=True,
-                note='Elapsed time excludes generation and Excel/HTML export. Scratch is sampled every 250 ms, not an exact peak. RAM is not measured.')
+                note='Elapsed time excludes generation; includes reports/checkpoints only when selected. Scratch is sampled every 250 ms, not an exact peak. RAM is not measured.')
     (root/'benchmark.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
     print(json.dumps(result,indent=2))
 

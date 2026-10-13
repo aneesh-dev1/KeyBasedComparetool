@@ -184,6 +184,8 @@ def unpack_values(payload):
 
 
 def records(stream):
+    from run_io import wrap_reader
+    stream=wrap_reader(stream)
     while True:
         framing = stream.read(FRAME.size)
         if not framing:
@@ -205,15 +207,21 @@ def merge(paths):
 
 def write_run(path, rows, args=None):
     import hashlib
+    from run_io import RunWriter
     checksum=hashlib.sha256() if getattr(args,'checkpoint_dir',None) else None
     with open(path, 'wb', buffering=1024*1024) as stream:
+        class Sink:
+            def write(self,data):
+                stream.write(data)
+                if checksum is not None:checksum.update(data)
+        sink=Sink()
+        writer=sink if getattr(args,'raw_scratch_runs',False) else RunWriter(sink)
         for index,(key, payload) in enumerate(rows):
             if index%10000==0: check_cancel(getattr(args,'cancel_file',None))
-            frame=FRAME.pack(len(key), len(payload))
-            stream.write(frame)
-            stream.write(key)
-            stream.write(payload)
-            if checksum is not None:checksum.update(frame);checksum.update(key);checksum.update(payload)
+            writer.write(FRAME.pack(len(key), len(payload)))
+            writer.write(key)
+            writer.write(payload)
+        if isinstance(writer,RunWriter):writer.finish()
         size=stream.tell()
         if checksum is not None:stream.flush();os.fsync(stream.fileno())
     return dict(name=Path(path).name,size=size,sha256=checksum.hexdigest()) if checksum is not None else None
@@ -243,6 +251,7 @@ def input_rows(path,args,position=0,indices=None):
 
 
 def _sort_csv(path, names, canonical, keys, temp, prefix, args):
+    sort_started=time.monotonic()
     progress(args, f'Reading {prefix} file', rows=0)
     projection=[names.index(name) for name in canonical] if is_parquet(path) else None
     if projection is not None: names=canonical
@@ -281,12 +290,17 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
         chunk, size = [], 0
 
     if not reading_complete:
-        native=is_parquet(path) and not getattr(args,'reference_parquet_reader',False)
+        native_parquet=is_parquet(path) and not getattr(args,'reference_parquet_reader',False)
+        native_csv=not is_parquet(path) and not getattr(args,'reference_csv_reader',False)
+        native=native_parquet or native_csv
         @contextlib.contextmanager
         def source_rows():
-            if native:
+            if native_parquet:
                 from parquet_input import PackedRows
                 with PackedRows(path,projection,key_positions,position,args.read_batch_size,args.memory_mb) as source:yield source,iter(source)
+            elif native_csv:
+                from csv_input import PackedRows
+                with PackedRows(path,names,order,key_positions,args,position,count) as source:yield source,iter(source)
             else:
                 with input_rows(path,args,position,projection) as pair:yield pair
         with source_rows() as (stream,reader):
@@ -316,6 +330,7 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
                     if checkpoint: position=stream.tell()
                     flush()
             if checkpoint: position=stream.tell()
+            if native_csv:progress(args, f'{prefix} CSV packing complete', direct_rows=stream.direct_rows, parsed_rows=stream.parsed_rows)
         if chunk or not paths:
             flush()
         if checkpoint: checkpoint.save(paths,count,excluded,serial,position,True)
@@ -343,7 +358,7 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
             checkpoint.save(replacement,count,excluded,serial,position,True)
             for source in paths: source.unlink()
         paths = replacement
-    progress(args, f'Read and sort {prefix} complete', rows=count, excluded=excluded)
+    progress(args, f'Read and sort {prefix} complete', rows=count, excluded=excluded, elapsed_seconds=round(time.monotonic()-sort_started,3), scratch_bytes=sum(p.stat().st_size for p in paths))
     return paths, count, excluded
 
 

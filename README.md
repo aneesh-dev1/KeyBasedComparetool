@@ -796,3 +796,25 @@ Run `python benchmark_wide_parquet.py --output <new-directory>` to reproduce the
 Native packing now allows a working-set target of up to 64 MiB (still capped at one quarter of the file worker's sort budget, with the same eightfold metadata expansion allowance and configured read-row limit). This amortizes per-column kernel setup for wide inputs. Decimals with nonnegative scale use Arrow string conversion; float conversion retains Python formatting with less dispatch overhead. Negative-scale decimals retain the reference conversion. Exact-format tests cover decimal scales through 38, nulls, signed zero, NaN/infinity and float32/float64.
 
 Compared with commit `84d59d0`, local read-and-pack microbenchmarks improved from 3.368 s to 2.167 s for 100,000 × 694 integer values and from 6.008 s to 2.194 s for 20,000 × 694 mixed decimal/float values. These timings exclude sorting, validation and reports. The larger 500,000/499,200-row integer fixture above completed comparison in 32.983 s, and comparison plus both reports in 39.857 s, with identical expected counts. Timings are individual synthetic runs on local storage, not promised production speedups. Decoding threading remains unchanged because the measured benefit was small.
+
+## CSV and HDD performance
+
+Ordinary unquoted CSV rows with the same selected column order are now packed directly: delimiter counting and replacement run without creating a Python object for every cell. Keys remain exact text. Quoted/multiline records, embedded payload separators, projected/reordered columns and large records use the existing strict CSV parsing semantics. UTF encodings, field limits and text-stream checkpoint positions are preserved. Logs report direct/parsed record counts and each file's total read/sort duration plus retained scratch bytes. Excel's imported CSV also benefits when eligible.
+
+All tabular formats now write losslessly compressed temporary sort runs in bounded 4 MiB blocks. PyArrow LZ4 is preferred when installed, with standard-library zlib as fallback. Blocks without useful compression stay raw. Merge reads decompress one block at a time, and checkpoint hashes cover the actual stored bytes. Existing uncompressed checkpoints remain readable. Rolling back to an older app requires fresh comparisons if saved runs use the new format. Compression adds bounded buffers (up to 4 MiB decoded data per open merge run, plus transient compression/decompression buffers); the sort budget remains distinct from a process-wide RAM cap.
+
+For a **32 GB machine with an HDD**, start with Settings → Performance: **4 GB total sort memory, Sequential file sorting, 1,000,000 read/sort rows**. Batches still flush on reaching the memory budget. Keep heavy-job concurrency at one for a single physical HDD; five browser users can queue independent jobs without five simultaneous disk-intensive workers. Parallel sorting remains suitable for an SSD when measured beneficial. Keeping sources and scratch on an SSD gives a larger I/O improvement than increasing comparison progress-batch size. Excel ZIP/XML import must still run, and every input must still be read.
+
+Local synthetic 100,000 × 1,780 CSV comparison (shuffled keys, identical values, 512 MB budget, sequential sorting, no checkpoints/reports) improved from 12.863 s to 2.287 s with direct packing alone. This uses short numeric text and repeated patterns, and is not an HDD timing guarantee. Quoted/projected data follows the parser fallback; compression benefits depend on the data.
+
+To measure the complete pipeline on the deployment machine:
+
+```sh
+python benchmark.py --format csv --output benchmark-csv-million --rows 1000000 --columns 1780 --memory-mb 4096 --sort-workers 1 --checkpoints --reports
+```
+
+Use a new output directory and allow space for two inputs, scratch and reports. The script checks expected mismatch counts and records comparison and total elapsed time separately; fixture creation and upload are excluded. Never disable validation or drop differences to meet a time target.
+
+The 1,000,000 × 1,780 fixture (5.16 GB per input, 100,000 changed cells, independently shuffled keys) completed comparison in 37.701 s and comparison plus reports in 38.998 s on local Mac storage with a 512 MB sort budget, sequential sorting and checkpoints enabled. Retained compressed scratch was 90,761,291 bytes. The unusually high compression comes from repeated numeric patterns; real data may compress much less, and these are not measurements on an HDD.
+
+The existing 500,000-row × 694-column integer Parquet benchmark remained comparable after enabling shared compression: 33.710 s comparison / 40.708 s including reports, versus 32.983 / 39.857 s before. The purpose of compression is to reduce scratch I/O on slower disks; it can add a small CPU overhead on fast storage.
