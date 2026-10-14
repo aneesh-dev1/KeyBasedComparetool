@@ -193,7 +193,7 @@ class NativeCSVTests(unittest.TestCase):
                                'utf-16')
         args = parser().parse_args([str(left), str(right), '--keys', 'id', '--output',
                                    str(self.root / 'resumed'), '--encoding', 'utf-16',
-                                   '--read-batch-size', '2', '--checkpoint-dir', str(self.root / 'saved')])
+                                   '--read-batch-size', '2', '--checkpoint-dir', str(self.root / 'saved'), '--engine', 'sort'])
         original_progress = engine.progress
 
         def interrupt_after_plain_batch(args, message, **values):
@@ -208,7 +208,7 @@ class NativeCSVTests(unittest.TestCase):
             self.assertEqual(json.loads((self.root / 'saved/left.json').read_text())['count'], 2)
             result = compare(args)
             reference_args = parser().parse_args([str(left), str(right), '--keys', 'id', '--output',
-                                                 str(self.root / 'reference'), '--encoding', 'utf-16'])
+                                                 str(self.root / 'reference'), '--encoding', 'utf-16', '--engine', 'sort'])
             reference_args.reference_csv_reader = True
             compare(reference_args)
         self.assertEqual(result['matched_keys'], 5)

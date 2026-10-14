@@ -115,7 +115,11 @@ class TeamServerTests(unittest.TestCase):
         raw=b'id,v\n1,a\n';j=c.request('/api/jobs',{'files':{s:dict(name=s+'.csv',size=len(raw)) for s in ('left','right')}});path='/api/jobs/'+j['id']
         for side in ('left','right'):c.request(path+f'/files/{side}?offset=0',raw,'PUT')
         c.request(path+'/finalize',{})
-        with self.assertRaises(HTTPError):c.request(path+'/start',dict(keys=['id'],memory_mb=4096))
+        # Old clients may send tuning, but execution obeys current resources/admin limits.
+        c.request(path+'/start',dict(keys=['id'],memory_mb=4096))
+        ready=c.wait(path,lambda job:job['state'] in ('complete','error'))
+        self.assertEqual(ready['state'],'complete',ready)
+        self.assertEqual(ready['runtime_settings']['memory_mb'],64)
     def test_configuration_and_data_lock(self):
         for url in ['ftp://host','http://user:pass@host','http://host/path','http://host?q=x']:
             with self.assertRaises(ValueError):make_server(self.temp.name,0,public_url=url)

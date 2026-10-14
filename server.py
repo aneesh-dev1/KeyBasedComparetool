@@ -37,6 +37,21 @@ BASE = Path(__file__).resolve().parent
 CHUNK = 8 * 1024 * 1024
 
 
+def resume_strategy(directory,job):
+    checkpoints=Path(directory)/'checkpoints'
+    if not (checkpoints/'identity.json').exists():return None
+    if job.get('comparison_engine','sort')=='sort' or any((checkpoints/(side+'.json')).exists() for side in ('left','right')):
+        return 'sort'
+    return 'hash'
+
+
+def resume_message(directory,job):
+    strategy=resume_strategy(directory,job)
+    if strategy=='sort':return 'Resume this job to reuse validated sort batches.'
+    if strategy=='hash':return 'Resume this job to rebuild its in-memory key lookup; sources will be validated again.'
+    return 'Start a new comparison.'
+
+
 class Application:
     def __init__(self, root, max_jobs=1):
         self.root = Path(root).resolve()
@@ -58,7 +73,7 @@ class Application:
             job = json.loads(path.read_text())
             changed = False
             if job['state'] in ('queued', 'running', 'preparing'):
-                job.update(state='error', error='Server stopped before comparison completed. Resume this job to reuse validated sort batches.' if (path.parent/'checkpoints/identity.json').exists() else 'Server stopped before comparison completed. Start a new comparison.')
+                job.update(state='error', error='Server stopped before comparison completed. '+resume_message(path.parent,job))
                 changed = True
             if job.get('analysis', {}).get('state') in ('queued', 'running'):
                 job['analysis'] = dict(state='error', message='Analysis preparation interrupted. Try again.')
@@ -91,7 +106,7 @@ class Application:
         if kind in ('excel','html','ai'):
             job['exports'][kind]=dict(state='cancelled',updated=time.time(),message='Export cancelled. Generate it again when ready.')
         elif kind=='analysis':job['analysis']=dict(state='cancelled',updated=time.time(),message='Analysis cancelled. Use Retry to prepare it again.')
-        else:job.update(state='cancelled',error='Cancelled by user. Resume saved sort batches when ready.' if (self.directory(identity)/'checkpoints/identity.json').exists() else 'Cancelled by user. Start a new comparison.',finished=time.time())
+        else:job.update(state='cancelled',error='Cancelled by user. '+resume_message(self.directory(identity),job),finished=time.time())
         self.save(job)
 
     def cancel(self,identity,kind):
@@ -123,7 +138,8 @@ class Application:
             for export in job.get('exports', {}).values():
                 if export.get('state') == 'complete' and export.get('report_version') != REPORT_VERSION:
                     export.update(state='outdated', message='New report layout available. Generate this export again.')
-            job['can_resume']=job['state'] in ('error','cancelled') and (self.directory(identity)/'checkpoints/identity.json').exists()
+            job['resume_strategy']=resume_strategy(self.directory(identity),job)
+            job['can_resume']=job['state'] in ('error','cancelled') and job['resume_strategy'] is not None
         return job
 
     def save(self, job):
@@ -158,7 +174,7 @@ class Application:
             arrow()
         identity = uuid.uuid4().hex
         self.directory(identity).mkdir()
-        job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, exports={})
+        job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, comparison_engine='auto', exports={})
         required=sum(f['size'] for f in files.values())
         if shutil.disk_usage(self.root).free<required+128*1024**2:
             self.directory(identity).rmdir()
@@ -276,7 +292,7 @@ class Application:
 
     def run_comparison(self, identity):
         if self.load(identity).get('execution_mode')=='review':return self.run_review(identity)
-        self.patch(identity, state='running', started=time.time())
+        self.patch(identity, state='running', started=time.time(), memory_cap_mb=getattr(self, 'memory_cap_mb', 0), memory_concurrency=self.max_jobs)
         job = self.load(identity)
         directory = self.directory(identity)
         command = [sys.executable, str(BASE / 'worker.py'), str(directory)]
@@ -463,7 +479,7 @@ class Handler(BaseHTTPRequestHandler):
             path, query = self.check_request()
             if self.command == 'GET' and path == '/health':
                 return self.json_response(dict(service='key-based-compare', status='ready', pid=os.getpid()))
-            if self.command == 'GET' and path in ('/', '/app.js', '/style.css', '/assets/transunion-logo.svg'):
+            if self.command == 'GET' and path in ('/', '/app.js', '/live-preview.js', '/style.css', '/assets/transunion-logo.svg'):
                 target = BASE / 'web' / ('index.html' if path == '/' else path[1:])
                 data = target.read_bytes().replace(b'__APP_TOKEN__', self.app.token.encode()).replace(b'__WORKSPACE_MODE__', b'team' if self.server.shared else b'local').replace(b'__MAX_SORT_MB__', str(self.server.max_sort_mb).encode())
                 self.send_response(200)
@@ -576,6 +592,7 @@ class Handler(BaseHTTPRequestHandler):
                         settings=validate_settings(self.body(),self.server.max_sort_mb)
                         atomic_write_text(target,json.dumps(settings))
                     settings=json.loads(target.read_text()) if target.exists() else validate_settings({},self.server.max_sort_mb)
+                    settings.setdefault('comparison_engine','auto')
                 return self.json_response(settings)
             if path == '/api/profiles' and self.command in ('GET','POST','DELETE'):
                 target=self.container_path().with_name('comparison-profiles.json')
@@ -587,7 +604,7 @@ class Handler(BaseHTTPRequestHandler):
                         if item['state'] not in ('ready','complete'):raise ValueError('Configure the comparison before saving a profile')
                         name=config.get('name','').strip()
                         if not name or len(name)>100:raise ValueError('Enter a profile name of 1–100 characters')
-                        profile=dict(id=uuid.uuid4().hex,name=name,source_headers=item['source_headers'],column_headers=item['column_headers'],config=item.get('draft',{}) if item['state']=='ready' else {key:item.get(key) for key in ('keys','ignore_columns','ignore_keys','ignore_container_ids','value_overrides','comparison_rules','memory_mb','sort_workers','read_batch_size','compare_batch_size','duplicate_policy')})
+                        profile=dict(id=uuid.uuid4().hex,name=name,source_headers=item['source_headers'],column_headers=item['column_headers'],config=item.get('draft',{}) if item['state']=='ready' else {key:item.get(key) for key in ('keys','ignore_columns','ignore_keys','ignore_container_ids','value_overrides','comparison_rules','memory_mb','comparison_engine','sort_workers','read_batch_size','compare_batch_size','duplicate_policy')})
                         profile['config']={k:v for k,v in profile['config'].items() if k not in PERFORMANCE}
                         settings_path=self.container_path().with_name('settings.json')
                         defaults=json.loads(settings_path.read_text()) if settings_path.exists() else {}
@@ -757,8 +774,15 @@ class Handler(BaseHTTPRequestHandler):
                 progress = directory / 'progress.json'
                 if progress.exists():
                     job['progress'] = json.loads(progress.read_text())
+                runtime = directory / 'runtime-settings.json'
+                if runtime.exists():
+                    job['runtime_settings'] = json.loads(runtime.read_text())
+                    job.update({key: value for key, value in job['runtime_settings'].items() if key in PERFORMANCE})
                 job['free_disk_bytes'] = shutil.disk_usage(directory).free
                 return self.json_response(job)
+            if self.command == 'GET' and action == 'live-preview':
+                from live_preview import read_preview
+                return self.json_response(read_preview(directory,job['state']))
             if self.command == 'GET' and action == 'logs':
                 cursor = max(0, int(query.get('cursor', ['0'])[0]))
                 path = directory / 'run.log'
@@ -825,7 +849,7 @@ class Handler(BaseHTTPRequestHandler):
                     if job['state'] != 'ready':
                         raise ValueError('Configuration is locked after comparison starts')
                     # Drafts are validated before execution; preserve partially filled forms.
-                    job['draft'] = {key: config.get(key) for key in ('keys', 'ignore_columns', 'ignore_keys', 'memory_mb', 'comparison_rules', 'value_overrides', 'ignore_container_ids', 'sort_workers', 'read_batch_size', 'compare_batch_size', 'duplicate_policy') if key not in ('ignore_container_ids', 'sort_workers','comparison_rules','read_batch_size','compare_batch_size','duplicate_policy') or key in config}
+                    job['draft'] = {key: config.get(key) for key in ('keys', 'ignore_columns', 'ignore_keys', 'memory_mb', 'comparison_engine', 'comparison_rules', 'value_overrides', 'ignore_container_ids', 'sort_workers', 'read_batch_size', 'compare_batch_size', 'duplicate_policy') if key not in ('comparison_engine', 'ignore_container_ids', 'sort_workers','comparison_rules','read_batch_size','compare_batch_size','duplicate_policy') or key in config}
                     self.app.save(job)
                 return self.json_response({'saved': True})
             if self.command == 'PUT' and action in ('files/left', 'files/right'):
@@ -921,15 +945,9 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('Select at least one valid, unique key column')
                     settings_path=self.container_path().with_name('settings.json')
                     defaults=json.loads(settings_path.read_text()) if settings_path.exists() else {}
-                    config.update({k:defaults[k] for k in PERFORMANCE if k in defaults})
-                    memory = int(config.get('memory_mb', min(4096,self.server.max_sort_mb)))
-                    if memory not in (64, 128, 256, 512, 1024, 2048, 4096, 8192):
-                        raise ValueError('Invalid memory setting')
-                    if memory > self.server.max_sort_mb:
-                        raise ValueError(f'The server limits each comparison to {self.server.max_sort_mb} MB sort memory')
-                    sort_workers = config.get('sort_workers', 2)
-                    if type(sort_workers) is not int or sort_workers not in (1, 2):
-                        raise ValueError('Choose one or two sort workers')
+                    # Queue placeholders only. The worker sizes itself when it actually starts,
+                    # so saved tuning or a stale client cannot override current resource limits.
+                    config.update(comparison_engine='auto', read_batch_size=100000, compare_batch_size=10000)
                     ignored_columns, _ = validate_scope(keys, job['columns'], config.get('ignore_columns', []), config.get('ignore_keys', ''))
                     ids = config.get('ignore_container_ids', [])
                     if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
@@ -945,7 +963,7 @@ class Handler(BaseHTTPRequestHandler):
                         validate_scope(keys, job['columns'], [], item['values'])
                     overrides, _ = validate_overrides(config.get('value_overrides', []), job['columns'], keys, ignored_columns)
                     rules=resolved_rules(defaults,config,job['columns'],keys,ignored_columns)
-                    job.update(**execution_settings(config),comparison_rules=rules,state='queued', keys=keys, memory_mb=memory, sort_workers=sort_workers,
+                    job.update(**execution_settings(config),comparison_rules=rules,state='queued', keys=keys, memory_cap_mb=self.server.max_sort_mb, sort_workers=1,
                                ignore_columns=ignored_columns, ignore_keys=config.get('ignore_keys', ''), value_overrides=overrides,
                                ignore_container_ids=ids, ignore_key_containers=containers)
                     if job.get('execution_mode')=='review':
@@ -985,6 +1003,9 @@ class Handler(BaseHTTPRequestHandler):
                     if not job.get('can_resume') or self.app.busy(job):
                         raise ValueError('This job has no resumable comparison, or is already active')
                     job.update(state='queued',error='',finished=None)
+                    from live_preview import LivePreview
+                    LivePreview(directory/'live-preview.json').publish({}, {},0,phase='prepare',force=True)
+                    atomic_write_text(directory/'progress.json',json.dumps(dict(stage='validate',phase='Queued for source validation')))
                     self.app.save(job)
                     self.app.submit(identity,'comparison',self.app.run_comparison)
                 return self.json_response(job,202)
@@ -1084,11 +1105,11 @@ class Handler(BaseHTTPRequestHandler):
     do_DELETE = guarded_dispatch
 
 
-def make_server(root, port=8765, host='127.0.0.1', public_url=None, max_jobs=1, max_sort_mb=8192):
+def make_server(root, port=8765, host='127.0.0.1', public_url=None, max_jobs=1, max_sort_mb=0):
     if not 1 <= max_jobs <= 5:
         raise ValueError('Concurrent comparisons must be between 1 and 5')
-    if max_sort_mb not in (64,128,256,512,1024,2048,4096,8192):
-        raise ValueError('Invalid server sort memory limit')
+    if type(max_sort_mb) is not int or max_sort_mb < 0:
+        raise ValueError('Invalid server comparison memory limit')
     if public_url:
         parsed = urlsplit(public_url)
         if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
@@ -1101,6 +1122,7 @@ def make_server(root, port=8765, host='127.0.0.1', public_url=None, max_jobs=1, 
     server.public_url = public_url
     server.max_sort_mb = max_sort_mb
     server.app = Application(root, max_jobs)
+    server.app.memory_cap_mb = max_sort_mb
     return server
 
 
@@ -1131,7 +1153,7 @@ if __name__ == '__main__':
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--public-url', help='Team URL, such as http://compare.internal:8765; enables separate browser workspaces without login')
     parser.add_argument('--max-jobs', type=int, default=1, help='Maximum simultaneous comparisons/imports/exports; other jobs queue')
-    parser.add_argument('--max-sort-mb', type=int, default=4096, help='Maximum sort budget for each comparison')
+    parser.add_argument('--max-sort-mb', '--max-memory-mb', dest='max_sort_mb', type=int, default=0, help='Optional administrator memory ceiling in MB; 0 sizes automatically from available RAM')
     parser.add_argument('--data-dir', default=str(BASE / 'data'), help='Upload, scratch and report storage; use a fast SSD')
     parser.add_argument('--retention-days', type=int, default=7, help='Delete inactive jobs after this many days; 0 disables automatic cleanup')
     parser.add_argument('--open', action='store_true', help='Open the UI in your default browser')
@@ -1151,7 +1173,7 @@ if __name__ == '__main__':
     url = args.public_url or f'http://127.0.0.1:{server.server_address[1]}'
     print(f'CSV Compare is ready at {url}', flush=True)
     print(f'Data directory: {server.app.root}', flush=True)
-    print(f'Concurrent heavy jobs: {args.max_jobs}; per-job sort budget limit: {args.max_sort_mb} MB', flush=True)
+    print(f"Concurrent heavy jobs: {args.max_jobs}; comparison memory: {str(args.max_sort_mb)+' MB administrator ceiling' if args.max_sort_mb else 'automatic, no fixed ceiling'}", flush=True)
     if server.shared:
         print('Team mode: no login; separate browser workspaces. Keep access on a trusted internal network.', flush=True)
     if args.open:

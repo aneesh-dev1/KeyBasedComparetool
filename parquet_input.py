@@ -41,11 +41,11 @@ def text_value(value):
 
 class Rows:
     """Resume via a row offset, skipping complete row groups using metadata."""
-    def __init__(self,path,indices,position=0,batch_rows=100000,memory_mb=64):
+    def __init__(self,path,indices,position=0,batch_rows=100000,memory_mb=64,native_batch_bytes=None):
         self.file=open_file(path);self.position=position
         schema_names=self.file.schema_arrow.names
         self.names=[schema_names[i] for i in indices]
-        self.batch_rows=batch_rows;self.memory_mb=memory_mb
+        self.batch_rows=batch_rows;self.memory_mb=memory_mb;self.native_batch_bytes=native_batch_bytes
     def __enter__(self): return self
     def __exit__(self,*args): self.file.close()
     def tell(self): return self.position
@@ -63,7 +63,7 @@ class Rows:
                 if any('.'.join(parts[:j]) in name_set for j in range(1,len(parts)+1)):
                     selected_bytes+=column.total_uncompressed_size
             per_row=max(1,selected_bytes/max(1,meta.num_rows))
-            target=min(16*1024**2,self.memory_mb*1024**2/4)
+            target=min(self.native_batch_bytes or 16*1024**2,self.memory_mb*1024**2/4)
             batch=max(1,min(self.batch_rows,65536,int(target/(per_row*8))))
             for block in self.file.iter_batches(batch_size=batch,row_groups=[group],columns=self.names,use_threads=False):
                 if offset>=block.num_rows: offset-=block.num_rows;continue
@@ -85,8 +85,8 @@ def is_parquet(path): return Path(path).suffix.lower()=='.parquet'
 
 class PackedRows(Rows):
     """Assemble row payloads inside Arrow; materialize only keys and packed rows."""
-    def __init__(self,path,indices,key_positions,position=0,batch_rows=100000,memory_mb=64):
-        super().__init__(path,indices,position,batch_rows,memory_mb)
+    def __init__(self,path,indices,key_positions,position=0,batch_rows=100000,memory_mb=64,native_batch_bytes=None):
+        super().__init__(path,indices,position,batch_rows,memory_mb,native_batch_bytes)
         self.key_positions=key_positions
     def __iter__(self):
         import pyarrow as pa
@@ -104,7 +104,7 @@ class PackedRows(Rows):
             for i in range(meta.num_columns):
                 column=meta.column(i);parts=column.path_in_schema.split('.')
                 if any('.'.join(parts[:j]) in selected for j in range(1,len(parts)+1)):size+=column.total_uncompressed_size
-            per_row=max(1,size/max(1,meta.num_rows));target=min(64*1024**2,self.memory_mb*1024**2/4)
+            per_row=max(1,size/max(1,meta.num_rows));target=min(self.native_batch_bytes or 64*1024**2,self.memory_mb*1024**2/4)
             batch=max(1,min(self.batch_rows,65536,int(target/(per_row*8))))
             for block in self.file.iter_batches(batch_size=batch,row_groups=[group],columns=self.names,use_threads=False):
                 if offset>=block.num_rows:offset-=block.num_rows;continue

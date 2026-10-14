@@ -22,7 +22,7 @@ Open **http://127.0.0.1:8765**. No third-party packages are required.
 
 1. Choose the left and right CSVs and upload them. Uploads use 8 MB chunks,
    streamed to disk. After an interruption, reselect the same files and resume.
-2. Search and select the key columns, then choose the total sort memory budget.
+2. Search and select the key columns. Memory and batch sizes are selected automatically when the job starts.
    The 32 GB RAM profile defaults to **4 GB** and **parallel** file sorting.
    Optionally select ignored columns and enter ignored key values.
 3. Continue to **Value Overrides** and add any allowed column/value pairs.
@@ -168,30 +168,11 @@ scratch files behind. Duplicate detection can occur late during the merge.
 
 ## Large-file design and sizing
 
-Each CSV is read once and converted to sorted runs using a configurable memory
-budget. Parallel mode sorts the two files in separate processes using Windows
-compatible process spawning. Bounded fan-in merges limit simultaneously open
-files. The final merge compares matching keys sequentially. Compact binary
-runs avoid JSON quoting for ordinary row values; unusual separator characters
-use an exact JSON fallback. Identical serialized rows are compared as bytes;
-only changed rows are decoded for cell-level output. Equality is exact, without
-probabilistic hash shortcuts. Complexity is O(N log N) for sorting and
-O(total input bytes) for the final scan, plus the size of reports.
+The default engine builds exact key lookups from both sources, retaining packed rows within a measured memory budget. Key order and different row counts do not need to match. First/last duplicate handling is preserved. Only key references are ordered for deterministic output; full row payloads avoid sort files when the lookups fit. If the budget is exceeded, the lookups are released and comparison restarts using compressed external sorting. Saved sort checkpoints select that fallback directly. Inputs still must be read; checkpoint fingerprint validation also reads source files.
 
-For the requested **32 GB Windows machine and two 6 GB files**, begin with the
-UI defaults: **4 GB total sort budget**, **two sort workers**, and a local SSD
-for the data directory. Each sorter receives half the budget. The UI also
-offers 2 GB and 8 GB budgets; leave enough RAM for Windows, the browser and
-other applications. Choose sequential mode if concurrent reads slow down a
-mechanical disk or shared storage. This is a starting configuration, not an
-automatic hardware measurement or a guaranteed fastest setting.
+The application measures currently available RAM, CPU capacity and free workspace storage at worker launch. There is **no fixed default memory ceiling**. It keeps 25% of available RAM (at least 2 GB where possible) outside the comparison budget, accounts for configured concurrent workers, and adapts read batches and buffers to column width. Hash objects use at most 80% of that budget, reserving more space for transient decoding and ordering. These are allocation targets, not a hard process RSS limit. A single exceptionally large row can exceed a target. An administrator can optionally impose an explicit deployment ceiling with `MAX_SORT_MB`; its default is `0` (automatic).
 
-The budget is a **sort chunk target**, not a strict process memory cap. Allow
-additional memory for Python processes, CSV rows, serialization, sorting and
-merge buffers. A single large record can exceed the target. `--max-field-mb`
-(default 64) limits individual fields. Input size and column count do not cause
-the entire datasets to be retained in memory. Existing saved jobs retain their
-configured memory settings; jobs created before parallel sorting use one sorter.
+Source reads and disk fallback use one sorting worker to avoid HDD seek contention. The server defaults to one heavy job at a time; other users queue independent comparisons. The chosen resources appear in the console and `runtime-settings.json`. Settings has been removed from the sidebar. Browser display preferences are under Docs & FAQ; comparison rules remain in Keys & scope.
 
 Use local SSD storage for uploads, scratch and reports. For two 6 GB inputs,
 starting with 40–60 GB free **in addition to the uploaded copies** is a planning
@@ -621,7 +602,7 @@ HTML summary callouts and the Excel audit sheet, with a link from File Summary.
   and analysis can be generated again. Uploaded files remain until job cleanup.
 - **Profiles:** save/apply/delete named profiles in the Profiles page; select one on the file-upload page. They include
   header aliases by original name, keys, ignored columns/keys/containers, value
-  overrides and optional comparison rules. Performance belongs in Settings. Profiles are private
+  overrides and optional comparison rules. Performance is sized automatically at runtime. Profiles are private
   to the browser workspace; saving the same name replaces it. Missing profile
   columns or containers produce a validation error before comparison.
 - **Analysis notes:** classify a column, key, or key/column pair as Expected,
@@ -650,7 +631,7 @@ Windows/on-prem deployment still need a representative pilot.
 
 ### Batch settings and duplicate handling
 
-Settings offers persistent read/sort batch rows (default 100,000), comparison batch keys (default 10,000), ; Keys & scope retains first/last source occurrence for duplicates. CLI equivalents: `--read-batch-size`, `--compare-batch-size`, `--duplicate-policy`. Batch sizes accept integers from 1 to 1,000,000. Sorting flushes at the row cap or memory budget, whichever comes first. Comparison remains streaming; its batch setting controls progress reporting. Duplicate counts and skipped rows are shown in Results and exports. Match percentages use only retained rows.
+The application automatically chooses read/sort and comparison batch sizes; Keys & scope retains first/last source occurrence for duplicates. CLI equivalents: `--read-batch-size`, `--compare-batch-size`, `--duplicate-policy`. Batch sizes accept integers from 1 to 1,000,000. Sorting flushes at the row cap or memory budget, whichever comes first. Comparison remains streaming; its batch setting controls progress reporting. Duplicate counts and skipped rows are shown in Results and exports. Match percentages use only retained rows.
 
 ### Guided Analysis view
 
@@ -695,7 +676,7 @@ Preparing analysis stores pattern counts in the disk-backed index. Existing
 indexes rebuild on demand. Displayed values are capped at 1,000 characters;
 full-value hashes keep distinct long value pairs separate.
 
-To accept `0` / `0.00` and `-11` / `-11.00`, choose a value column in Settings,
+To accept `0` / `0.00` and `-11` / `-11.00`, open Comparison rules in Keys & scope and choose a value column,
 tick **Ignore numeric formatting**, then save the column rule. This uses exact
 decimal equality (zero tolerance). Keys and other columns retain their configured
 comparison rules; leading-zero numeric identifiers should remain exact text.
@@ -706,7 +687,7 @@ to show the 20 key samples. Regenerate old exports to get the updated controls.
 
 ### Workspace settings and comments
 
-Settings stores performance defaults and optional column comparison rules for future runs in your workspace. In team mode, browser workspaces are separate. Rule names match common column headers without case sensitivity; key, ignored and absent columns are skipped. Explicit profile rules take precedence over Settings defaults. Completed runs retain their original rules. Save a numeric tolerance of zero to treat `0` and `0.00` as equivalent.
+Resource settings are calculated at worker launch. Comparison rules are chosen in Keys & scope and can be saved in profiles. In team mode, browser workspaces are separate. Rule names match common column headers without case sensitivity; key, ignored and absent columns are skipped. Explicit profile rules take precedence over legacy saved defaults. Completed runs retain their original rules. Save a numeric tolerance of zero to treat `0` and `0.00` as equivalent.
 
 Analysis shows a browsable, paged list of mismatching columns, with optional filtering. Comments can apply to a whole column, a key across all columns, or a single key/column pair. Existing comments can be viewed and edited. Key comments appear alongside every mismatch for that key in analysis and report samples, and in the corresponding Excel mismatch sheets.
 
@@ -727,9 +708,9 @@ The UI uses a shared TransUnion-inspired visual system: navy navigation, the exi
 
 CSV/Excel retains five phases, with meaningful icons in the vertical review rail. File preview is inline, profile selection remains on Files, and selecting a mismatching column opens the analysis drawer. Recompare uses tabs for scope, overrides and column rules. JSON separates Inputs, Array alignment and Comparison; successful comparisons open the side-by-side result automatically.
 
-Settings separates Performance and Accessibility. Comparison rules live in the top-right drawer on Keys & scope and can be adjusted in Recompare. Select one, several, or all current value columns and combine whitespace, case, and numeric/date rules. Keys and ignored columns are excluded. Explicit comparison rules override legacy workspace rule defaults, including an empty configuration. Storage & queue is accessible from Settings rather than the sidebar. Resource settings remain workspace defaults; motion, density and shortcut preferences are local to the browser. Container creation and the saved library are side by side on desktop. Docs retain searchable content in expandable guides.
+Performance is automatic; display and accessibility preferences are under Docs & FAQ. Comparison rules live in the top-right drawer on Keys & scope and can be adjusted in Recompare. Select one, several, or all current value columns and combine whitespace, case, and numeric/date rules. Keys and ignored columns are excluded. Explicit comparison rules override legacy workspace rule defaults, including an empty configuration. Storage & queue is accessible from Docs & FAQ. Resource budgets are chosen at worker launch; motion, density and shortcut preferences are local to the browser. Container creation and the saved library are side by side on desktop. Docs retain searchable content in expandable guides.
 
-Keyboard: Tab / Shift+Tab move between controls; Enter / Space activate them; arrows and Home / End navigate tab and phase controls. Alt+B toggles navigation, Alt+1–5 opens an available comparison phase, Alt+F focuses the current search, Alt+R opens recomparison, and Alt+/ opens the shortcut guide. Escape closes dialogs. Shortcuts never start, cancel, delete or export a job. Operating-system and browser shortcuts may take priority. Reduced motion follows the system preference or can be selected in Settings → Accessibility.
+Keyboard: Tab / Shift+Tab move between controls; Enter / Space activate them; arrows and Home / End navigate tab and phase controls. Alt+B toggles navigation, Alt+1–5 opens an available comparison phase, Alt+F focuses the current search, Alt+R opens recomparison, and Alt+/ opens the shortcut guide. Escape closes dialogs. Shortcuts never start, cancel, delete or export a job. Operating-system and browser shortcuts may take priority. Reduced motion follows the system preference or can be selected in Docs & FAQ → Display & accessibility.
 
 All pages reflow at narrow widths. Data tables and long lists use bounded scrolling; controls remain reachable rather than being clipped to enforce a fixed page height.
 
@@ -803,7 +784,7 @@ Ordinary unquoted CSV rows with the same selected column order are now packed di
 
 All tabular formats now write losslessly compressed temporary sort runs in bounded 4 MiB blocks. PyArrow LZ4 is preferred when installed, with standard-library zlib as fallback. Blocks without useful compression stay raw. Merge reads decompress one block at a time, and checkpoint hashes cover the actual stored bytes. Existing uncompressed checkpoints remain readable. Rolling back to an older app requires fresh comparisons if saved runs use the new format. Compression adds bounded buffers (up to 4 MiB decoded data per open merge run, plus transient compression/decompression buffers); the sort budget remains distinct from a process-wide RAM cap.
 
-For a **32 GB machine with an HDD**, start with Settings → Performance: **4 GB total sort memory, Sequential file sorting, 1,000,000 read/sort rows**. Batches still flush on reaching the memory budget. Keep heavy-job concurrency at one for a single physical HDD; five browser users can queue independent jobs without five simultaneous disk-intensive workers. Parallel sorting remains suitable for an SSD when measured beneficial. Keeping sources and scratch on an SSD gives a larger I/O improvement than increasing comparison progress-batch size. Excel ZIP/XML import must still run, and every input must still be read.
+For a **32 GB machine with an HDD**, use the automatic resource sizing and sequential source reads. Batches still flush on reaching the memory budget. Keep heavy-job concurrency at one for a single physical HDD; five browser users can queue independent jobs without five simultaneous disk-intensive workers. Parallel sorting remains suitable for an SSD when measured beneficial. Keeping sources and scratch on an SSD gives a larger I/O improvement than increasing comparison progress-batch size. Excel ZIP/XML import must still run, and every input must still be read.
 
 Local synthetic 100,000 × 1,780 CSV comparison (shuffled keys, identical values, 512 MB budget, sequential sorting, no checkpoints/reports) improved from 12.863 s to 2.287 s with direct packing alone. This uses short numeric text and repeated patterns, and is not an HDD timing guarantee. Quoted/projected data follows the parser fallback; compression benefits depend on the data.
 
@@ -819,4 +800,14 @@ The 1,000,000 × 1,780 fixture (5.16 GB per input, 100,000 changed cells, indepe
 
 The existing 500,000-row × 694-column integer Parquet benchmark remained comparable after enabling shared compression: 33.710 s comparison / 40.708 s including reports, versus 32.983 / 39.857 s before. The purpose of compression is to reduce scratch I/O on slower disks; it can add a small CPU overhead on fast storage.
 
-Read progress is logged every 50,000 source rows for CSV, imported Excel and Parquet. These updates do not sort or flush a batch. The default read/sort batch limit remains 100,000 rows, configurable in Settings; the memory budget may flush smaller batches. Comparison progress batches default to 10,000 keys.
+Read progress is logged every 50,000 source rows for CSV, imported Excel and Parquet. These updates do not sort or flush a batch. Read/sort batches are automatically sized up to 100,000 rows; the memory budget may flush smaller batches. Comparison progress batches are sized up to 10,000 keys.
+
+## Live mismatch review and dense results
+
+Pipeline & logs offers **Live differences** and **Console** tabs. Once source preparation finishes, the worker publishes atomic snapshots about every 1.5 seconds while comparing. The browser polls these bounded snapshots independently of the worker: slow or disconnected browsers do not queue output or stop the run. This is live polling, not an unbounded HTTP result stream.
+
+Counts cover processed keys only until completion. A rolling sample contains at most 60 recent differences, up to three per key; values are shortened in the preview only. Pause samples freezes the table while processing continues. Null and empty text remain distinguishable. Snapshot size is capped at 256 KiB and requests use the job's workspace ownership checks. Samples remain available during automatic HTML/Excel generation. A failed/cancelled job is explicitly labelled partial. Review revisions continue to use their existing console view.
+
+All mismatch evidence is still written to the result files. At 50–60% of 1,780 million cells, result volume can approach one billion records; writing those records and creating a full Excel workbook remains substantial work. The app does not silently sample full exports or guarantee two-minute completion.
+
+Validation on a local Mac: 2,000 shuffled rows × 1,780 total columns (one key), exactly 2,134,800 changed cells. Automatic hash comparison took 2.110 seconds versus 2.266 seconds for disk sorting, with checkpoint validation enabled; all six output CSV files had identical SHA-256 hashes. Each run wrote 166.6 MB of evidence. This small benchmark excludes HTML/Excel generation and does not predict 6 GB HDD performance. `benchmark_mismatch_scan.py` separately measures only sparse/dense cell scanning.

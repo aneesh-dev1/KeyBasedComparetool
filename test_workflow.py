@@ -69,7 +69,7 @@ class WorkflowAPITests(unittest.TestCase):
         self.assertEqual(result['summary']['changed_cells'],0)
         self.assertEqual(result['summary']['override_equivalent_cells'],1)
         log=self.request(path+'/logs?cursor=0')
-        for phase in ['queued','Validating','Reading left','Reading right','Comparing keys','Writing reports','complete']:self.assertIn(phase,log['text'])
+        for phase in ['queued','Validating','Indexing left','Indexing right','Comparing keys','Writing reports','complete']:self.assertIn(phase,log['text'])
         self.assertEqual(self.request(path+f'/logs?cursor={log["cursor"]}')['text'],'')
         self.assertIn(b'Comparison complete',self.request(path+'/download/run.log'))
         from urllib.error import HTTPError

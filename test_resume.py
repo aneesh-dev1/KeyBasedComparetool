@@ -16,7 +16,7 @@ class ResumeTests(unittest.TestCase):
             with (self.root/(side+'.csv')).open('w',newline='',encoding='utf-8') as f:
                 writer=csv.writer(f);writer.writerow(['id','part','v'])
                 for i in range(13):writer.writerow([str(i),'é\npart',('old' if side=='left' else 'new')+str(i)])
-        self.args=parser().parse_args([str(self.root/'left.csv'),str(self.root/'right.csv'),'--keys','id','part','--output',str(self.root/'report'),'--read-batch-size','2','--compare-batch-size','3','--fan-in','2','--checkpoint-dir',str(self.root/'saved')])
+        self.args=parser().parse_args(['--engine','sort',str(self.root/'left.csv'),str(self.root/'right.csv'),'--keys','id','part','--output',str(self.root/'report'),'--read-batch-size','2','--compare-batch-size','3','--fan-in','2','--checkpoint-dir',str(self.root/'saved')])
     def interrupt(self,phase):
         original=engine.progress
         def stop(args,message,**values):
@@ -83,7 +83,7 @@ class ResumeAPITests(unittest.TestCase):
                 for side in ('left','right'):client.request(path+'/files/'+side+'?offset=0',data,'PUT')
                 client.request(path+'/finalize',{})
                 directory=server.app.directory(job['id']);job=server.app.load(job['id']);job.update(state='running',keys=['id'],memory_mb=64,sort_workers=1,read_batch_size=2);server.app.save(job)
-                args=parser().parse_args([str(directory/'left.csv'),str(directory/'right.csv'),'--keys','id','--output',str(directory/'report'),'--read-batch-size','2','--checkpoint-dir',str(directory/'checkpoints')])
+                args=parser().parse_args(['--engine','sort',str(directory/'left.csv'),str(directory/'right.csv'),'--keys','id','--output',str(directory/'report'),'--read-batch-size','2','--checkpoint-dir',str(directory/'checkpoints')])
                 original=engine.progress
                 def stop(args,message,**values):
                     original(args,message,**values)

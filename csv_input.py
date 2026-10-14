@@ -14,7 +14,7 @@ class PackedRows:
         self.args=args;self.position=position;self.count=count
         self.direct_rows=0;self.parsed_rows=0
     def __enter__(self):
-        self.stream=open(self.path,encoding=self.args.encoding,newline='',buffering=1024*1024)
+        self.stream=open(self.path,encoding=self.args.encoding,newline='',buffering=getattr(self.args,'io_buffer_bytes',1024*1024))
         try:
             if self.position:self.stream.seek(self.position)
             else:next(csv.reader(iter(self.stream.readline,''),delimiter=self.args.delimiter,strict=True))

@@ -13,7 +13,7 @@ class CompactRunTests(unittest.TestCase):
             root=Path(directory)
             body='id,v\n'+''.join(f'{i},value\n' for i in range(100000))
             for side in ('left','right'):(root/f'{side}.csv').write_text(body)
-            args=parser().parse_args([str(root/'left.csv'),str(root/'right.csv'),'--keys','id','--output',str(root/'out'),'--read-batch-size','100000','--memory-mb','64','--sort-workers','1'])
+            args=parser().parse_args(['--engine','sort',str(root/'left.csv'),str(root/'right.csv'),'--keys','id','--output',str(root/'out'),'--read-batch-size','100000','--memory-mb','64','--sort-workers','1'])
             events=[]
             with patch('compare.progress',side_effect=lambda args,phase,**values:events.append((phase,values))):
                 summary=compare(args)
@@ -45,7 +45,7 @@ class CompactRunTests(unittest.TestCase):
                 with (root/f'{side}.csv').open('w',newline='',encoding='utf-8') as f:w=csv.writer(f);w.writerow(names);w.writerows(data)
             summaries=[]
             for workers in [1,2]:
-                args=parser().parse_args([str(root/'left.csv'),str(root/'right.csv'),'--keys','id','--output',str(root/f'out{workers}'),'--temp-dir',str(root),'--ignore-columns','skip','--ignore-keys','1, 2','--sort-workers',str(workers)])
+                args=parser().parse_args(['--engine','sort',str(root/'left.csv'),str(root/'right.csv'),'--keys','id','--output',str(root/f'out{workers}'),'--temp-dir',str(root),'--ignore-columns','skip','--ignore-keys','1, 2','--sort-workers',str(workers)])
                 args.memory_mb=.002;args.fan_in=2
                 args.value_overrides=[dict(column='status',left='None',right='none')]
                 with contextlib.redirect_stdout(io.StringIO()):s=compare(args)
@@ -61,14 +61,14 @@ class CompactRunTests(unittest.TestCase):
             (root/'a.csv').write_text('id,v\n001,'+text+'\n')
             (root/'b.csv').write_text('v,id\n'+text+',001\n')
             for index,extra in enumerate([[],['--ignore-columns','v']]):
-                args=parser().parse_args([str(root/'a.csv'),str(root/'b.csv'),'--keys','id','--output',str(root/f'out{index}'),'--sort-workers','2',*extra])
+                args=parser().parse_args(['--engine','sort',str(root/'a.csv'),str(root/'b.csv'),'--keys','id','--output',str(root/f'out{index}'),'--sort-workers','2',*extra])
                 with contextlib.redirect_stdout(io.StringIO()):result=compare(args)
                 self.assertEqual(result['equal_rows'],1)
 
     def test_parallel_bad_input_cleans_scratch(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);(root/'a.csv').write_text('id,v\n1,x,extra\n');(root/'b.csv').write_text('id,v\n1,x\n')
-            args=parser().parse_args([str(root/'a.csv'),str(root/'b.csv'),'--keys','id','--output',str(root/'out'),'--temp-dir',str(root),'--sort-workers','2'])
+            args=parser().parse_args(['--engine','sort',str(root/'a.csv'),str(root/'b.csv'),'--keys','id','--output',str(root/'out'),'--temp-dir',str(root),'--sort-workers','2'])
             with contextlib.redirect_stdout(io.StringIO()),self.assertRaisesRegex(ValueError,'expected 2 fields'):compare(args)
             self.assertFalse(list(root.glob('csv-compare-*')))
             self.assertFalse((root/'out'/'summary.json').exists())

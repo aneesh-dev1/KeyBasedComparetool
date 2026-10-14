@@ -34,6 +34,7 @@ class ParquetTests(unittest.TestCase):
             for side in ('left','right'):pq.write_table(pa.table({'id':['1','2','3'],'v':['x','y','z']}),root/(side+'.parquet'),row_group_size=2)
             args=engine.parser().parse_args([str(root/'left.parquet'),str(root/'right.parquet'),'--keys','id','--output',str(root/'out'),'--memory-mb','1','--sort-workers','1','--read-batch-size','1'])
             args.checkpoint_dir=root/'checkpoints'
+            args.comparison_engine='sort'
             original=engine.progress
             def interrupt(args,phase,**values):
                 original(args,phase,**values)

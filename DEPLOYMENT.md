@@ -36,7 +36,7 @@ DATA_DIR="/srv/key-compare/data"
 RUN_DIR="/srv/key-compare/run"
 PYTHON_BIN="python3"
 MAX_JOBS=1
-MAX_SORT_MB=4096
+MAX_SORT_MB=0
 ```
 
 Create the data/run folders with ownership for the account running the app.
@@ -75,12 +75,26 @@ server's heavy-job queue covers CSV comparison, Excel import, report export, and
 With `MAX_JOBS=1`, only one of those runs at a time; other jobs show Queued. This
 protects memory and disk throughput while keeping the HTTP UI responsive.
 
-On a 32 GB server, start with `MAX_JOBS=1` and `MAX_SORT_MB=4096`. Users cannot select
-more sort memory than this server limit. The sort budget is not a hard RSS cap:
-Python, row parsing, merge buffers, Excel imports/exports and JSON need extra RAM.
-If representative benchmarks show headroom, consider `MAX_JOBS=2`. Do not set it
-to five just because five users are connected. The upper configurable limit is
-five; all simultaneously active jobs share the server's RAM and storage.
+Start with `MAX_JOBS=1` and `MAX_SORT_MB=0`. Each worker measures available RAM,
+CPU capacity and free workspace storage when it leaves the queue. It chooses its
+memory budget, read/sort batch, comparison batch and I/O buffers automatically.
+There is no fixed 15 GB ceiling: larger machines can use more RAM. The policy
+keeps at least 25% of available RAM, and at least 2 GB where possible, outside the
+comparison budget for the OS, decoding and reports. It accounts for configured
+concurrent workers. Very low memory uses conservative small batches; less than
+128 MB available RAM or free workspace storage prevents a new run.
+
+A bounded hash lookup avoids sorting when the inputs fit; compressed disk sorting
+remains the fallback. Source reads and disk sorting are sequential to avoid HDD
+seek contention. Additional browsers can upload and queue independently. Free
+disk checks are not reservations or a guarantee that dense mismatch output fits.
+The effective choices are recorded in each job's log and runtime-settings.json.
+
+An administrator can optionally set `MAX_SORT_MB` to a positive MB ceiling.
+`--max-memory-mb` is an alias for the existing `--max-sort-mb` server option.
+Explicit deployment limits remain effective, while saved browser tuning no longer
+controls execution. Interrupted hash runs rebuild their in-memory lookup on
+resume; completed disk-sort checkpoints remain reusable.
 
 JSON is processed separately from the CSV/export queue. One JSON comparison runs
 at a time; a second concurrent JSON request receives a retry message instead of

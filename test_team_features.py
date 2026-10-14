@@ -42,7 +42,7 @@ class FeatureTests(unittest.TestCase):
     def test_profile_storage_and_isolation(self):
         path=self.upload();job=self.client.request(path)
         self.client.request(path+'/headers',dict(column_headers=job['column_headers']))
-        self.client.request(path+'/config',dict(keys=['id'],memory_mb=64,ignore_columns=[],ignore_keys='',value_overrides=[],read_batch_size=7,compare_batch_size=3,duplicate_policy='last',comparison_rules=[dict(column='v',trim=True)]))
+        self.client.request(path+'/config',dict(keys=['id'],memory_mb=64,comparison_engine='sort',ignore_columns=[],ignore_keys='',value_overrides=[],read_batch_size=7,compare_batch_size=3,duplicate_policy='last',comparison_rules=[dict(column='v',trim=True)]))
         profile=self.client.request('/api/profiles',dict(job_id=job['id'],name='Team profile'))['profiles'][0]
         self.assertEqual(self.other.request('/api/profiles')['profiles'],[])
         target=self.upload(b'v,id\nold,001\n',b'id,v\n001,new\n')
@@ -51,6 +51,8 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(applied['columns'],['v','id'])
         self.assertNotIn('read_batch_size',applied['draft'])
         self.assertNotIn('compare_batch_size',applied['draft'])
+        self.assertNotIn('comparison_engine',profile['config'])
+        self.assertNotIn('comparison_engine',applied['draft'])
         self.assertEqual(applied['draft']['duplicate_policy'],'last')
         with self.assertRaises(HTTPError):self.other.request(target+'/apply-profile',dict(id=profile['id']))
         storage=self.client.request('/api/storage');self.assertEqual(len(storage['jobs']),2)
@@ -60,7 +62,7 @@ class FeatureTests(unittest.TestCase):
         self.client.request('/api/profiles',dict(id=profile['id']),method='DELETE')
         self.assertEqual(self.client.request('/api/profiles')['profiles'],[])
     def test_workspace_settings_rules_and_performance(self):
-        settings=dict(memory_mb=64,sort_workers=1,read_batch_size=2,compare_batch_size=3,
+        settings=dict(memory_mb=64,comparison_engine='sort',sort_workers=1,read_batch_size=2,compare_batch_size=3,
             comparison_rules=[dict(column='AMOUNT',tolerance='0'),dict(column='text',trim=True,ignore_case=True)])
         saved=self.client.request('/api/settings',settings)
         self.assertEqual(self.client.request('/api/settings'),saved)
@@ -69,10 +71,16 @@ class FeatureTests(unittest.TestCase):
         job=self.complete(path,read_batch_size=9,compare_batch_size=9)
         self.assertEqual(job['summary']['changed_cells'],0)
         self.assertEqual(job['summary']['rule_equivalent_cells'],2)
-        self.assertEqual(job['summary']['read_batch_size'],2)
-        self.assertEqual(job['summary']['compare_batch_size'],3)
+        self.assertNotEqual(job['summary']['read_batch_size'],2)
+        self.assertNotEqual(job['summary']['compare_batch_size'],3)
+        self.assertEqual(job['comparison_engine'],'auto')
+        self.assertEqual(job['summary']['execution_engine'],'hash')
+        self.assertEqual(job['runtime_settings']['memory_mb'],64)
+        self.assertTrue(job['runtime_settings']['automatic'])
         with self.assertRaises(HTTPError):
             self.client.request('/api/settings',dict(settings,memory_mb=8192))
+        with self.assertRaises(HTTPError):
+            self.client.request('/api/settings',dict(settings,comparison_engine='invalid'))
 
     def test_notes_export_and_activity(self):
         path=self.upload();job=self.complete(path)
@@ -126,12 +134,12 @@ class FeatureTests(unittest.TestCase):
         diag=self.client.request(path+'/diagnostics');self.assertEqual(diag['count'],3);self.assertEqual(diag['key'],['001']);self.assertEqual(len(diag['samples']),3)
     def test_duplicate_exports_and_batch_settings(self):
         path=self.upload(b'id,v\n001,a\n001,b\n',b'id,v\n001,b\n')
-        for config in (dict(read_batch_size=0),dict(compare_batch_size=True),dict(duplicate_policy='all')):
+        for config in (dict(duplicate_policy='all'),):
             with self.assertRaises(HTTPError):
                 self.client.request(path+'/start',dict(keys=['id'],memory_mb=64,**config))
         job=self.complete(path,read_batch_size=1,compare_batch_size=1,duplicate_policy='last')
         self.assertEqual(job['summary']['changed_cells'],0)
-        self.assertEqual(job['summary']['read_batch_size'],1)
+        self.assertNotEqual(job['summary']['read_batch_size'],1)
         audit=self.client.request(path+'/download/duplicate_keys.csv')
         self.assertIn(b'kept_occurrence',audit)
         for kind in ('excel','html'):

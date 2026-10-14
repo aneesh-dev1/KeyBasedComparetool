@@ -1,8 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="app-token"]').content;
-const maxSortMb=Number(document.querySelector('meta[name="max-sort-mb"]').content)||4096;
-for(const option of $('memory').options)option.disabled=Number(option.value)>maxSortMb;
 const files = {left:null,right:null};
 const selected = new Set();
 const ignoredColumns = new Set();
@@ -33,7 +31,7 @@ let previewExpanded=false;
 $('analysisPanel').insertAdjacentHTML('afterbegin','<button id="reviewOverrides" class="subtle review-overrides-action">Review value overrides</button>');
 const phaseLabels=['Files','Column headers','Keys & scope','Pipeline & logs','Results'];
 const phaseViews=['uploadPanel','headersPanel','keysPanel','runningPanel','results'];
-const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',settingsPanel:'navSettings',projectsPanel:'navProjects'};
+const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',projectsPanel:'navProjects'};
 const number = value => Number(value).toLocaleString();
 const bytes = value => value >= 1024**3 ? `${(value / 1024**3).toFixed(2)} GB` : value >= 1024**2 ? `${(value / 1024**2).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
 function showError(error) { $('error').textContent = error.message || String(error); $('error').hidden = false; }
@@ -73,17 +71,17 @@ function panel(name) {
   $('sheetPanel').hidden=name!=='uploadPanel'||!['selecting_sheets','preparing'].includes(job?.state);
   $('reset').hidden=false;
   const history=currentView==='historyPanel';
-  const library=['projectsPanel','containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','settingsPanel'].includes(currentView);
+  const library=['projectsPanel','containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel'].includes(currentView);
   $('comparisonFlow').hidden=history||library;
   $('navNew').classList.toggle('active',name==='jsonPanel'||(!history&&!library&&!viewingHistoryJob));
   $('navHistory').classList.toggle('active',history||(!library&&viewingHistoryJob));
-  for(const id of ['navProjects','navNew','navJson','navContainers','navHistory','navDocs','navStorage','navProfiles','navSettings']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
+  for(const id of ['navProjects','navNew','navJson','navContainers','navHistory','navDocs','navStorage','navProfiles']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
   if(typeof closeSidebarDrawer==='function')closeSidebarDrawer();
   $('flowTitle').textContent=viewingHistoryJob?'Saved comparison':'New comparison';
   const phase=phaseViews.indexOf(name);
   if(!history&&!library)$('phaseLabel').textContent=name==='overridesPanel'?'Review · Value overrides':`Step ${phase+1} of 5 · ${phaseLabels[phase]}`;
   for(const [id,control] of Object.entries(views)){
-    if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'&&id!=='storagePanel'&&id!=='profilesPanel'&&id!=='settingsPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
+    if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'&&id!=='storagePanel'&&id!=='profilesPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
   }
   syncNavigation();
   if(typeof updateEnterpriseShell==='function')updateEnterpriseShell(name);
@@ -103,7 +101,6 @@ async function goView(name){
   clearError();await saveDraft();
   if(headerDirty&&headerDraftJob===job?.id&&['keysPanel','overridesPanel','sourcePanel'].includes(name))await applyHeaders();
   panel(name);
-  if(name==='settingsPanel')await loadSettings();
   if(name==='projectsPanel')await loadProjects();
   if(name==='uploadPanel')await loadUploadProjects();
   if(name==='profilesPanel')await loadProfiles();
@@ -431,8 +428,8 @@ async function refresh() {
     } else if(currentView==='runningPanel')await renderPipeline();
     if(Object.values(job.exports).some(value=>['queued','running'].includes(value.state)))pollTimer=setTimeout(()=>refresh().catch(pollError),1500);
   } else if(['error','cancelled'].includes(job.state)){
-    if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel','settingsPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);await loadDiagnostics();}
-  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel','settingsPanel'].includes(currentView)){
+    if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);await loadDiagnostics();}
+  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel'].includes(currentView)){
     panel('uploadPanel');$('delimiter').disabled=$('encoding').disabled=true;$('delimiter').value=job.delimiter==='\t'?'tab':job.delimiter;$('encoding').value=job.encoding;
   }
 }
@@ -520,8 +517,14 @@ $('sourceNext').addEventListener('click',()=>{if(sourceColumnOffset+20<job.colum
 async function renderPipeline(){
   if($('viewResults'))$('viewResults').hidden=job.state!=='complete';
   $('resumeComparison').hidden=!job.can_resume;
-  const stages=job.execution_mode==='review'?[['compare','Apply rules to retained results'],['reports','Write results & reports'],['complete','Complete']]:[['validate','Validate configuration'],...(job.sort_workers===2?[['sort','Read & sort both files']]:[['left','Read & sort file 1'],['right','Read & sort file 2']]),['compare','Compare matching keys'],['reports','Write results & reports'],['complete','Complete']];
-  const stage=job.state==='complete'?'complete':job.progress?.stage||'validate';const index=stages.findIndex(([id])=>id===stage);
+  $('resumeComparison').textContent=job.resume_strategy==='hash'?'Resume · rebuild key lookup':'Resume from saved sort batches';
+  $('resumeComparison').title=job.resume_strategy==='hash'?'Sources are validated again and the in-memory lookup is rebuilt.':'Completed sort batches are validated and reused.';
+  const automatic=job.comparison_engine==='auto';
+  const readingStages=automatic?[['index','Read & prepare keys']]:job.sort_workers===2?[['sort','Read & sort both files']]:[['left','Read & sort file 1'],['right','Read & sort file 2']];
+  const stages=job.execution_mode==='review'?[['compare','Apply rules to retained results'],['reports','Write results & reports'],['complete','Complete']]:[['validate','Validate configuration'],...readingStages,['compare','Compare matching keys'],['reports','Write results & reports'],['complete','Complete']];
+  let stage=job.state==='complete'?'complete':job.progress?.stage||'validate';
+  if(automatic&&['index','sort','left','right'].includes(stage))stage='index';
+  const index=stages.findIndex(([id])=>id===stage);
   $('phase').textContent=job.state==='complete'?'Comparison complete':job.state==='error'?'Comparison failed':job.state==='queued'?'Queued':job.progress?.phase||'Starting worker';
   $('processed').textContent=job.state==='error'?job.error:job.progress?.rows!==undefined?`${number(job.progress.rows)} rows processed in the current phase`:job.state==='queued'?'Waiting for a server worker. Your files and results are kept in your own job.':'Stages update as the worker processes the files.';
   $('pipelineState').textContent=job.state;
@@ -529,13 +532,14 @@ async function renderPipeline(){
   if($('pipelineStages').dataset.signature!==signature){$('pipelineStages').replaceChildren();stages.forEach(()=>{const item=document.createElement('li');$('pipelineStages').append(item);});$('pipelineStages').dataset.signature=signature;}
   stages.forEach(([id,label],i)=>{const item=$('pipelineStages').children[i];const state=job.state==='queued'?'pending':job.state==='complete'||i<index?'done':i===index?(job.state==='error'?'failed':'active'):'pending';if(item.className!==state){item.className=state;item.textContent=`${state==='done'?'✓':state==='failed'?'!':i+1}  ${label}`;}});
   if(logJobId!==job.id){logJobId=job.id;logCursor=0;logText='';consolePaused=false;consoleFollow=true;if($('consolePause')){$('consolePause').textContent='Pause display';$('consolePause').setAttribute('aria-pressed','false');$('consoleFollow').setAttribute('aria-pressed','true');}}
-  const id=job.id;const log=await api(endpoint('/logs')+'?cursor='+logCursor);if(job.id!==id)return;
+  const id=job.id;const [log,live]=await Promise.all([api(endpoint('/logs')+'?cursor='+logCursor),api(endpoint('/live-preview'))]);if(job.id!==id)return;
+  window.renderLiveMismatches?.(job,live);
   logCursor=log.cursor;logText=(logText+log.text).split('\n').slice(-1000).join('\n');paintConsole();
   $('logDownload').href=downloadUrl('run.log');
   if(log.text.length>=60000)pollTimer=setTimeout(()=>refresh().catch(pollError),300);
 }
 async function loadHistory(){
-  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel','settingsPanel'].includes(currentView))return;
+  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel'].includes(currentView))return;
   $('cleanupPolicy').textContent=result.retention_days?`Inactive jobs and all uploaded files, scratch data and reports are automatically deleted after ${result.retention_days} days. Download reports before expiry. Active jobs are protected.`:'Automatic cleanup is disabled. Delete unneeded jobs to reclaim disk space.';
   const table=$('historyTable');table.replaceChildren();
   const header=document.createElement('tr');for(const label of ['Created','Files','Status','Changed cells','Action']){const th=document.createElement('th');th.textContent=label;header.append(th);}const head=document.createElement('thead');head.append(header);table.append(head);
@@ -565,7 +569,6 @@ const navigationIcons={
   navNew:'<rect x="3" y="4" width="7" height="16" rx="2"/><rect x="14" y="4" width="7" height="16" rx="2"/><path d="M6 8h1m10 8h1M8 12h8m-2-2 2 2-2 2"/>',
   navJson:'<path d="M8 4H6a2 2 0 0 0-2 2v3l-2 3 2 3v3a2 2 0 0 0 2 2h2m8-16h2a2 2 0 0 1 2 2v3l2 3-2 3v3a2 2 0 0 1-2 2h-2M10 9l-2 3 2 3m4-6 2 3-2 3"/>',
   navProfiles:'<rect x="7" y="7" width="14" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2m4-5h6m-6 4h6m-6 3h3"/>',
-  navSettings:'<path d="M4 7h8m4 0h4M4 17h3m4 0h9"/><circle cx="14" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   navContainers:'<path d="M3 7l9-4 9 4-9 4-9-4Zm0 0v10l9 4 9-4V7M12 11v10m-5-5h3"/>',
   navStorage:'<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M12 6.5h5M12 17.5h5"/>',
   navHistory:'<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6M12 7v5l3 2"/>',
@@ -983,13 +986,10 @@ $('analysisNext').addEventListener('click',()=>{analysisOffset+=50;loadAnalysis(
 
 $('analysisRetry').addEventListener('click',async()=>{try{$('analysisRetry').hidden=true;await api(endpoint('/analysis'),{});await loadAnalysis();}catch(error){showError(error);}});
 
-let valueRules=[], settingsRules=[];
+let valueRules=[];
 $('profileControls').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Template library</h3><div class="preview-controls"><select id="profileSelect" aria-label="Saved profile"><option value="">Choose profile</option></select><button id="applyProfile" class="subtle">Apply profile</button><input id="profileName" placeholder="Profile name" aria-label="Profile name"><button id="saveProfile" class="subtle">Save current settings</button><button id="deleteProfile" class="subtle">Delete profile</button></div><p id="profileStatus" role="status"></p></section>`);
 $('analysisPanel').insertAdjacentHTML('beforeend',`<details class="feature-box review-comments"><summary>Comments</summary><label>Apply comment to<select id="noteTarget"><option value="column">Column — all mismatching keys</option><option value="key">Key — all mismatching columns</option><option value="cell">This key and column</option></select></label><p id="noteScope" class="analysis-note-scope"></p><p class="muted">Comments appear in regenerated reports.</p><div class="preview-controls"><select id="noteStatus" aria-label="Classification"><option>Needs investigation</option><option>Expected</option><option>Resolved</option></select><textarea id="noteComment" maxlength="2000" aria-label="Analysis comment" placeholder="Describe your finding"></textarea><button id="saveNote" class="subtle">Save comment</button></div><div id="analysisNotes"></div></details>`);
 function renderValueRules(){}
-function settingsConfig(){return {memory_mb:Number($('memory').value),sort_workers:Number($('sortWorkers').value),read_batch_size:Number($('readBatchSize').value),compare_batch_size:Number($('compareBatchSize').value),comparison_rules:[]};}
-async function loadSettings(){const result=await api('/api/settings');$('memory').value=result.memory_mb;$('sortWorkers').value=result.sort_workers;$('readBatchSize').value=result.read_batch_size;$('compareBatchSize').value=result.compare_batch_size;$('settingsStatus').textContent='Performance defaults apply to new runs. Comparison rules are configured in Keys & scope.';}
-$('saveSettings').addEventListener('click',async()=>{try{await api('/api/settings',settingsConfig());$('settingsStatus').textContent='Performance settings saved. Existing runs are unchanged.';}catch(error){showError(error);}});
 async function loadProfiles(){const result=await api('/api/profiles');for(const id of ['profileSelect','quickProfile']){const previous=$(id).value;$(id).replaceChildren(new Option(id==='quickProfile'?'No template — configure manually':'Choose profile',''));result.profiles.forEach(p=>$(id).add(new Option(p.name,p.id)));$(id).value=previous;}const ready=job?.state==='ready';$('applyProfile').disabled=!ready;$('saveProfile').disabled=!job||!['ready','complete'].includes(job.state);}
 $('saveProfile').addEventListener('click',async()=>{try{if(headerDirty&&job?.state==='ready')await applyHeaders();await saveDraft();await api('/api/profiles',{job_id:job.id,name:$('profileName').value});await loadProfiles();$('profileStatus').textContent='Template saved with headers, keys, scope, value overrides and column rules.';}catch(e){showError(e);}});
 async function applyProfile(id){if(!id)throw Error('Choose a template first.');job=await api(endpoint('/apply-profile'),{id});hydratedId=null;headerDraftJob=null;hydrate();renderHeaders();renderKeys();renderIgnoredColumns();renderOverrides();$('quickProfileStatus').textContent='Template applied. Review the headers, keys and overrides before running.';$('profileStatus').textContent=$('quickProfileStatus').textContent;}
@@ -1249,7 +1249,7 @@ function animateWorkspacePane(element){
 function updateEnterpriseShell(name){
   const heading=document.querySelector('.heading h1');
   if(!$('workspaceContext'))return;
-  const titles={projectsPanel:'Projects',uploadPanel:'New comparison',headersPanel:'Column headers',keysPanel:'Keys & scope',runningPanel:'Pipeline & logs',results:'Comparison results',jsonPanel:'JSON comparison',historyPanel:'Job history',containersPanel:'Ignore key containers',profilesPanel:'Profile templates',settingsPanel:'Settings',docsPanel:'Docs & FAQ',storagePanel:'Storage & queue',overridesPanel:'Value overrides'};
+  const titles={projectsPanel:'Projects',uploadPanel:'New comparison',headersPanel:'Column headers',keysPanel:'Keys & scope',runningPanel:'Pipeline & logs',results:'Comparison results',jsonPanel:'JSON comparison',historyPanel:'Job history',containersPanel:'Ignore key containers',profilesPanel:'Profile templates',docsPanel:'Docs & FAQ',storagePanel:'Storage & queue',overridesPanel:'Value overrides'};
   heading.textContent=titles[name]||'Comparison workspace';
   $('workspaceContext').textContent=phaseViews.includes(name)?'Compare files':titles[name]||'Workspace';
   const changed=document.body.dataset.workspaceView!==name;
@@ -1302,19 +1302,8 @@ function initEnterpriseShell(){
   const longSheetHelp=[...sheet.children].find(el=>el.tagName==='P'&&el.textContent.startsWith('Excel uses'));
   if(longSheetHelp){sheetHelp.append(longSheetHelp);sheet.insertBefore(sheetHelp,$('sheetStatus'));}
 
-  // Settings use local tabs without duplicating inputs or saving behind the user's back.
-  const settings=$('settingsPanel'),settingsControls=settings.querySelector('.settings'),guidance=settings.querySelector('.compact-help');
-  settingsControls.before(Object.assign(document.createElement('div'),{id:'enterpriseSettingsTabs',className:'enterprise-tabs'}));
-  const perf=document.createElement('section');perf.id='settings-performance';settingsControls.before(perf);perf.append(settingsControls,guidance);
-  const rules=$('settingsRules');rules.hidden=true;
-  const access=document.createElement('section');access.id='settings-accessibility';access.hidden=true;
-  access.innerHTML='<div class="settings"><label>Motion<select id="motionPreference"><option value="system">Follow system preference</option><option value="reduced">Reduce motion</option></select></label><label>Keyboard shortcuts<select id="shortcutPreference"><option value="on">Enabled</option><option value="off">Disabled</option></select></label><label>Table density<select id="densityPreference"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label></div><p class="muted">Display preferences are saved for this browser. Tab, Enter and Escape remain available.</p>';
-  rules.after(access);
-  const storageLink=document.createElement('button');storageLink.className='subtle';storageLink.textContent='Storage & queue';storageLink.addEventListener('click',()=>goView('storagePanel').catch(showError));
-  const tabs=$('enterpriseSettingsTabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Settings categories');
-  const sections=[['Performance',perf],['Accessibility',access]];
-  function selectSettings(index){sections.forEach(([label,section],i)=>{section.hidden=i!==index;const button=$('settings-tab-'+i);button.setAttribute('aria-selected',String(i===index));button.tabIndex=i===index?0:-1;});$('saveSettings').hidden=index===1;animateWorkspacePane(sections[index][1]);}
-  sections.forEach(([label,section],i)=>{const b=document.createElement('button');b.id='settings-tab-'+i;b.textContent=label;b.setAttribute('role','tab');b.setAttribute('aria-controls',section.id);section.setAttribute('role','tabpanel');section.setAttribute('aria-labelledby',b.id);b.addEventListener('click',()=>selectSettings(i));tabs.append(b);});tabs.after(storageLink);selectSettings(0);
+  // Browser-only display preferences live in the guide; resource tuning is automatic.
+  $('docsStorage').addEventListener('click',()=>goView('storagePanel').catch(showError));
   const applyPreferences=()=>{const motion=localStorage.getItem('compare-motion')||'system',density=localStorage.getItem('compare-density')||'comfortable';document.body.classList.toggle('reduce-motion',motion==='reduced');document.body.classList.toggle('compact-density',density==='compact');$('motionPreference').value=motion;$('densityPreference').value=density;$('shortcutPreference').value=localStorage.getItem('compare-shortcuts')||'on';};
   for(const [id,key] of [['motionPreference','compare-motion'],['densityPreference','compare-density'],['shortcutPreference','compare-shortcuts']])$(id).addEventListener('change',()=>{localStorage.setItem(key,$(id).value);applyPreferences();});applyPreferences();
 

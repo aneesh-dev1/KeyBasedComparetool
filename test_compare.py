@@ -140,7 +140,7 @@ class DuplicateBatchTests(unittest.TestCase):
         for policy in ('first','last'):
             for workers in (1,2):
                 output=self.root/f'{policy}{workers}'
-                args=parser().parse_args([str(left),str(right),'--keys','id','--output',str(output),'--read-batch-size','1','--compare-batch-size','2','--fan-in','2','--sort-workers',str(workers),'--duplicate-policy',policy])
+                args=parser().parse_args([str(left),str(right),'--keys','id','--output',str(output),'--read-batch-size','1','--compare-batch-size','2','--fan-in','2','--sort-workers',str(workers),'--duplicate-policy',policy,'--engine','sort'])
                 import contextlib, io
                 log=io.StringIO()
                 with contextlib.redirect_stdout(log): result=compare(args)
