@@ -85,6 +85,24 @@ vm.runInContext("consolePaused=true;logText+='\\nBatch 2 complete';paintConsole(
 assert.equal(nodes.get('consoleLog').textContent,'Batch 1 complete');
 vm.runInContext('consolePaused=false;paintConsole()',context);
 assert.equal(nodes.get('consoleLog').textContent,'Batch 1 complete\nBatch 2 complete');
+// Pause must restore controls without waiting for a new GET on a broken connection.
+context.AbortController=AbortController;context.AbortSignal=AbortSignal;context.performance=performance;
+let uploadStarted;const started=new Promise(resolve=>uploadStarted=resolve);
+context.UploadTransfer=class {
+ constructor(options){this.options=options;}
+ upload(){uploadStarted();return new Promise((resolve,reject)=>this.options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('Paused'),{name:'AbortError'})),{once:true}));}
+};
+vm.runInContext(`job={id:'upload',state:'uploading',upload_compression:['gzip'],files:{left:{name:'left.csv',size:8,uploaded:0},right:{name:'right.csv',size:8,uploaded:0}}};files.left=job.files.left;files.right=job.files.right;attachUploadProject=async()=>{};globalThis.uploadGets=0;api=async()=>{if(++uploadGets===1)return job;return new Promise(()=>{});};$('quickProfile').value='';`,context);
+const uploadWork=nodes.get('upload').events.click[0]();await started;
+nodes.get('pauseUpload').events.click[0]();
+let pauseTimeout;try{await Promise.race([uploadWork,new Promise((_,reject)=>{pauseTimeout=setTimeout(()=>reject(new Error('Pause was blocked by reconciliation')),1000);})]);}finally{clearTimeout(pauseTimeout);}
+assert.equal(context.uploadGets,1);assert.equal(vm.runInContext('uploading',context),false);assert.equal(nodes.get('upload').disabled,false);assert.equal(nodes.get('upload').textContent,'Resume upload →');
+assert.equal(nodes.get('error').hidden,true);
+// Preflight must receive the same cancellation signal, so Pause also stops setup.
+vm.runInContext(`job=null;api=(path,body,method,signal)=>new Promise((resolve,reject)=>{if(!signal)throw Error('Missing setup cancellation');signal.addEventListener('abort',()=>reject(Object.assign(new Error('Paused'),{name:'AbortError'})),{once:true});});`,context);
+const setupWork=nodes.get('upload').events.click[0]();nodes.get('pauseUpload').events.click[0]();await setupWork;
+assert.equal(vm.runInContext('uploading',context),false);assert.equal(nodes.get('upload').disabled,false);
+console.log('Upload Pause cancels transfer and preflight without a blocking status refresh.');
 console.log('Analysis, direct start, fresh startup/restore, and console filter/pause checks passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 

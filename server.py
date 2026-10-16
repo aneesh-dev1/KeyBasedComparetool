@@ -21,6 +21,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 import uuid
 import webbrowser
+import zlib
 
 from workspace_settings import PERFORMANCE, validate_settings, resolved_rules
 from task_control import check_cancel
@@ -35,6 +36,12 @@ from reports import export_excel, export_html, make_summary_html, REPORT_VERSION
 
 BASE = Path(__file__).resolve().parent
 CHUNK = 8 * 1024 * 1024
+
+
+class UploadOffsetConflict(ValueError):
+    def __init__(self, offset):
+        self.offset = offset
+        super().__init__(f'Invalid upload chunk. Expected offset {offset}.')
 
 
 def resume_strategy(directory,job):
@@ -59,6 +66,7 @@ class Application:
         self.token = secrets.token_urlsafe(32)
         self.lock = threading.RLock()
         self.file_locks = {}
+        self.upload_offsets = {}
         self.requests = {}
         self.cleanup_lock = threading.Lock()
         self.retention_days = 7
@@ -71,6 +79,10 @@ class Application:
             if not re.fullmatch(r'[a-f0-9]{32}', path.parent.name):
                 continue
             job = json.loads(path.read_text())
+            self.cleanup_upload_journal_temps(job['id'])
+            if job['state'] == 'uploading':
+                for side in ('left', 'right'):
+                    self.recover_upload(job, side)
             changed = False
             if job['state'] in ('queued', 'running', 'preparing'):
                 job.update(state='error', error='Server stopped before comparison completed. '+resume_message(path.parent,job))
@@ -132,7 +144,11 @@ class Application:
             if job['state'] == 'uploading':
                 for side in ('left', 'right'):
                     source = self.upload_path(job, side)
-                    job['files'][side]['uploaded'] = source.stat().st_size if source.exists() else 0
+                    job['files'][side]['uploaded'] = self.upload_offsets.get(
+                        (identity, side), source.stat().st_size if source.exists() else 0)
+            for side in ('left', 'right'):
+                job['files'][side]['in_flight'] = job['state'] == 'uploading' and (identity, side) in self.upload_offsets
+            job['upload_compression'] = ['gzip']
             if job.get('analysis',{}).get('state')=='complete' and job['analysis'].get('version')!=2:
                 job['analysis']=dict(state='not_started',message='Prepare analysis to include mismatch patterns.')
             for export in job.get('exports', {}).values():
@@ -174,7 +190,7 @@ class Application:
             arrow()
         identity = uuid.uuid4().hex
         self.directory(identity).mkdir()
-        job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, comparison_engine='auto', exports={})
+        job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, comparison_engine='auto', exports={}, upload_compression=['gzip'])
         required=sum(f['size'] for f in files.values())
         if shutil.disk_usage(self.root).free<required+128*1024**2:
             self.directory(identity).rmdir()
@@ -236,6 +252,119 @@ class Application:
 
     def upload_path(self, job, side):
         return self.directory(job['id']) / (f'{side}.xlsx' if job['files'][side].get('format') == 'excel' else f'{side}.parquet' if job['files'][side].get('format')=='parquet' else f'{side}.csv')
+
+    def upload_journal(self, identity, side):
+        return self.directory(identity) / f'.upload-{side}.pending'
+
+    def cleanup_upload_journal_temps(self, identity):
+        # Only startup calls this: an incomplete publication never authorized an append.
+        for temporary in self.directory(identity).glob('.upload-*.pending.*.tmp'):
+            if (re.fullmatch(r'\.upload-(left|right)\.pending\.[a-f0-9]{32}\.tmp', temporary.name)
+                    and temporary.is_file() and not temporary.is_symlink()):
+                try:
+                    temporary.unlink()
+                except OSError:
+                    pass  # An unused checkpoint temporary must not block server startup.
+
+    def publish_upload_checkpoint(self, identity, side, offset):
+        marker = self.upload_journal(identity, side)
+        temporary = marker.with_name(f'{marker.name}.{uuid.uuid4().hex}.tmp')
+        try:
+            with temporary.open('x') as checkpoint:
+                checkpoint.write(json.dumps({'offset': offset}))
+                checkpoint.flush()
+                os.fsync(checkpoint.fileno())
+            # Publish a complete journal before any source append. A process stop while
+            # writing the temporary cannot expose partial JSON as a recovery checkpoint.
+            replace_retry(temporary, marker)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def recover_upload(self, job, side):
+        """Roll back an interrupted chunk; completed chunks need no metadata rewrite."""
+        marker = self.upload_journal(job['id'], side)
+        if not marker.exists():
+            return
+        checkpoint = json.loads(marker.read_text())
+        offset = checkpoint.get('offset')
+        if type(offset) is not int or not 0 <= offset <= job['files'][side]['size']:
+            raise ValueError('Invalid upload checkpoint; the source file was preserved')
+        target = self.upload_path(job, side)
+        if target.exists():
+            if target.stat().st_size < offset:
+                raise ValueError('Upload is shorter than its checkpoint; the source file was preserved')
+            with target.open('r+b') as stream:
+                stream.truncate(offset)
+                stream.flush()
+                os.fsync(stream.fileno())
+        elif offset:
+            raise ValueError('The upload checkpoint source is missing')
+        marker.unlink()
+        self.upload_offsets.pop((job['id'], side), None)
+
+    def receive_upload(self, identity, side, offset, wire_size, original_size, encoding, reader):
+        """Commit one bounded raw or gzip chunk, reporting only original file offsets."""
+        with self.lock:
+            file_lock = self.file_locks.setdefault((identity, side), threading.Lock())
+        with file_lock:
+            with self.lock:
+                job = self.load(identity)
+                if job['state'] != 'uploading' or job['files'][side]['complete']:
+                    raise ValueError('This file is already finalized')
+                self.recover_upload(job, side)
+                target = self.upload_path(job, side)
+                current = target.stat().st_size if target.exists() else 0
+                if offset != current:
+                    raise UploadOffsetConflict(current)
+                if (not 0 < wire_size <= CHUNK or not 0 < original_size <= CHUNK
+                        or current + original_size > job['files'][side]['size']):
+                    raise ValueError(f'Invalid upload chunk. Expected offset {current}.')
+                if encoding not in ('identity', 'gzip') or encoding == 'identity' and wire_size != original_size:
+                    raise ValueError('Unsupported upload encoding or chunk size')
+                if shutil.disk_usage(target.parent).free < original_size + 128 * 1024 * 1024:
+                    raise ValueError('Server disk space is low. Free space before resuming this upload.')
+                marker = self.upload_journal(identity, side)
+                self.publish_upload_checkpoint(identity, side, current)
+                self.upload_offsets[(identity, side)] = current
+            try:
+                decoder = zlib.decompressobj(16 + zlib.MAX_WBITS) if encoding == 'gzip' else None
+                remaining, written = wire_size, 0
+                with target.open('ab') as stream:
+                    while remaining:
+                        data = reader.read(min(1024 * 1024, remaining))
+                        if not data:
+                            raise ValueError('Upload disconnected; retry this chunk')
+                        remaining -= len(data)
+                        while data:
+                            if decoder:
+                                try:
+                                    block = decoder.decompress(data, min(1024 * 1024, original_size - written + 1))
+                                except zlib.error as error:
+                                    raise ValueError('Invalid compressed upload chunk') from error
+                                if decoder.unused_data:
+                                    raise ValueError('Compressed upload chunk has trailing data')
+                                data = decoder.unconsumed_tail
+                            else:
+                                block, data = data, b''
+                            written += len(block)
+                            if written > original_size:
+                                raise ValueError('Upload chunk exceeds its declared original size')
+                            stream.write(block)
+                    if written != original_size or decoder is not None and not decoder.eof:
+                        raise ValueError('Incomplete upload chunk; retry this chunk')
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                with self.lock:
+                    marker.unlink()
+                    self.upload_offsets.pop((identity, side), None)
+                return current + written
+            except BaseException:
+                with self.lock:
+                    self.recover_upload(job, side)
+                raise
 
     def comparison_path(self,job,side):
         return self.directory(job['id']) / (f'{side}.parquet' if job['files'][side].get('format')=='parquet' else f'{side}.csv')
@@ -479,7 +608,7 @@ class Handler(BaseHTTPRequestHandler):
             path, query = self.check_request()
             if self.command == 'GET' and path == '/health':
                 return self.json_response(dict(service='key-based-compare', status='ready', pid=os.getpid()))
-            if self.command == 'GET' and path in ('/', '/app.js', '/live-preview.js', '/style.css', '/assets/transunion-logo.svg'):
+            if self.command == 'GET' and path in ('/', '/app.js', '/live-preview.js', '/upload-transport.js', '/style.css', '/assets/transunion-logo.svg'):
                 target = BASE / 'web' / ('index.html' if path == '/' else path[1:])
                 data = target.read_bytes().replace(b'__APP_TOKEN__', self.app.token.encode()).replace(b'__WORKSPACE_MODE__', b'team' if self.server.shared else b'local').replace(b'__MAX_SORT_MB__', str(self.server.max_sort_mb).encode())
                 self.send_response(200)
@@ -783,6 +912,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == 'GET' and action == 'live-preview':
                 from live_preview import read_preview
                 return self.json_response(read_preview(directory,job['state']))
+            if self.command == 'GET' and action == 'upload-status':
+                return self.json_response(dict(id=identity, state=job['state'], upload_compression=['gzip'],
+                    files={side: {key: job['files'][side].get(key, False if key in ('complete', 'in_flight') else 0)
+                                  for key in ('uploaded', 'size', 'complete', 'in_flight')}
+                           for side in ('left', 'right')}))
             if self.command == 'GET' and action == 'logs':
                 cursor = max(0, int(query.get('cursor', ['0'])[0]))
                 path = directory / 'run.log'
@@ -854,41 +988,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({'saved': True})
             if self.command == 'PUT' and action in ('files/left', 'files/right'):
                 side = action.split('/')[1]
-                with self.app.lock:
-                    lock = self.app.file_locks.setdefault((identity, side), threading.Lock())
-                with lock:
-                    job = self.app.load(identity)
-                    if job['state'] != 'uploading' or job['files'][side]['complete']:
-                        raise ValueError('This file is already finalized')
-                    size = int(self.headers.get('Content-Length', 0))
-                    offset = int(query.get('offset', ['-1'])[0])
-                    target = self.app.upload_path(job, side)
-                    current = target.stat().st_size if target.exists() else 0
-                    if not 0 < size <= CHUNK or offset != current or current + size > job['files'][side]['size']:
-                        raise ValueError(f'Invalid upload chunk. Expected offset {current}.')
-                    if shutil.disk_usage(directory).free < size + 128 * 1024 * 1024:
-                        raise ValueError('Server disk space is low. Free space before resuming this upload.')
-                    self.connection.settimeout(120)
-                    with target.open('ab') as stream:
-                        remaining = size
-                        try:
-                            while remaining:
-                                data = self.rfile.read(min(1024 * 1024, remaining))
-                                if not data:
-                                    raise ValueError('Upload disconnected; retry this chunk')
-                                stream.write(data)
-                                remaining -= len(data)
-                        except Exception:
-                            stream.truncate(current)
-                            raise
-                    # File length is the durable upload checkpoint. Avoid renaming
-                    # job metadata for every chunk (a common Windows lock conflict).
-                return self.json_response({'uploaded': current + size})
+                size = int(self.headers.get('Content-Length', 0))
+                offset = int(query.get('offset', ['-1'])[0])
+                encoding = self.headers.get('Content-Encoding', 'identity').strip().lower()
+                if encoding == 'gzip' and 'X-Upload-Size' not in self.headers:
+                    raise ValueError('Compressed chunks require their original upload size')
+                original_size = int(self.headers.get('X-Upload-Size', size))
+                self.connection.settimeout(120)
+                uploaded = self.app.receive_upload(identity, side, offset, size, original_size, encoding, self.rfile)
+                return self.json_response({'uploaded': uploaded})
             if self.command == 'POST' and action == 'finalize':
                 with self.app.lock:
                     job = self.app.load(identity)
                     if job['state'] != 'uploading':
                         raise ValueError('Upload already finalized')
+                    if any((identity, side) in self.app.upload_offsets or self.app.upload_journal(identity, side).exists()
+                           for side in ('left', 'right')):
+                        raise ValueError('Wait for active upload chunks to finish before finalizing')
                     columns = {}
                     header_changes = []
                     for side in ('left', 'right'):
@@ -1074,6 +1190,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({'error': 'Not found'}, 404)
         except (BrokenPipeError, ConnectionResetError):
             pass
+        except UploadOffsetConflict as error:
+            self.json_response({'error': str(error), 'uploaded': error.offset}, 409)
         except (ValueError, TypeError, KeyError, OSError, csv.Error) as error:
             self.json_response({'error': str(error)}, 400)
         except Exception as error:

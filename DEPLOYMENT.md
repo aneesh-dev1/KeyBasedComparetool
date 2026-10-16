@@ -186,3 +186,43 @@ notes are part of the job and are deleted with it.
 Desktop notifications require browser permission and an open page. HTTPS is
 generally required for remote hostnames; localhost is an exception in supporting
 browsers. No email, external messaging service, or background push server is used.
+
+
+## Upload performance on the internal network
+
+Large CSV uploads use lossless gzip per bounded chunk when the browser supports
+it and the measured payload saving is at least 15%. They fall back to raw chunks
+otherwise. XLSX and Parquet uploads are not compressed again. Upgrade frontend and
+backend together and restart the server; the job API advertises gzip support.
+Uploaded files on disk retain their original bytes and original size.
+
+For a reverse proxy, stream upload request bodies instead of writing each chunk
+to a proxy temporary file first. With NGINX, include these directives in the
+existing application `location /` block, alongside its `proxy_pass` and preserved
+Host header (validate against your local proxy policy):
+
+```nginx
+proxy_http_version 1.1;
+proxy_request_buffering off;
+client_max_body_size 64m;
+client_body_timeout 180s;
+proxy_send_timeout 180s;
+proxy_read_timeout 180s;
+```
+
+Preserve `Content-Encoding`, `X-Upload-Size` and `X-App-Token` when forwarding.
+Do not decompress the request in a proxy without changing the app's upload
+contract. Chunk bodies remain at most 8 MiB; the larger request limit also allows
+JSON comparison requests. Disabling request buffering means the proxy cannot
+retry a request to a different upstream after forwarding begins; the browser
+reconciles committed offsets instead. See the [NGINX request-buffering
+documentation](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_request_buffering).
+
+Use measured client-to-server throughput to assess the network. Two decimal 6 GB
+files contain 96 gigabits: the theoretical uncompressed minimum is 16 minutes at
+100 Mbps or 96 seconds at 1 Gbps, excluding overhead and disk/CPU work. Compression
+helps in proportion to bytes saved, at a CPU cost. A faster wired link and local
+SSD staging can matter more than additional connections; five users share the
+server's network and disk bandwidth. Test a representative upload through the
+actual proxy before changing concurrency. Additional parallel chunks, persisted
+cross-job file reuse and parsing during upload are not implemented in this change.

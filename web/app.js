@@ -7,7 +7,7 @@ const ignoredColumns = new Set();
 let keyPage = 0, ignorePage = 0;
 const pageSize = 100;
 let job = null, uploading = false, pollTimer = null;
-let pauseUploadRequested=false, lastUploadPaint=0;
+let pauseUploadRequested=false, lastUploadPaint=0, lastUploadAnnouncement=0, uploadController=null, uploadPaintSide=null;
 let overrideRules=[], currentView='uploadPanel', hydratedId=null, historyOffset=0, sourceColumnOffset=0;
 let logCursor=0, logText='', logJobId=null;
 let viewingHistoryJob=false;
@@ -36,10 +36,10 @@ const number = value => Number(value).toLocaleString();
 const bytes = value => value >= 1024**3 ? `${(value / 1024**3).toFixed(2)} GB` : value >= 1024**2 ? `${(value / 1024**2).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
 function showError(error) { $('error').textContent = error.message || String(error); $('error').hidden = false; }
 function clearError() { $('error').hidden = true; }
-async function api(path, body, method) {
-  const response = await fetch(path, {method:method || (body === undefined ? 'GET' : 'POST'), headers:{'X-App-Token':token, 'Content-Type':'application/json'}, body:body === undefined ? undefined : JSON.stringify(body)});
+async function api(path, body, method, signal) {
+  const response = await fetch(path, {method:method || (body === undefined ? 'GET' : 'POST'), headers:{'X-App-Token':token, 'Content-Type':'application/json'}, body:body === undefined ? undefined : JSON.stringify(body),signal});
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Request failed');
+  if (!response.ok) {const error=new Error(result.error || 'Request failed');error.status=response.status;throw error;}
   return result;
 }
 function endpoint(suffix='') { return `/api/jobs/${job.id}${suffix}`; }
@@ -90,7 +90,7 @@ function panel(name) {
     $('upload').disabled=true;$('upload').textContent='Files uploaded';
   } else if(name==='uploadPanel'){
     for(const side of ['left','right'])$(`${side}File`).disabled=uploading;
-    $('upload').textContent='Upload & continue →';$('upload').disabled=uploading||!files.left||!files.right;
+    $('upload').textContent=uploading?'Uploading…':job?.state==='uploading'?'Resume upload →':'Upload & continue →';$('upload').disabled=uploading||!files.left||!files.right;
   }
 }
 function configuration(){return {duplicate_policy:$('duplicatePolicy').value,keys:[...selected],ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules.filter(r=>!selected.has(r.column)&&!ignoredColumns.has(r.column))};}
@@ -131,76 +131,110 @@ for (const side of ['left','right']) {
   card.addEventListener('dragleave', () => card.classList.remove('drag'));
   card.addEventListener('drop', event => {event.preventDefault();card.classList.remove('drag');choose(side,event.dataTransfer.files[0]);});
 }
-function sendChunk(side, blob, offset, update) {
-  return new Promise((resolve,reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('PUT', endpoint(`/files/${side}?offset=${offset}`));
-    xhr.setRequestHeader('X-App-Token',token);
-    xhr.timeout = 180000;
-    xhr.upload.onprogress = event => update(event.loaded);
-    xhr.onerror = () => reject(new Error('Upload connection interrupted. Try again to resume.'));
-    xhr.ontimeout = () => reject(new Error('Upload timed out. Try again to resume.'));
-    xhr.onload = () => {
-      try { const result=JSON.parse(xhr.responseText); if(xhr.status>=400) reject(new Error(result.error)); else resolve(result); }
-      catch {reject(new Error('Invalid upload response. Try again to resume.'));}
-    };
-    xhr.send(blob);
-  });
+function uploadTime(seconds){
+  if(!Number.isFinite(seconds)||seconds<=0)return 'Calculating…';
+  if(seconds<60)return 'Under a minute';
+  const minutes=Math.ceil(seconds/60);
+  return minutes<60?`${minutes} min`:`${Math.floor(minutes/60)} hr ${minutes%60} min`;
+}
+function paintUpload(side,snapshot,force=false){
+  const now=performance.now();
+  force=force||uploadPaintSide!==side;uploadPaintSide=side;
+  // Always keep the acknowledged offset current, even between visual updates.
+  job.files[side].uploaded=snapshot.uploaded;
+  if(!force&&now-lastUploadPaint<120&&snapshot.state==='uploading')return;
+  lastUploadPaint=now;
+  const other=side==='left'?'right':'left';
+  const total=job.files.left.size+job.files.right.size;
+  const saved=job.files.left.uploaded+job.files.right.uploaded;
+  const sent=job.files[other].uploaded+snapshot.sent;
+  const percent=total?Math.min(saved===total?100:99.9,100*sent/total):0;
+  const waiting=['offline','retrying','verifying'].includes(snapshot.state);
+  const status=snapshot.phase==='compressing'?'Compressing CSV':{preparing:'Compressing CSV',offline:'Connection offline · waiting to reconnect',retrying:'Connection interrupted · retrying',verifying:'Confirming saved progress',complete:'File uploaded'}[snapshot.state]||`Uploading ${side==='left'?'original':'updated'} file`;
+  $('uploadProgress').dataset.state=snapshot.state;
+  $('uploadText').textContent=status;
+  $('uploadPercent').textContent=`${percent.toFixed(1)}%`;
+  $('uploadBar').value=percent;
+  $('uploadSaved').textContent=`${bytes(saved)} of ${bytes(total)} saved`;
+  $('uploadSpeed').textContent=!waiting&&snapshot.bytesPerSecond>0?`${bytes(snapshot.bytesPerSecond)}/s`:'—';
+  $('uploadEta').textContent=waiting?(snapshot.state==='verifying'?'Confirming progress':'Waiting for connection'):saved===total?'Complete':uploadTime((total-saved)/snapshot.bytesPerSecond);
+  $('uploadTransferMode').textContent=snapshot.compressionRatio!=null&&snapshot.compressionRatio<.99?`${Math.round((1-snapshot.compressionRatio)*100)}% smaller payload`:snapshot.phase==='compressing'?'Checking compression…':'Direct transfer';
+  for(const current of ['left','right']){
+    const file=job.files[current],done=file.uploaded===file.size;
+    $(`${current}UploadBar`).value=file.size?100*file.uploaded/file.size:0;
+    $(`${current}UploadState`).textContent=done?'Uploaded':current===side||file.uploaded>0?`${bytes(file.uploaded)} saved`:'Waiting';
+    $(`${current}Card`).classList.toggle('file-uploaded',done);
+  }
+  if(force||now-lastUploadAnnouncement>1500||snapshot.state!=='uploading'){
+    $('uploadActivityText').textContent=`${status} · ${percent.toFixed(1)}% · ${bytes(saved)} saved`;
+    lastUploadAnnouncement=now;
+  }
+}
+function showPausedUpload(){
+  const transferMode=$('uploadTransferMode').textContent;
+  paintUpload('left',{uploaded:job.files.left.uploaded,sent:job.files.left.uploaded,state:'paused',bytesPerSecond:0},true);
+  const done=job.files.left.uploaded+job.files.right.uploaded;
+  const message=`${pauseUploadRequested?'Upload paused':'Upload stopped'} · ${bytes(done)} saved. Resume to continue.`;
+  $('uploadProgress').dataset.state='paused';
+  $('uploadText').textContent=message;$('uploadActivityText').textContent=message;
+  $('uploadSpeed').textContent='—';$('uploadEta').textContent='Paused';$('uploadTransferMode').textContent=transferMode;
+  $('upload').textContent='Resume upload →';
 }
 $('upload').addEventListener('click', async () => {
   if(uploading)return;
   if(files.left&&files.right){const left=detectedFileType(files.left),right=detectedFileType(files.right);if((left==='JSON')!==(right==='JSON')){showError('Choose two JSON files, or a pair of CSV/Excel/Parquet files. JSON cannot be compared to a table.');return;}if(left==='JSON'){await loadUnifiedJson();return;}}
-  clearError(); uploading = true;pauseUploadRequested=false;lastUploadPaint=0;
-  $('pauseUpload').hidden=false;$('pauseUpload').disabled=false;$('pauseUpload').textContent='Pause upload';$('uploadActivity').hidden=false;
-  syncNavigation(); $('upload').disabled = true; $('reset').disabled = true;
+  clearError(); uploading=true;pauseUploadRequested=false;lastUploadPaint=0;lastUploadAnnouncement=0;uploadPaintSide=null;uploadController=new AbortController();
+  $('uploadPanel').classList.add('upload-active');
+  $('pauseUpload').hidden=false;$('pauseUpload').disabled=false;$('pauseUpload').textContent='Pause upload';$('uploadActivity').hidden=false;$('uploadActivityText').textContent='Preparing upload…';
+  syncNavigation(); $('upload').disabled=true;$('upload').textContent='Uploading…';$('reset').disabled=true;
   for(const side of ['left','right']) $(`${side}File`).disabled = true;
   $('delimiter').disabled = $('encoding').disabled = true;
   try {
     if (!job) {
-      const space=await api('/api/preflight',{bytes:files.left.size+files.right.size});
+      const space=await api('/api/preflight',{bytes:files.left.size+files.right.size},undefined,uploadController.signal);
       if(!space.can_upload)throw Error('Insufficient server disk space for the uploaded copies. Use Storage & queue to clean up old jobs.');
       if(space.free<space.suggested_free_bytes&&!confirm(`${bytes(space.free)} free; at least ${bytes(space.suggested_free_bytes)} is suggested. Reports may need more. Continue uploading?`))return;
-      job = await api('/api/jobs',{delimiter:$('delimiter').value==='tab'?'\t':$('delimiter').value,encoding:$('encoding').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))});
+      job = await api('/api/jobs',{delimiter:$('delimiter').value==='tab'?'\t':$('delimiter').value,encoding:$('encoding').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))},undefined,uploadController.signal);
       localStorage.setItem('keywise-job',job.id);
     }
-    await attachUploadProject(job.id);
+    await attachUploadProject(job.id,uploadController.signal);
     if($('quickProfile').value)localStorage.setItem('upload-profile:'+job.id,$('quickProfile').value);
-    job=await api(endpoint());
+    job=await api(endpoint(),undefined,undefined,uploadController.signal);
     for(const side of ['left','right']) {
       if(files[side].size!==job.files[side].size || files[side].name!==job.files[side].name) throw new Error('To resume, select the same files. Use New comparison to choose different files.');
     }
     $('uploadProgress').hidden = false;
-    const total = files.left.size + files.right.size;
-    for(const side of ['left','right']) {
-      let offset = job.files[side].uploaded;
-      while(offset < files[side].size) {
-        if(pauseUploadRequested)return;
-        const start = offset;
-        const result = await sendChunkRecoverable(side,files[side].slice(start,start+8*1024*1024),start,loaded=>{
-          const now=performance.now();if(now-lastUploadPaint<100&&loaded<Math.min(8*1024*1024,files[side].size-start))return;lastUploadPaint=now;
-          const completed = (side==='right'?files.left.size:0)+start+loaded;
-          const percent = Math.min(100,100*completed/total);
-          const message=`Uploading ${side} file · ${bytes(completed)} of ${bytes(total)}`;
-          $('uploadText').textContent=message;$('uploadActivityText').textContent=message;
-          $('uploadPercent').textContent = `${percent.toFixed(1)}%`; $('uploadBar').value=percent;
-        });
-        offset = result.uploaded; job.files[side].uploaded = offset;
-        await new Promise(resolve=>setTimeout(resolve,0));
-      }
+    const identity=job.id;
+    for(const side of ['left','right']){
+      if(pauseUploadRequested)return;
+      const transfer=new UploadTransfer({
+        url:offset=>`/api/jobs/${identity}/files/${side}?offset=${offset}`,
+        token:()=>token,
+        getStatus:async({signal}={})=>(await api(`/api/jobs/${identity}/upload-status`,undefined,undefined,signal)).files[side],
+        signal:uploadController.signal,
+        compress:/\.csv$/i.test(files[side].name)&&(job.upload_compression||[]).includes('gzip'),
+        onProgress:snapshot=>paintUpload(side,snapshot)
+      });
+      const result=await transfer.upload(files[side],job.files[side].uploaded);
+      job.files[side].uploaded=result.uploaded;
     }
     if(pauseUploadRequested)return;
+    $('pauseUpload').disabled=true;
+    $('uploadProgress').dataset.state='preparing';
     $('uploadText').textContent = 'Checking column names…';
     job = await api(endpoint('/finalize'),{});
+    $('uploadProgress').hidden=true;
     if(currentView==='uploadPanel')currentView=job.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel';await refresh();if(currentView==='uploadPanel'&&job.state==='selecting_sheets')$('sheetPanel').scrollIntoView({behavior:'smooth',block:'start'});
   } catch(error) {
-    showError(error);
-    if(job) {try {job=await api(endpoint());} catch { /* Keep current job to allow retry. */ }}
+    if(!pauseUploadRequested)showError(error);
+    // Resume fetches the checkpoint afresh. Never block Pause on an offline GET.
+    if(job&&!pauseUploadRequested) {try {job=await api(endpoint(),undefined,undefined,AbortSignal.timeout(5000));} catch { /* Keep last acknowledged progress for retry. */ }}
   } finally {
-    uploading=false; $('upload').disabled=job&&job.state!=='uploading'; $('reset').disabled=false; $('reset').hidden=!job;
+    uploading=false;uploadController=null;$('uploadPanel').classList.remove('upload-active'); $('upload').disabled=(job&&job.state!=='uploading')||!files.left||!files.right; $('reset').disabled=false; $('reset').hidden=!job;
     for(const side of ['left','right']) $(`${side}File`).disabled=job&&job.state!=='uploading';
     $('pauseUpload').hidden=true;
     $('uploadActivity').hidden=job?.state!=='uploading';
-    if(job?.state==='uploading'){const done=job.files.left.uploaded+job.files.right.uploaded;const message=`${pauseUploadRequested?'Upload paused':'Upload stopped'} · ${bytes(done)} saved. Click Resume upload to continue.`;$('uploadText').textContent=message;$('uploadActivityText').textContent=message;$('upload').textContent='Resume upload →';}
+    if(job?.state==='uploading')showPausedUpload();
     if(!job) $('delimiter').disabled=$('encoding').disabled=false;syncNavigation();
   }
 });
@@ -839,23 +873,9 @@ $('jsonHtml').addEventListener('click',()=>{
   saveJsonReport(html,'text/html','json-comparison.html');
 });
 
-$('pauseUpload').addEventListener('click',()=>{pauseUploadRequested=true;$('pauseUpload').disabled=true;$('pauseUpload').textContent='Pausing after current chunk…';});
+$('pauseUpload').addEventListener('click',()=>{pauseUploadRequested=true;$('pauseUpload').disabled=true;$('pauseUpload').textContent='Pausing…';uploadController?.abort();});
 $('returnUpload').addEventListener('click',()=>{goView(job?.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel').catch(showError);});
-async function sendChunkRecoverable(side,blob,offset,update){
-  for(let attempt=0;attempt<3;attempt++){
-    try{return await sendChunk(side,blob,offset,update);}catch(error){
-      // The server may have saved the chunk before the response was lost.
-      // Reconcile its durable file offset before retrying; never append twice.
-      const latest=await api(endpoint());
-      const uploaded=latest.files[side].uploaded;
-      job.files[side].uploaded=uploaded;
-      if(uploaded===offset+blob.size)return {uploaded};
-      if(uploaded!==offset||attempt===2)throw error;
-      $('uploadActivityText').textContent=`Retrying ${side} upload chunk (${attempt+1}/2)…`;
-      await new Promise(resolve=>setTimeout(resolve,500*(attempt+1)));
-    }
-  }
-}
+window.addEventListener('beforeunload',event=>{if(uploading){event.preventDefault();event.returnValue='';}});
 
 if(!job){$('navNew').classList.add('active');$('navNew').setAttribute('aria-current','page');}
 
@@ -1519,12 +1539,12 @@ async function loadUploadProjects(selectedId){
   select.value=previous;
   if(job && selectedId===undefined){const data=await api('/api/projects/records?id='+job.id);select.value=data.records[0]?.project_id||'';}
 }
-async function attachUploadProject(identity){
-  const data=await api('/api/projects/records?id='+identity),record=data.records[0];
+async function attachUploadProject(identity,signal){
+  const data=await api('/api/projects/records?id='+identity,undefined,undefined,signal),record=data.records[0];
   if(!record)throw Error('Comparison audit is unavailable. Retry attaching the project.');
   const chosen=$('uploadProject').value||null;
   if((record.project_id||null)===chosen)return;
-  await api('/api/projects/records',{comparison_id:identity,project_id:chosen,status:record.audit_status,note:record.audit_note,reviewer:record.reviewer});
+  await api('/api/projects/records',{comparison_id:identity,project_id:chosen,status:record.audit_status,note:record.audit_note,reviewer:record.reviewer},undefined,signal);
 }
 function initProjects(){
   if(typeof document.createDocumentFragment!=='function')return;

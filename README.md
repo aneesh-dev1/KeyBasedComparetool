@@ -20,8 +20,8 @@ python3 server.py --open
 
 Open **http://127.0.0.1:8765**. No third-party packages are required.
 
-1. Choose the left and right CSVs and upload them. Uploads use 8 MB chunks,
-   streamed to disk. After an interruption, reselect the same files and resume.
+1. Choose the left and right CSVs and upload them. Uploads use adaptive 256 KiB–8 MiB chunks streamed to disk; CSV chunks
+   use lossless gzip when the browser supports it and it saves at least 15% of bytes. After an interruption, reselect the same files and resume.
 2. Search and select the key columns. Memory and batch sizes are selected automatically when the job starts.
    The 32 GB RAM profile defaults to **4 GB** and **parallel** file sorting.
    Optionally select ignored columns and enter ignored key values.
@@ -462,14 +462,15 @@ files. Repeated names align by occurrence, and anonymous columns by position.
 The same names appear in key selection, scope, previews and mismatch exports.
 The UI shows up to 200 header adjustments and reports retain all adjustments.
 
-Upload checkpoints now use the actual saved file length instead of replacing
-job metadata after every 8 MB chunk. Temporary metadata files have unique names
+Upload checkpoints use the committed file length and a small pending-chunk journal
+instead of replacing job metadata after every chunk. Partial chunks are rolled
+back on interruption/restart; status never advertises uncommitted bytes. Temporary metadata files have unique names
 and bounded retries for permission/sharing errors. A permanent lock still
 requires closing the application holding the file or choosing a writable local
 data directory; it is reported without replacing the previous metadata.
 Interrupted requests reconcile the server offset before retrying, avoiding
-duplicate bytes. Pause finishes the active chunk; Resume continues from the
-saved offset. After reopening the browser, reselect the same source files to
+duplicate bytes. Pause aborts the active request; Resume verifies the server checkpoint before
+continuing from the saved offset. After reopening the browser, reselect the same source files to
 resume. Job history, JSON, and container navigation remain available during
 upload; opening a different job or starting a new job requires pausing first.
 
@@ -811,3 +812,37 @@ Counts cover processed keys only until completion. A rolling sample contains at 
 All mismatch evidence is still written to the result files. At 50–60% of 1,780 million cells, result volume can approach one billion records; writing those records and creating a full Excel workbook remains substantial work. The app does not silently sample full exports or guarantee two-minute completion.
 
 Validation on a local Mac: 2,000 shuffled rows × 1,780 total columns (one key), exactly 2,134,800 changed cells. Automatic hash comparison took 2.110 seconds versus 2.266 seconds for disk sorting, with checkpoint validation enabled; all six output CSV files had identical SHA-256 hashes. Each run wrote 166.6 MB of evidence. This small benchmark excludes HTML/Excel generation and does not predict 6 GB HDD performance. `benchmark_mismatch_scan.py` separately measures only sparse/dense cell scanning.
+
+
+### Large uploads over the team network
+
+The browser compresses CSV chunks with native `CompressionStream('gzip')`, when
+available, and sends the compressed bytes to the workspace server. The server
+restores the **exact original bytes** before parsing: encoding, quoting, line
+endings and numeric text are unchanged. A bounded first chunk tests whether
+compression reduces payload size by at least 15%; otherwise the transfer uses raw
+bytes. Excel and Parquet use the direct path. This is upload compression, not a
+conversion of the file format. No whole-file buffer or third-party upload service
+is used. The server still needs disk space for the original, uncompressed files.
+
+The Files view shows per-file saved progress, estimated remaining time and
+original-file throughput (including compression). Payload savings describe
+acknowledged chunks of the current file in this session; retry traffic is not
+included in that percentage. Compression costs CPU and may not improve elapsed
+time on a fast LAN. Measure on representative files and the actual network.
+
+Chunks adapt between 256 KiB and 8 MiB. The client retries transient failures,
+checks the server's acknowledged offset after an uncertain response, waits while
+o previous chunk is still being written, and pauses on browser-reported offline
+status. A progressing slow upload is not stopped by a fixed total timeout;
+a 60-second inactivity watchdog still detects a stalled connection. Retry limits
+preserve a manual Resume action when recovery fails. Pause cancels the current
+request; it may already have been committed, so Resume checks the server.
+
+Keep the tab open while uploading. After a page/browser restart, open the job in
+Job history and reselect the same **unchanged** files to resume. Name and size
+checks do not prove content identity; selecting a different file with the same
+name and size is not supported. Starting a fresh job does not deduplicate existing
+uploads. Recompare already reuses its job's source data. Uploads remain sequential
+within a job to avoid concurrent HDD writes; multiple team workspaces remain
+independent. This custom chunk protocol does not implement the tus specification.

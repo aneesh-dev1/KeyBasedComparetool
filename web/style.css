@@ -509,3 +509,26 @@ dialog.analysis-drawer,dialog.rerun-dialog{border:0;color:var(--ink);background:
 @media(min-width:1000px){.enterprise-ui #runningPanel .pipeline-stages{grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin:12px 0}.enterprise-ui #runningPanel .pipeline-stages li{padding:10px;font-size:11px}}
 #runningPanel.live-is-complete>#cancelComparison,#runningPanel.live-is-complete #processed{display:none}
 @media(min-width:801px){.live-sample-scroll{max-height:clamp(110px,calc(100dvh - 600px),380px)}.live-is-complete .live-sample-scroll{max-height:clamp(140px,calc(100dvh - 550px),420px)}}
+
+/* Bounded upload progress stays in the Files workspace and works on small displays. */
+.file-transfer{display:none;width:100%;font-size:12px;color:#506674}.file-transfer progress{height:5px;margin:6px 0 0}
+.enterprise-ui #uploadPanel.upload-active .file-card{min-height:110px;padding:14px 18px;gap:6px;cursor:default}
+#uploadPanel.upload-active .file-top,#uploadPanel.upload-active .browse{max-height:0;margin:0;padding:0;opacity:0;border:0}
+#uploadPanel.upload-active .file-transfer{display:block}
+#uploadPanel.upload-active>.settings{max-height:0;margin:0;padding:0;opacity:0;pointer-events:none}
+#uploadPanel.upload-active .file-card strong{font-size:15px}
+#uploadPanel.upload-active .file-uploaded{border-color:#8ac8bc;background:#f3fbf8}
+.transfer-card{margin:18px 0 8px;padding:16px 18px;border:1px solid #b9dfe7;border-radius:12px;background:linear-gradient(120deg,#f2fbfd,#fff);color:#123d50}
+.transfer-heading{display:flex;gap:10px;align-items:center;min-height:34px}.transfer-heading>#uploadText{font-size:14px;min-width:0;overflow-wrap:anywhere}.transfer-heading>#uploadPercent{margin-left:auto;font-variant-numeric:tabular-nums;font-size:18px}.transfer-heading button{margin-left:8px;white-space:nowrap}
+.transfer-indicator{flex:0 0 16px;width:16px;height:16px;border:2px solid #c2e6ee;border-top-color:#007c99;border-radius:50%;animation:upload-spin 1s linear infinite}
+.transfer-card[data-state="paused"] .transfer-indicator,.transfer-card[data-state="offline"] .transfer-indicator{animation:none;border-color:#b78c21;background:#fff4d0}
+.transfer-card>progress{height:7px;margin:12px 0 16px;display:block;width:100%}
+.transfer-metrics{display:grid;grid-template-columns:1.3fr 1fr 1fr 1.2fr;gap:16px}.transfer-metrics>div{display:flex;flex-direction:column;gap:6px;min-width:0}.transfer-metrics span{font-size:11px;color:#58717b}.transfer-metrics strong{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.transfer-metrics [title]{cursor:help}
+.transfer-hint{margin:14px 0 0!important;font-size:11px!important;color:#58717b!important}
+@keyframes upload-spin{to{transform:rotate(360deg)}}
+@media(max-width:800px){.transfer-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.transfer-card{padding:12px}.transfer-heading{flex-wrap:wrap}.transfer-heading>#uploadText{flex:1 1 160px}.transfer-heading>#uploadPercent{font-size:16px}}
+@media(prefers-reduced-motion:reduce){.transfer-indicator{animation:none}.enterprise-ui #uploadPanel.upload-active .file-card{transition:none}}
+
+.enterprise-ui .file-card input[type="file"]:disabled{opacity:0}
+/* The persistent banner is for other pages; Files already has detailed progress. */
+#mainWorkspace:has(#uploadPanel:not([hidden]))>.upload-activity{display:none}
