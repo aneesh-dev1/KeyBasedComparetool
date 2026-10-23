@@ -31,7 +31,6 @@ if __name__ == '__main__':
                            value_overrides=job.get('value_overrides', []),
                            column_headers=job.get('column_headers'),
                            ignore_key_containers=job.get('ignore_key_containers', []),
-                           live_preview_file=directory / 'live-preview.json',
                            progress_file=directory / 'progress.json')
     try:
         compare(args)

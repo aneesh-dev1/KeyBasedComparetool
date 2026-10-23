@@ -555,9 +555,6 @@ def _compare(args):
                  changed_rows=0, changed_cells=0, left_only=0, right_only=0, override_equivalent_cells=0, rule_equivalent_cells=0)
     stats.update({side + suffix: 0 for side in ('left', 'right') for suffix in ('_duplicate_keys', '_duplicate_rows_skipped')})
     columns = {name: 0 for name in canonical if name not in args.keys}
-    from live_preview import LivePreview
-    live=LivePreview(getattr(args,'live_preview_file',None))
-    live.publish(stats,columns,0,phase='prepare',force=True)
     with contextlib.ExitStack() as resources, (contextlib.nullcontext(str(checkpoint_dir)) if checkpoint_dir else tempfile.TemporaryDirectory(prefix='csv-compare-', dir=args.temp_dir)) as work:
         temp = Path(work)
         joined=None
@@ -600,7 +597,6 @@ def _compare(args):
             raw_write=writers['raw_differences'].writerows
             difference_write=writers['differences'].writerows
             matched_write=writers['matched_keys'].writerow
-            live.publish(stats,columns,0,force=True)
             for a,b,differences in differences_for_pairs(pairs,len(canonical)):
                 if processed % batch_size == 0:
                     batch_start = time.monotonic()
@@ -617,7 +613,6 @@ def _compare(args):
                     key_text=a[0].decode('utf-8')
                     matched_write([key_text])
                     changed=False
-                    preview_samples=0
                     raw_rows=[];difference_rows=[];pending_bytes=0
                     for index,av,bv in differences:
                         name,allowed,rule=policies[index]
@@ -631,9 +626,6 @@ def _compare(args):
                             changed=True
                             columns[name]+=1
                             stats['changed_cells']+=1
-                            if preview_samples<3:
-                                live.add(key_text,name,av,bv)
-                                preview_samples+=1
                             difference_rows.append((key_text,name,'[NULL]' if av is None else '[NULL] (text)' if av=='[NULL]' else av,'[NULL]' if bv is None else '[NULL] (text)' if bv=='[NULL]' else bv))
                         if len(raw_rows)>=1024 or pending_bytes>=1024*1024:
                             raw_write(raw_rows);difference_write(difference_rows)
@@ -641,7 +633,6 @@ def _compare(args):
                     if raw_rows:raw_write(raw_rows);difference_write(difference_rows)
                     stats['changed_rows' if changed else 'equal_rows']+=1
                 if processed%64==0:
-                    live.publish(stats,columns,processed)
                     check_cancel(getattr(args,'cancel_file',None))
                     now=time.monotonic()
                     if now-last_update>=2:
@@ -652,7 +643,6 @@ def _compare(args):
             if processed%batch_size:
                 progress(args, 'Comparison batch complete', stage='compare', batch=(processed-1)//batch_size+1, batch_keys=processed%batch_size, rows=processed, changed_cells=stats['changed_cells'], status='completed', elapsed_seconds=round(time.monotonic()-batch_start,3))
             progress(args, 'Comparing keys', stage='compare', rows=processed, completed_batches=(processed+batch_size-1)//batch_size, status='completed')
-            live.publish(stats,columns,processed,phase='reports',force=True)
             if joined is not None:joined.close()
 
     if stats['left_duplicate_keys'] or stats['right_duplicate_keys']:
@@ -670,7 +660,6 @@ def _compare(args):
     if checkpoint_dir: verify_sources(checkpoint_dir)
     atomic_write_text(out / 'summary.json', json.dumps(stats, indent=2))
     (out / 'INCOMPLETE').unlink()
-    live.publish(stats,columns,processed,phase='compared',force=True)
     return stats
 
 

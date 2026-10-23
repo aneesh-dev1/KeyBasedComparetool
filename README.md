@@ -465,7 +465,7 @@ Comparison remains streaming: progress checkpoints start and complete every
 10,000 processed keys, including the final partial checkpoint. These messages
 include cumulative processed keys and changed cells; they do not imply loading
 10,000 wide rows into memory. Total sorting batches are not guessed in advance.
-The live console and downloadable run.log contain these messages. Existing
+The comparison console and downloadable run.log contain these messages. Existing
 completed job logs are unchanged.
 
 ## Reproducible performance check
@@ -872,17 +872,11 @@ The existing 500,000-row × 694-column integer Parquet benchmark remained compar
 
 Read progress is logged every 50,000 source rows for CSV, imported Excel and Parquet. These updates do not sort or flush a batch. Read/sort batches are automatically sized up to 100,000 rows; the memory budget may flush smaller batches. Comparison progress batches are sized up to 10,000 keys.
 
-## Live mismatch review and dense results
-
-Pipeline & logs offers **Live differences** and **Console** tabs. Once source preparation finishes, the worker publishes atomic snapshots about every 1.5 seconds while comparing. The browser polls these bounded snapshots independently of the worker: slow or disconnected browsers do not queue output or stop the run. This is live polling, not an unbounded HTTP result stream.
-
-Counts cover processed keys only until completion. A rolling sample contains at most 60 recent differences, up to three per key; values are shortened in the preview only. Pause samples freezes the table while processing continues. Null and empty text remain distinguishable. Snapshot size is capped at 256 KiB and requests use the job's workspace ownership checks. Samples remain available during automatic HTML/Excel generation. A failed/cancelled job is explicitly labelled partial. Review revisions expose their retained-evidence pipeline and console views;
-source live-sample controls are hidden for these revisions.
+## Dense mismatch results
 
 All mismatch evidence is still written to the result files. At 50–60% of 1,780 million cells, result volume can approach one billion records; writing those records and creating a full Excel workbook remains substantial work. The app does not silently sample full exports or guarantee two-minute completion.
 
 Validation on a local Mac: 2,000 shuffled rows × 1,780 total columns (one key), exactly 2,134,800 changed cells. Automatic hash comparison took 2.110 seconds versus 2.266 seconds for disk sorting, with checkpoint validation enabled; all six output CSV files had identical SHA-256 hashes. Each run wrote 166.6 MB of evidence. This small benchmark excludes HTML/Excel generation and does not predict 6 GB HDD performance. `benchmark_mismatch_scan.py` separately measures only sparse/dense cell scanning.
-
 
 ### Large uploads over the team network
 

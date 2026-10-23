@@ -625,7 +625,7 @@ class Handler(BaseHTTPRequestHandler):
             path, query = self.check_request()
             if self.command == 'GET' and path == '/health':
                 return self.json_response(dict(service='key-based-compare', status='ready', pid=os.getpid()))
-            if self.command == 'GET' and path in ('/', '/app.js', '/live-preview.js', '/upload-transport.js', '/style.css', '/assets/transunion-logo.svg', '/assets/transunion-loader.svg', '/assets/tu-favicon.svg', '/enterprise.js', '/enterprise.css'):
+            if self.command == 'GET' and path in ('/', '/app.js', '/upload-transport.js', '/style.css', '/assets/transunion-logo.svg', '/assets/transunion-loader.svg', '/assets/tu-favicon.svg', '/enterprise.js', '/enterprise.css'):
                 target = BASE / 'web' / ('index.html' if path == '/' else path[1:])
                 data = target.read_bytes().replace(b'__APP_TOKEN__', self.app.token.encode()).replace(b'__WORKSPACE_MODE__', b'team' if self.server.shared else b'local').replace(b'__MAX_SORT_MB__', str(self.server.max_sort_mb).encode())
                 self.send_response(200)
@@ -958,9 +958,6 @@ class Handler(BaseHTTPRequestHandler):
                     job.update({key: value for key, value in job['runtime_settings'].items() if key in PERFORMANCE})
                 job['free_disk_bytes'] = shutil.disk_usage(directory).free
                 return self.json_response(job)
-            if self.command == 'GET' and action == 'live-preview':
-                from live_preview import read_preview
-                return self.json_response(read_preview(directory,job['state']))
             if self.command == 'GET' and action == 'upload-status':
                 return self.json_response(dict(id=identity, state=job['state'], upload_compression=['gzip'],
                     files={side: {key: job['files'][side].get(key, False if key in ('complete', 'in_flight') else 0)
@@ -1178,8 +1175,6 @@ class Handler(BaseHTTPRequestHandler):
                     if not job.get('can_resume') or self.app.busy(job):
                         raise ValueError('This job has no resumable comparison, or is already active')
                     job.update(state='queued',error='',finished=None)
-                    from live_preview import LivePreview
-                    LivePreview(directory/'live-preview.json').publish({}, {},0,phase='prepare',force=True)
                     atomic_write_text(directory/'progress.json',json.dumps(dict(stage='validate',phase='Queued for source validation')))
                     self.app.save(job)
                     self.app.submit(identity,'comparison',self.app.run_comparison)

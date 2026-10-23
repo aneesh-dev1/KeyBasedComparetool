@@ -629,8 +629,7 @@ async function renderPipeline(){
   if($('pipelineStages').dataset.signature!==signature){$('pipelineStages').replaceChildren();stages.forEach(()=>{const item=document.createElement('li');$('pipelineStages').append(item);});$('pipelineStages').dataset.signature=signature;}
   stages.forEach(([id,label],i)=>{const item=$('pipelineStages').children[i];const state=job.state==='queued'?'pending':job.state==='complete'||i<index?'done':i===index?(job.state==='error'?'failed':'active'):'pending';if(item.className!==state){item.className=state;item.textContent=`${state==='done'?'✓':state==='failed'?'!':i+1}  ${label}`;}});
   if(logJobId!==job.id){logJobId=job.id;logCursor=0;logText='';consolePaused=false;consoleFollow=true;if($('consolePause')){$('consolePause').textContent='Pause display';$('consolePause').setAttribute('aria-pressed','false');$('consoleFollow').setAttribute('aria-pressed','true');}}
-  const id=job.id;const [log,live]=await Promise.all([api(endpoint('/logs')+'?cursor='+logCursor),api(endpoint('/live-preview'))]);if(job.id!==id)return;
-  window.renderLiveMismatches?.(job,live);
+  const id=job.id;const log=await api(endpoint('/logs')+'?cursor='+logCursor);if(job.id!==id)return;
   logCursor=log.cursor;logText=(logText+log.text).split('\n').slice(-1000).join('\n');paintConsole();
   $('logDownload').href=downloadUrl('run.log');
   if(log.text.length>=60000)pollTimer=setTimeout(()=>refresh().catch(pollError),300);

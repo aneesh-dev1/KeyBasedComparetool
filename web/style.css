@@ -489,26 +489,7 @@ dialog.analysis-drawer,dialog.rerun-dialog{border:0;color:var(--ink);background:
 
 .ai-column-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;max-height:160px;overflow:auto;margin:8px 0}.ai-column-choices label{display:flex;align-items:center;gap:8px;overflow-wrap:anywhere;font-size:12px}.ai-column-choices input{width:auto;margin:0}.ai-column-choices+ p{font-size:11px}#aiColumnPicker[hidden]{display:none}
 
-/* Bounded live review shares the pipeline viewport with its console. */
-.live-review-tabs{display:flex;gap:20px;border-bottom:1px solid var(--line);margin-bottom:14px}
-.live-review-tabs button{padding:9px 0;background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);font:600 13px inherit;cursor:pointer}
-.live-review-tabs button[aria-selected=true]{border-color:#007c9d;color:#006782}
-.live-dot{display:inline-block;width:7px;height:7px;background:#007c9d;border-radius:50%;margin-left:6px}
-.live-is-running .live-dot{animation:live-pulse 1.8s ease-in-out infinite}
-.live-counts{display:flex;align-items:center;gap:30px;margin:8px 0}.live-counts>div{display:grid;gap:3px}.live-counts span{font-size:11px;color:#587080}.live-counts strong{font-size:22px;color:#004364;font-variant-numeric:tabular-nums}.live-counts button{margin-left:auto;font-size:12px}
-#livePreviewStatus,.live-sample-note{font-size:12px;color:#587080;margin:8px 0;line-height:1.5}
-.live-sample-scroll{max-height:clamp(140px,30dvh,380px);overflow:auto;border:1px solid var(--line);border-radius:6px;scrollbar-gutter:stable}
-.live-sample-scroll table{width:100%;table-layout:fixed;border-collapse:collapse}.live-sample-scroll th{position:sticky;top:0;background:#e9f3f6;z-index:1;text-align:left;font-size:12px;padding:10px}
-.live-sample-scroll td{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;vertical-align:top;padding:8px 10px;border-bottom:1px solid #edf1f3;line-height:1.5;min-width:0}.live-sample-scroll td:nth-child(3){background:#fff4ef}.live-sample-scroll td:nth-child(4){background:#eff8f3}.live-sample-scroll .live-empty{padding:35px;text-align:center;color:#587080}
-#runningPanel[data-live-tab=differences]>.console-title,#runningPanel[data-live-tab=differences]>.console-controls,#runningPanel[data-live-tab=differences]>#consoleStatus,#runningPanel[data-live-tab=differences]>#consoleLog,#runningPanel[data-live-tab=differences]>.console-title+p{display:none}
-@keyframes live-pulse{50%{opacity:.35}}
-@media(max-width:650px){.live-counts{gap:12px;flex-wrap:wrap}.live-counts strong{font-size:18px}.live-counts button{margin-left:0}.live-sample-scroll{max-height:30dvh}}
-@media(prefers-reduced-motion:reduce){.live-is-running .live-dot{animation:none}}
-.reduce-motion .live-dot{animation:none}
-
 @media(min-width:1000px){.enterprise-ui #runningPanel .pipeline-stages{grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin:12px 0}.enterprise-ui #runningPanel .pipeline-stages li{padding:10px;font-size:11px}}
-#runningPanel.live-is-complete>#cancelComparison,#runningPanel.live-is-complete #processed{display:none}
-@media(min-width:801px){.live-sample-scroll{max-height:clamp(110px,calc(100dvh - 600px),380px)}.live-is-complete .live-sample-scroll{max-height:clamp(140px,calc(100dvh - 550px),420px)}}
 
 /* Bounded upload progress stays in the Files workspace and works on small displays. */
 .file-transfer{display:none;width:100%;font-size:12px;color:#506674}.file-transfer progress{height:5px;margin:6px 0 0}
