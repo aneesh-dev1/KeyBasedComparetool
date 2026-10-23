@@ -320,15 +320,15 @@ function renderSummary() {
   renderResultChart(s);
   const changes=Object.entries(s.changed_cells_by_column).filter(([,count])=>count>0).sort((a,b)=>b[1]-a[1]);
   $('resultTitle').textContent=s.changed_rows||s.left_only||s.right_only?'Your comparison is ready.':'Both files match within the selected scope.';
-  $('resultSubtitle').textContent=`${number(s.left_rows)} left rows · ${number(s.right_rows)} right rows · Keys: ${s.keys.join(', ')}`;
-  $('scopeSummary').textContent=`${number(s.ignored_columns?.length||0)} columns ignored · ${number(s.left_excluded_rows||0)} left rows and ${number(s.right_excluded_rows||0)} right rows excluded by key. ${number(s.value_overrides?.length||0)} value overrides; ${number((s.override_equivalent_cells||0)+(s.rule_equivalent_cells||0))} unequal cells accepted by rules. Counts refer to the selected scope.`;
+  $('resultSubtitle').textContent=`${number(s.left_rows)} champion rows · ${number(s.right_rows)} challenger rows · Keys: ${s.keys.join(', ')}`;
+  $('scopeSummary').textContent=`${number(s.ignored_columns?.length||0)} columns ignored · ${number(s.left_excluded_rows||0)} champion rows and ${number(s.right_excluded_rows||0)} challenger rows excluded by key. ${number(s.value_overrides?.length||0)} value overrides; ${number((s.override_equivalent_cells||0)+(s.rule_equivalent_cells||0))} unequal cells accepted by rules. Counts refer to the selected scope.`;
   const duplicates=(s.left_duplicate_rows_skipped||0)+(s.right_duplicate_rows_skipped||0);
   $('duplicateDownload').hidden=!duplicates;$('duplicateDownload').href=downloadUrl('duplicate_keys.csv');
   if(duplicates){$('resultTitle').textContent='Comparison complete — duplicate keys found';$('scopeSummary').textContent+=` Warning: ${number(s.left_duplicate_rows_skipped||0)} file 1 rows and ${number(s.right_duplicate_rows_skipped||0)} file 2 rows skipped as duplicates. Kept the ${s.duplicate_policy||'first'} source occurrence per key. Download the duplicate audit for details.`;}
   if(s.review_revision){const r=s.review_revision;$('scopeSummary').textContent+=` Review revision: ${number(r.original_mismatches)} original mismatches · ${number(r.accepted_by_rules)} accepted · ${number(r.excluded_from_scope)} excluded · ${number(r.remaining_mismatches)} remaining.`;}
   $('duration').textContent=`${s.elapsed_seconds.toFixed(s.elapsed_seconds<1?3:1)} seconds`;
   $('metrics').replaceChildren();
-  for(const [label,value,style] of [['Equal rows',s.equal_rows,'accent'],['Changed rows',s.changed_rows,'amber'],['Changed cells',s.changed_cells,'amber'],['Left-only keys',s.left_only,''],['Right-only keys',s.right_only,'']]) {
+  for(const [label,value,style] of [['Equal rows',s.equal_rows,'accent'],['Changed rows',s.changed_rows,'amber'],['Changed cells',s.changed_cells,'amber'],['Champion-only keys',s.left_only,''],['Challenger-only keys',s.right_only,'']]) {
     const card=document.createElement('div');card.className=`metric ${style}`;
     const title=document.createElement('small');title.textContent=label;
     const count=document.createElement('strong');count.textContent=number(value);card.append(title,count);$('metrics').append(card);

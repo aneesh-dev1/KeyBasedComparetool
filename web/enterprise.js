@@ -468,3 +468,53 @@ uploadFormatSettings.querySelector('.file-settings-menu').append(uploadSettings)
 uploadFormatSettings.hidden=!!job&&['ready','queued','running','complete'].includes(job.state);
 document.addEventListener('pointerdown',event=>{if(uploadFormatSettings.open&&!uploadFormatSettings.contains(event.target))uploadFormatSettings.open=false;});
 uploadFormatSettings.addEventListener('keydown',event=>{if(event.key==='Escape'&&!openSelectWidget){uploadFormatSettings.open=false;uploadFormatSettings.querySelector('summary').focus();}});
+
+// Dense enterprise analysis dashboard. Icons use the same offline Lucide line language.
+const analysisIcons={
+ overview:'<path d="M3 3v18h18"/><path d="M7 16l4-5 4 3 5-7"/>',
+ equal:'<circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/>',
+ rows:'<path d="M4 6h16M4 12h10M4 18h7"/><path d="m17 14 4 4m0-4-4 4"/>',
+ cells:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18m6-12v12"/>',
+ left:'<path d="M9 6 3 12l6 6M3 12h14"/><path d="M21 5v14"/>',
+ right:'<path d="m15 6 6 6-6 6M7 12h14"/><path d="M3 5v14"/>',
+ columns:'<path d="M4 5h16M4 12h10M4 19h13"/><circle cx="19" cy="12" r="2"/>',
+ reports:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h6"/>',
+ download:'<path d="M12 3v12m-4-4 4 4 4-4"/><path d="M5 21h14"/>',
+ project:'<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>'
+};
+const analysisSvg=name=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${analysisIcons[name]}</svg>`;
+const analysisMetricMap={
+ 'Equal rows':['equal','Matched records'],
+ 'Changed rows':['rows','Records with differences'],
+ 'Changed cells':['cells','Individual value changes'],
+ 'Champion-only keys':['left','Only in champion dataset'],
+ 'Challenger-only keys':['right','Only in challenger dataset']
+};
+function enhanceAnalysisDashboard(){
+ const results=$('results');if(!results||!job?.summary)return;results.classList.add('analysis-dashboard');
+ const heading=results.querySelector('.result-heading'),copy=heading?.firstElementChild;
+ if(copy&&!copy.classList.contains('analysis-heading-copy')){copy.classList.add('analysis-heading-copy');const icon=document.createElement('span');icon.className='analysis-heading-icon';icon.innerHTML=analysisSvg('overview');copy.prepend(icon);}
+ const project=heading?.querySelector('button');if(project&&!project.querySelector('svg'))project.insertAdjacentHTML('afterbegin',analysisSvg('project'));
+ const cards=[...$('metrics').children];
+ for(const card of cards){
+  const label=card.querySelector('small')?.textContent||'',config=analysisMetricMap[label];if(!config)continue;
+  if(!card.querySelector('.analysis-metric-icon')){const icon=document.createElement('span');icon.className='analysis-metric-icon';icon.innerHTML=analysisSvg(config[0]);card.prepend(icon);const hint=document.createElement('span');hint.className='analysis-metric-hint';hint.textContent=config[1];card.append(hint);}
+ }
+ const summary=job.summary,matched=Math.max(0,Number(summary.matched_keys||0)),changeCounts=[...$('columnSummary').querySelectorAll('.column-row strong')].map(node=>Number(node.textContent.replace(/[^0-9.-]/g,''))||0),maxChange=Math.max(1,...changeCounts);
+ for(const row of $('columnSummary').querySelectorAll('.column-row')){
+  if(row.querySelector('.analysis-column-meter'))continue;
+  const count=Number((row.querySelector('strong')?.textContent||'0').replace(/[^0-9.-]/g,''))||0;
+  const matchRate=matched?Math.max(0,100-count*100/matched):0;
+  row.dataset.risk=matchRate<95?'high':matchRate<99?'medium':'low';
+  const meta=document.createElement('span');meta.className='analysis-column-rate';meta.textContent=matched?`${matchRate.toFixed(matchRate>99?2:1)}% match`:'No matched keys';
+  const meter=document.createElement('span');meter.className='analysis-column-meter';meter.innerHTML=`<i style="width:${Math.max(3,count*100/maxChange)}%"></i>`;
+  row.append(meta,meter);
+ }
+ const columnTitle=results.querySelector('.column-panel .section-title h2');if(columnTitle)columnTitle.innerHTML=analysisSvg('columns')+'<span>Differences by column</span>';
+ const reportTitle=results.querySelector('.download-panel h2');if(reportTitle)reportTitle.innerHTML=analysisSvg('reports')+'<span>Reports</span>';
+ for(const button of results.querySelectorAll('.download-button'))if(!button.querySelector('.analysis-download-icon')){const icon=document.createElement('span');icon.className='analysis-download-icon';icon.innerHTML=analysisSvg('download');button.append(icon);}
+ results.querySelector('.download-panel>p:not(.eyebrow):not(.export-status):not(.fine)')?.remove();
+}
+const analysisSummaryRender=renderSummary;
+renderSummary=function(){analysisSummaryRender();enhanceAnalysisDashboard();};
+if(job?.state==='complete')enhanceAnalysisDashboard();
