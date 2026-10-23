@@ -14,7 +14,12 @@ if __name__ == '__main__':
     except Exception as error:
         print(f'ERROR: {error}', file=sys.stderr)
         sys.exit(2)
-    args = SimpleNamespace(checkpoint_dir=directory/'checkpoints',left=directory / ('left.parquet' if job['files']['left'].get('format')=='parquet' else 'left.csv'), right=directory / ('right.parquet' if job['files']['right'].get('format')=='parquet' else 'right.csv'),
+    from source_inputs import checked_path
+    def source(side):
+        value=job.get('source_paths',{}).get(side)
+        if value and job['files'][side].get('format')!='excel':return checked_path(value)
+        return directory/(side+'.parquet' if job['files'][side].get('format')=='parquet' else side+'.csv')
+    args = SimpleNamespace(checkpoint_dir=directory/'checkpoints',left=source('left'), right=source('right'),
                            read_batch_size=job.get('read_batch_size',100000), compare_batch_size=job.get('compare_batch_size',10000), duplicate_policy=job.get('duplicate_policy','first'),
                            comparison_rules=job.get('comparison_rules',[]), cancel_file=directory/'cancel-comparison', diagnostics_file=directory/'duplicate-keys.json',
                            keys=job['keys'], output=directory / 'report',

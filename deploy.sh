@@ -68,10 +68,14 @@ if read_pid; then echo "Already running (PID $SERVER_PID)."; exit 0; fi
 [[ -n "${PUBLIC_URL:-}" ]] || { echo 'Set PUBLIC_URL in deploy.env, e.g. http://compare.internal:8765' >&2; exit 2; }
 [[ "$BIND_HOST" == 0.0.0.0 || "$BIND_HOST" == 127.0.0.1 ]] || { echo "BIND_HOST must be 0.0.0.0 or 127.0.0.1" >&2; exit 2; }
 [[ "$PORT" =~ ^[0-9]+$ ]] || { echo 'PORT must be an integer.' >&2; exit 2; }
+SOURCE_ARGS=()
+while IFS= read -r source_directory; do
+  [[ -n "$source_directory" ]] && SOURCE_ARGS+=(--source-root "$source_directory")
+done <<< "${SOURCE_ROOTS:-}"
 # Close the launcher lock in the server child; the server takes its own data lock.
 nohup "$PYTHON_BIN" -u "$APP_DIR/server.py" --host "$BIND_HOST" --port "$PORT" \
   --public-url "$PUBLIC_URL" --data-dir "$DATA_DIR" --max-jobs "$MAX_JOBS" \
-  --max-sort-mb "$MAX_SORT_MB" --retention-days "$RETENTION_DAYS" >>"$LOG_FILE" 2>&1 < /dev/null 9>&- &
+  --max-sort-mb "$MAX_SORT_MB" --retention-days "$RETENTION_DAYS" "${SOURCE_ARGS[@]}" >>"$LOG_FILE" 2>&1 < /dev/null 9>&- &
 SERVER_PID=$!
 printf '%s\n' "$SERVER_PID" > "$PID_FILE"
 if "$PYTHON_BIN" - "$PORT" "$SERVER_PID" <<'PY'

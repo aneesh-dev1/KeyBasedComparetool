@@ -66,7 +66,7 @@ class ProjectAndParquetServerTests(FeatureTests):
         self.client.request('/api/projects/records',dict(comparison_id=job['id'],project_id=project,status='Approved',note='Reviewed',reviewer='QA'))
         detail=self.client.request('/api/projects/'+project)
         self.assertEqual(detail['audit_counts']['Approved'],1);self.assertEqual(detail['latest']['id'],job['id'])
-        self.assertEqual(self.other.request('/api/projects')['projects'],[])
+        self.assertEqual(self.other.request('/api/projects')['projects'][0]['id'],project)
         with self.assertRaises(HTTPError):self.other.request('/api/projects/records',dict(comparison_id=job['id'],project_id=project,status='Approved'))
         copied=self.client.request(url+'/review-copy',dict(keys=['id'],ignore_columns=[],comparison_rules=[],value_overrides=[]))
         self.assertEqual(self.complete('/api/jobs/'+copied['id'])['summary']['changed_cells'],0)

@@ -42,11 +42,11 @@ findNode('analysisKeyPart0').value='unsubmitted';await vm.runInContext('loadAnal
 vm.runInContext("api=async()=>({state:'complete',total:0,rows:[]})",context);
 await vm.runInContext("resetAnalysis('keys')",context);
 assert.equal(nodes.get('analysisKey').value,'');assert.equal(findNode('analysisKeyPart0').value,'');assert.equal(nodes.get('analysisColumnControls').hidden,true);assert.equal(nodes.get('saveNote').disabled,true);
-vm.runInContext(`api=async path=>({state:'complete',total:1,rows:path.includes('mode=patterns')?[['large','Case only','None','none',3,4,4]]:[['["001","A,B"]','large','None','none',4,4]],categories:[['Case only',3]]})`,context);
+vm.runInContext(`api=async path=>({state:'complete',total:1,rows:path.includes('mode=patterns')?[['large','Case only','None','none',3,4,4,'a'.repeat(64),'b'.repeat(64)]]:[['["001","A,B"]','large','None','none',4,4]],categories:[['Case only',3]]})`,context);
 await vm.runInContext("resetAnalysis('patterns')",context);
 assert.equal(nodes.get('analysisKeyControls').hidden,true);assert.equal(nodes.get('patternSummary').textContent,'Case only: 3 cells');
 assert.equal(nodes.get('analysisTable').children[1].children[4].textContent,3);
-nodes.get('analysisTable').children[1].children[6].children[0].events.click[0]();await vm.runInContext('loadAnalysis()',context);
+nodes.get('analysisTable').children[1].children[7].children[0].events.click[0]();await vm.runInContext('loadAnalysis()',context);
 assert.equal(nodes.get('analysisColumn').value,'large');assert.equal(nodes.get('analysisMode').value,'columns');
 vm.runInContext(`analysisNotesCache=[{column:'',key:['001','A,B'],status:'Expected',comment:'Key explanation'},{column:'large',key:null,status:'Needs investigation',comment:'Column explanation'}]`,context);
 assert(vm.runInContext("commentsFor('large',['001','A,B'])",context).includes('Key explanation'));

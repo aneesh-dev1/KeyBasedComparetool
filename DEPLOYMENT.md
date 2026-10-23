@@ -1,17 +1,18 @@
 # On-premises Linux deployment (no login)
 
-This mode is for a small team on a trusted internal network. There is no login,
-user directory, or authenticated user identity. A random browser cookie separates
-workspaces, jobs, uploads, logs, reports, and ignore-key containers. The app does
-not use filenames as job identifiers, so five people can upload files with the
-same names without overwriting each other.
+This mode is for a team on a trusted internal network. There is no login or
+user directory. Completed Job history and Projects are shared across the team.
+A random browser cookie keeps unfinished jobs, uploads, source changes,
+cancellation and deletion under the creating browser’s control. Teammates can
+read completed results, add comments, download reports and create their own
+review versions. Profile templates and ignore-key container libraries remain
+browser scoped. Files with the same name never overwrite another job.
 
-Different browsers/profiles receive different workspaces. Tabs in the same
-browser profile share one workspace. The cookie lasts 180 days and survives
-server restarts. Clearing cookies or using another browser loses access to the
-old workspace in the UI, although its files remain on the server. Treat the
-cookie as a workspace access token; this separation is not a substitute for
-network access control. Keep the service off the public internet.
+Tabs in one browser profile share a workspace. The cookie lasts 180 days and
+survives server restarts. Clearing cookies loses management access to that
+workspace’s jobs, while completed history remains visible. The cookie is an
+access token, not an authenticated identity. Project-specific access policies
+are not configured; keep this no-login service inside the intended team network.
 
 ## Install and start
 
@@ -226,3 +227,40 @@ SSD staging can matter more than additional connections; five users share the
 server's network and disk bandwidth. Test a representative upload through the
 actual proxy before changing concurrency. Additional parallel chunks, persisted
 cross-job file reuse and parsing during upload are not implemented in this change.
+
+## Direct server sources
+
+Files already on the server or an approved mounted share can be read directly,
+without another browser upload. In `deploy.env`, set one or more allowed directories:
+
+```bash
+SOURCE_ROOTS="/srv/key-compare/input
+/mnt/team-share/reconciliation"
+```
+
+Each newline adds one `--source-root` argument. The default is empty, which
+disables server-path input. Users select **Use server paths** in Files & headers
+and enter two absolute paths visible to the server. The process needs read access.
+The application rejects paths outside these roots, including escaping symlinks,
+unsupported types and changed source files. Choose directories that everyone
+using this no-login application may read; this is not a per-user permission model.
+
+CSV and Parquet use the selected file directly. Excel worksheets are imported
+into a job-local CSV, and JSON uses the existing bounded JSON comparison flow.
+Original server files are never renamed or deleted by cleanup. Do not overwrite
+sources while a comparison is running. A laptop path is not a server path: files
+that exist only on a user's computer still need the compressed, resumable upload.
+
+## Shared history and migration
+
+Projects use a shared `projects.sqlite` under `DATA_DIR`. Existing workspace
+project databases are merged once on startup, preserving records and events;
+duplicate project names receive a workspace suffix. Back up the data directory
+before an upgrade. Active jobs are visible only to their creator in history and
+project records; completed jobs are visible to the team. Creator controls remain
+required for project/audit changes. Teammates can create their own review.
+
+The existing retention default remains seven days of inactivity. Administrators
+can change `RETENTION_DAYS`; zero disables automatic expiry. Active work is
+protected. Cleanup removes app-owned upload copies and generated files, never
+external server sources. Project audit summaries remain after their job data expires.

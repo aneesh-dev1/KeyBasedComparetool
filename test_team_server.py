@@ -102,7 +102,7 @@ class TeamServerTests(unittest.TestCase):
                 else:
                     with zipfile.ZipFile(io.BytesIO(payload)) as archive:self.assertIsNone(archive.testzip())
         self.assertEqual(active[1],1)
-        self.assertEqual(len(Client(self.server).request('/api/jobs')['jobs']),0)
+        self.assertEqual(len(Client(self.server).request('/api/jobs')['jobs']),5)
     def test_allowed_host_origin_memory_and_json_capacity(self):
         c=Client(self.server)
         self.assertEqual(c.request('/health',headers={'Host':'compare.internal'})['status'],'ready')

@@ -48,8 +48,7 @@ class AnalysisTests(unittest.TestCase):
                 from urllib.parse import urlencode
                 details=client.request(path+'/analysis?'+urlencode(dict(mode='cells',key=json.dumps(['003']))))
                 self.assertEqual(details['key_status'],'left_only');self.assertEqual(details['total'],0)
-                with self.assertRaises(HTTPError) as error:other.request(path+'/analysis')
-                self.assertEqual(error.exception.code,404)
+                self.assertEqual(other.request(path+'/analysis')['state'],'complete')
                 client.request(path,method='DELETE')
                 self.assertFalse(server.app.directory(job['id']).exists())
             finally:

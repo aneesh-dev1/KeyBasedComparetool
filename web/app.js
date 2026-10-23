@@ -13,6 +13,22 @@ let logCursor=0, logText='', logJobId=null;
 let viewingHistoryJob=false;
 let keyContainers=[], selectedContainers=new Set();
 let lastComparisonView='uploadPanel';
+const workspaceViewKey='keywise-workspace-view';
+function syncCustomDelimiter(){
+  const custom=$('delimiter').value==='custom';
+  $('customDelimiterField').hidden=!custom;
+  $('customDelimiter').disabled=!custom||$('delimiter').disabled;
+}
+function selectedDelimiter(){
+  const value=$('delimiter').value;
+  if(value==='tab')return '\t';
+  if(value!=='custom')return value;
+  const custom=$('customDelimiter').value;
+  if([...custom].length!==1||['\r','\n','\0','"'].includes(custom))throw new Error('Enter one custom delimiter character. Line breaks, null, and double quotes are not supported.');
+  return custom;
+}
+$('delimiter').addEventListener('change',()=>{syncCustomDelimiter();if($('delimiter').value==='custom')$('customDelimiter').focus();});
+syncCustomDelimiter();
 document.body.insertAdjacentHTML('beforeend','<div id="comparisonMenu" class="comparison-menu" role="menu" aria-label="CSV and Excel actions" hidden><button id="menuNewComparison" role="menuitem">＋ New comparison</button><button id="menuContinueComparison" role="menuitem">↪ Continue current selection</button></div>');
 $('navNew').setAttribute('aria-haspopup','menu');$('navNew').setAttribute('aria-expanded','false');$('navNew').setAttribute('aria-controls','comparisonMenu');
 $('historyPanel').querySelector('.section-title').append($('reset'));
@@ -29,7 +45,7 @@ $('uploadPanel').querySelector('.section-title').append($('navPreview'));
 $('navPreview').setAttribute('aria-expanded','false');$('navPreview').setAttribute('aria-controls','sourcePanel');
 let previewExpanded=false;
 $('analysisPanel').insertAdjacentHTML('afterbegin','<button id="reviewOverrides" class="subtle review-overrides-action">Review value overrides</button>');
-const phaseLabels=['Files','Column headers','Keys & scope','Pipeline & logs','Results'];
+const phaseLabels=['Files & headers','Files & headers','Keys & scope','Pipeline & logs','Analysis'];
 const phaseViews=['uploadPanel','headersPanel','keysPanel','runningPanel','results'];
 const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',projectsPanel:'navProjects'};
 const number = value => Number(value).toLocaleString();
@@ -66,8 +82,11 @@ function panel(name) {
   if(typeof updateReviewWorkspace==='function')updateReviewWorkspace(name);
   if(currentView!==name)window.scrollTo(0,0);
   currentView=name;
+  localStorage.setItem(workspaceViewKey,name);
   $('mainWorkspace').classList.toggle('docs-view',name==='docsPanel');
   for (const [id,nav] of Object.entries(views)){ $(id).hidden=id!==name; $(nav).classList.toggle('active',id===name); }
+  if(name==='headersPanel')$('uploadPanel').hidden=false;
+  if(typeof syncFilesStage==='function')syncFilesStage(name);
   $('sheetPanel').hidden=name!=='uploadPanel'||!['selecting_sheets','preparing'].includes(job?.state);
   $('reset').hidden=false;
   const history=currentView==='historyPanel';
@@ -79,11 +98,12 @@ function panel(name) {
   if(typeof closeSidebarDrawer==='function')closeSidebarDrawer();
   $('flowTitle').textContent=viewingHistoryJob?'Saved comparison':'New comparison';
   const phase=phaseViews.indexOf(name);
-  if(!history&&!library)$('phaseLabel').textContent=name==='overridesPanel'?'Review · Value overrides':`Step ${phase+1} of 5 · ${phaseLabels[phase]}`;
+  if(!history&&!library)$('phaseLabel').textContent=name==='overridesPanel'?'Review · Value overrides':`Step ${Math.max(1,phase)} of 4 · ${phaseLabels[phase]}`;
   for(const [id,control] of Object.entries(views)){
     if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'&&id!=='storagePanel'&&id!=='profilesPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
   }
   syncNavigation();
+  if(typeof syncFilesStage==='function')syncFilesStage(name);
   if(typeof updateEnterpriseShell==='function')updateEnterpriseShell(name);
   if(name==='uploadPanel'&&job&&job.state!=='uploading'){
     for(const side of ['left','right']){$(`${side}File`).disabled=true;$(`${side}Name`).textContent=job.files[side].name;$(`${side}Size`).textContent=bytes(job.files[side].size)+' · uploaded';}
@@ -93,9 +113,11 @@ function panel(name) {
     $('upload').textContent=uploading?'Uploading…':job?.state==='uploading'?'Resume upload →':'Upload & continue →';$('upload').disabled=uploading||!files.left||!files.right;
   }
 }
-function configuration(){return {duplicate_policy:$('duplicatePolicy').value,keys:[...selected],ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules.filter(r=>!selected.has(r.column)&&!ignoredColumns.has(r.column))};}
+function duplicatePolicyValue(){return $('duplicatePolicy')?.value||'first';}
+function configuration(){return {duplicate_policy:duplicatePolicyValue(),keys:[...selected],ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules.filter(r=>!selected.has(r.column)&&!ignoredColumns.has(r.column))};}
 async function saveDraft(){if(job?.state==='ready')await api(endpoint('/config'),configuration());}
 async function goView(name){
+  if(name==='uploadPanel'&&job?.state==='ready')name='headersPanel';
   if(name==='analysisPanel'&&typeof showAnalysisDrawer==='function'){await showAnalysisDrawer();return;}
   if(uploading&&name!=='uploadPanel'&&!['jsonPanel','containersPanel','historyPanel','docsPanel'].includes(name))return;
   clearError();await saveDraft();
@@ -183,18 +205,20 @@ function showPausedUpload(){
 $('upload').addEventListener('click', async () => {
   if(uploading)return;
   if(files.left&&files.right){const left=detectedFileType(files.left),right=detectedFileType(files.right);if((left==='JSON')!==(right==='JSON')){showError('Choose two JSON files, or a pair of CSV/Excel/Parquet files. JSON cannot be compared to a table.');return;}if(left==='JSON'){await loadUnifiedJson();return;}}
+  let delimiter;
+  try{delimiter=selectedDelimiter();}catch(error){showError(error);return;}
   clearError(); uploading=true;pauseUploadRequested=false;lastUploadPaint=0;lastUploadAnnouncement=0;uploadPaintSide=null;uploadController=new AbortController();
   $('uploadPanel').classList.add('upload-active');
   $('pauseUpload').hidden=false;$('pauseUpload').disabled=false;$('pauseUpload').textContent='Pause upload';$('uploadActivity').hidden=false;$('uploadActivityText').textContent='Preparing upload…';
   syncNavigation(); $('upload').disabled=true;$('upload').textContent='Uploading…';$('reset').disabled=true;
   for(const side of ['left','right']) $(`${side}File`).disabled = true;
-  $('delimiter').disabled = $('encoding').disabled = true;
+  $('delimiter').disabled = $('encoding').disabled = true;syncCustomDelimiter();
   try {
     if (!job) {
       const space=await api('/api/preflight',{bytes:files.left.size+files.right.size},undefined,uploadController.signal);
       if(!space.can_upload)throw Error('Insufficient server disk space for the uploaded copies. Use Storage & queue to clean up old jobs.');
       if(space.free<space.suggested_free_bytes&&!confirm(`${bytes(space.free)} free; at least ${bytes(space.suggested_free_bytes)} is suggested. Reports may need more. Continue uploading?`))return;
-      job = await api('/api/jobs',{delimiter:$('delimiter').value==='tab'?'\t':$('delimiter').value,encoding:$('encoding').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))},undefined,uploadController.signal);
+      job = await api('/api/jobs',{delimiter,encoding:$('encoding').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))},undefined,uploadController.signal);
       localStorage.setItem('keywise-job',job.id);
     }
     await attachUploadProject(job.id,uploadController.signal);
@@ -235,7 +259,7 @@ $('upload').addEventListener('click', async () => {
     $('pauseUpload').hidden=true;
     $('uploadActivity').hidden=job?.state!=='uploading';
     if(job?.state==='uploading')showPausedUpload();
-    if(!job) $('delimiter').disabled=$('encoding').disabled=false;syncNavigation();
+    if(!job) $('delimiter').disabled=$('encoding').disabled=false;syncCustomDelimiter();syncNavigation();
   }
 });
 function renderKeys() {
@@ -274,7 +298,7 @@ function renderIgnoredColumns(){
 function renderSelected(){
   $('selectedKeys').textContent=selected.size?`Selected keys, in order: ${[...selected].join(', ')}`:'No key columns selected';
   $('compare').disabled=$('scopeNext').disabled=job.state!=='ready'||!selected.size;
-  $('ignoreKeys').disabled=$('duplicatePolicy').disabled=job.state!=='ready';
+  $('ignoreKeys').disabled=job.state!=='ready';if($('duplicatePolicy'))$('duplicatePolicy').disabled=job.state!=='ready';
   $('ignoreKeysHint').textContent=selected.size>1?`Composite key order: ${[...selected].join(', ')}. Enter JSON tuples, for example [["001","A"],["002","B"]] for two keys.`:'Enter comma-separated key values, for example 001, 002, 003. Put quotes around values containing commas or leading spaces.';
   $('ignoreKeys').placeholder=selected.size>1?'[["001","A"],["002","B"]]':'001, 002, 003';
 }
@@ -382,7 +406,7 @@ function renderHeaders(){
     $('header'+title+'Title').textContent=`File ${side==='left'?1:2} · ${job.files[side].name} · ${source[side].length} columns`;
     for(const index of matches[side].slice(headerPage*size,(headerPage+1)*size)){
       const label=document.createElement('label');label.className='header-edit';
-      const original=document.createElement('span');original.textContent=`${index+1}. ${source[side][index]}`;
+      const original=document.createElement('span');original.className='header-original-box';original.textContent=`${index+1}. ${source[side][index]}`;
       const input=document.createElement('input');input.value=headerDraft[side][index];input.disabled=job.state!=='ready';input.dataset.side=side;input.dataset.index=index;
       input.setAttribute('aria-label',`File ${side==='left'?1:2} column ${index+1} comparison header`);
       input.addEventListener('input',()=>{headerDraft[side][index]=input.value;headerDirty=true;updateHeaderStatus();});
@@ -397,10 +421,9 @@ function updateHeaderStatus(){
   // Server casefold validation is authoritative for all Unicode headers.
   const maps={left:new Map(),right:new Map()};let invalid=0;
   for(const side of ['left','right'])for(const name of headerDraft[side]){const key=name.toLowerCase();maps[side].set(key,(maps[side].get(key)||0)+1);if(!name.trim())invalid++;}
-  const missing={left:headerDraft.left.filter(n=>!maps.right.has(n.toLowerCase())),right:headerDraft.right.filter(n=>!maps.left.has(n.toLowerCase()))};
   const duplicate=Object.values(maps).reduce((n,m)=>n+[...m.values()].filter(v=>v>1).length,0);
-  $('headerLayoutStatus').textContent=invalid||duplicate?`${invalid} empty names · ${duplicate} duplicate names. Every comparison header must be unique within its file, ignoring case.`:missing.left.length||missing.right.length?`Non-common columns will be excluded · File 1 only: ${missing.left.slice(0,8).join(', ')||'none'}${missing.left.length>8?' …':''} · File 2 only: ${missing.right.slice(0,8).join(', ')||'none'}${missing.right.length>8?' …':''}. Only shared columns will be available for keys and comparison. Rename a column if you want to match it.`:`All ${headerDraft.left.length} columns match ignoring case. ${headerDirty?'Apply your edits to continue.':'Ready to continue.'}`;
-  for(const input of $('headersPanel').querySelectorAll('input[data-side]')){const side=input.dataset.side,key=input.value.toLowerCase();input.classList.toggle('header-unmatched',!maps[side==='left'?'right':'left'].has(key)||maps[side].get(key)>1||!input.value.trim());}
+  const layoutStatus=$('headerLayoutStatus');layoutStatus.hidden=!(invalid||duplicate);layoutStatus.textContent=invalid||duplicate?`${invalid} empty names · ${duplicate} duplicate names. Every comparison header must be unique within its file, ignoring case.`:'';
+  for(const input of $('headersPanel').querySelectorAll('input[data-side]')){const side=input.dataset.side,key=input.value.toLowerCase(),unmatched=!maps[side==='left'?'right':'left'].has(key)||maps[side].get(key)>1||!input.value.trim();input.classList.toggle('header-unmatched',unmatched);input.closest('.header-edit')?.classList.toggle('is-unmatched',unmatched);input.title=unmatched?'This comparison header is not available in the other dataset. Rename it to include the column.':'Matched in both datasets';}
 }
 async function applyHeaders(){
   await saveDraft();
@@ -429,7 +452,7 @@ function hydrate(){
   overrideRules=Array.isArray(draft.value_overrides)?draft.value_overrides:[];
   valueRules=Array.isArray(draft.comparison_rules)?draft.comparison_rules:[];
   $('ignoreKeys').value=typeof draft.ignore_keys==='string'?draft.ignore_keys:'';
-  $('duplicatePolicy').value=draft.duplicate_policy||'first';
+  if($('duplicatePolicy'))$('duplicatePolicy').value=draft.duplicate_policy||'first';
 
   keyPage=ignorePage=sourceColumnOffset=0;hydratedId=job.id;
 }
@@ -464,13 +487,16 @@ async function refresh() {
   } else if(['error','cancelled'].includes(job.state)){
     if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);await loadDiagnostics();}
   } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel'].includes(currentView)){
-    panel('uploadPanel');$('delimiter').disabled=$('encoding').disabled=true;$('delimiter').value=job.delimiter==='\t'?'tab':job.delimiter;$('encoding').value=job.encoding;
+    panel('uploadPanel');$('delimiter').disabled=$('encoding').disabled=true;
+    if(['\t',',',';','|'].includes(job.delimiter))$('delimiter').value=job.delimiter==='\t'?'tab':job.delimiter;
+    else{$('delimiter').value='custom';$('customDelimiter').value=job.delimiter;}
+    $('encoding').value=job.encoding;syncCustomDelimiter();$('delimiter').dispatchEvent(new Event('change'));
   }
 }
 function pollError(error){showError(error);pollTimer=setTimeout(()=>refresh().catch(pollError),5000);}
 $('reset').addEventListener('click',async()=>{
   if(uploading)return;
-  try{await saveDraft();location.reload();}catch(error){showError(error);}
+  try{await saveDraft();localStorage.removeItem('keywise-job');localStorage.removeItem(workspaceViewKey);location.reload();}catch(error){showError(error);}
 });
 async function restoreCurrentComparison(){
   const id=localStorage.getItem('keywise-job');
@@ -481,10 +507,47 @@ async function restoreCurrentComparison(){
   }
 }
 
+function restorableView(saved,currentJob){
+  const libraries=['projectsPanel','historyPanel','containersPanel','profilesPanel','docsPanel'];
+  if(libraries.includes(saved))return saved;
+  if(!currentJob)return 'uploadPanel';
+  if(['uploading','selecting_sheets','preparing'].includes(currentJob.state))return 'uploadPanel';
+  if(currentJob.state==='ready'){
+    if(currentJob.headers_reviewed===false)return 'headersPanel';
+    return ['headersPanel','keysPanel'].includes(saved)?saved:'keysPanel';
+  }
+  if(['queued','running','error','cancelled'].includes(currentJob.state))return 'runningPanel';
+  if(currentJob.state==='complete')return ['runningPanel','results','keysPanel'].includes(saved)?saved:'results';
+  return 'uploadPanel';
+}
+async function restoreWorkspaceOnReload(){
+  const saved=localStorage.getItem(workspaceViewKey)||'uploadPanel';
+  const libraries=['projectsPanel','historyPanel','containersPanel','profilesPanel','docsPanel'];
+  if(libraries.includes(saved)){
+    panel(saved);
+    if(saved==='projectsPanel')await loadProjects();
+    if(saved==='historyPanel')await loadHistory();
+    if(saved==='containersPanel')await loadContainers();
+    if(saved==='profilesPanel')await loadProfiles();
+    return;
+  }
+  const id=localStorage.getItem('keywise-job');
+  if(!id||!/^[a-f0-9]{32}$/.test(id)){panel('uploadPanel');return;}
+  try{
+    job={id};job=await api(endpoint());
+    currentView=restorableView(saved,job);panel(currentView);await refresh();
+    if(currentView==='headersPanel')renderHeaders();
+    if(currentView==='keysPanel'){renderKeys();renderIgnoredColumns();await loadContainers();}
+    if(job.state==='uploading')showError(`Upload not finished. Reselect ${job.files.left.name} and ${job.files.right.name} to resume, or start a new comparison.`);
+  }catch(error){job=null;localStorage.removeItem('keywise-job');panel('uploadPanel');showError(error);}
+}
+
 $('scopeNext').addEventListener('click',startComparison);
 $('navPreview').addEventListener('click',async()=>{
   previewExpanded=!previewExpanded;
   $('uploadPanel').classList.toggle('preview-expanded',previewExpanded);
+  inlinePreview.classList.toggle('is-open',previewExpanded);
+  $('keysPanel').classList.toggle('preview-expanded',previewExpanded);
   $('sourcePanel').inert=!previewExpanded;
   $('sourcePanel').setAttribute('aria-hidden',String(!previewExpanded));
   $('navPreview').setAttribute('aria-expanded',String(previewExpanded));
@@ -555,7 +618,7 @@ async function renderPipeline(){
   $('resumeComparison').title=job.resume_strategy==='hash'?'Sources are validated again and the in-memory lookup is rebuilt.':'Completed sort batches are validated and reused.';
   const automatic=job.comparison_engine==='auto';
   const readingStages=automatic?[['index','Read & prepare keys']]:job.sort_workers===2?[['sort','Read & sort both files']]:[['left','Read & sort file 1'],['right','Read & sort file 2']];
-  const stages=job.execution_mode==='review'?[['compare','Apply rules to retained results'],['reports','Write results & reports'],['complete','Complete']]:[['validate','Validate configuration'],...readingStages,['compare','Compare matching keys'],['reports','Write results & reports'],['complete','Complete']];
+  const stages=job.execution_mode==='review'?[['review','Re-evaluate retained differences'],['reports','Write results & reports'],['complete','Complete']]:[['validate','Validate configuration'],...readingStages,['compare','Compare matching keys'],['reports','Write results & reports'],['complete','Complete']];
   let stage=job.state==='complete'?'complete':job.progress?.stage||'validate';
   if(automatic&&['index','sort','left','right'].includes(stage))stage='index';
   const index=stages.findIndex(([id])=>id===stage);
@@ -578,7 +641,7 @@ async function loadHistory(){
   const table=$('historyTable');table.replaceChildren();
   const header=document.createElement('tr');for(const label of ['Created','Files','Status','Changed cells','Action']){const th=document.createElement('th');th.textContent=label;header.append(th);}const head=document.createElement('thead');head.append(header);table.append(head);
   const body=document.createElement('tbody');
-  for(const item of result.jobs){const row=document.createElement('tr');for(const text of [new Date(item.created*1000).toLocaleString(),`${item.files.left.name}${item.files.left.sheet?' ['+item.files.left.sheet+']':''} ↔ ${item.files.right.name}${item.files.right.sheet?' ['+item.files.right.sheet+']':''}`,item.state,item.changed_cells==null?'—':number(item.changed_cells)]){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}const cell=document.createElement('td');const button=document.createElement('button');button.className='subtle';button.textContent='Open';button.disabled=uploading;button.setAttribute('aria-label',`Open comparison ${item.id}`);button.addEventListener('click',()=>openJob(item.id).catch(showError));cell.append(button);const remove=document.createElement('button');remove.className='subtle';remove.textContent='Delete';remove.disabled=item.busy||uploading;remove.setAttribute('aria-label',`Delete comparison ${item.id}`);remove.addEventListener('click',async()=>{if(!confirm('Permanently delete this job, uploaded copies, logs and all reports? Original files on your computer are unaffected.'))return;remove.disabled=true;try{await api('/api/jobs/'+item.id,undefined,'DELETE');if(localStorage.getItem('keywise-job')===item.id)localStorage.removeItem('keywise-job');if(job?.id===item.id){clearTimeout(pollTimer);job=null;hydratedId=null;renderedId=null;viewingHistoryJob=false;syncNavigation();}await loadHistory();}catch(error){showError(error);remove.disabled=false;}});cell.append(remove);row.append(cell);body.append(row);}table.append(body);
+  for(const item of result.jobs){const row=document.createElement('tr');for(const text of [new Date(item.created*1000).toLocaleString(),`${item.files.left.name}${item.files.left.sheet?' ['+item.files.left.sheet+']':''} ↔ ${item.files.right.name}${item.files.right.sheet?' ['+item.files.right.sheet+']':''}`,item.state,item.changed_cells==null?'—':number(item.changed_cells)]){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}const cell=document.createElement('td');const button=document.createElement('button');button.className='subtle';button.textContent='Open';button.disabled=uploading;button.setAttribute('aria-label',`Open comparison ${item.id}`);button.addEventListener('click',()=>openJob(item.id).catch(showError));cell.append(button);const remove=document.createElement('button');remove.className='subtle';remove.textContent='Delete';remove.disabled=item.can_manage===false||item.busy||uploading;remove.hidden=item.can_manage===false;remove.setAttribute('aria-label',`Delete comparison ${item.id}`);remove.addEventListener('click',async()=>{if(!confirm('Permanently delete this job, uploaded copies, logs and all reports? Original files on your computer are unaffected.'))return;remove.disabled=true;try{await api('/api/jobs/'+item.id,undefined,'DELETE');if(localStorage.getItem('keywise-job')===item.id)localStorage.removeItem('keywise-job');if(job?.id===item.id){clearTimeout(pollTimer);job=null;hydratedId=null;renderedId=null;viewingHistoryJob=false;syncNavigation();}await loadHistory();}catch(error){showError(error);remove.disabled=false;}});cell.append(remove);row.append(cell);body.append(row);}table.append(body);
   $('historyRange').textContent=result.total?`${historyOffset+1}–${Math.min(historyOffset+25,result.total)} of ${result.total} saved jobs`:'No comparisons yet.';$('historyPrev').disabled=historyOffset===0;$('historyNext').disabled=historyOffset+25>=result.total;
 }
 async function openJob(id){
@@ -613,6 +676,7 @@ for(const [id,paths] of Object.entries(navigationIcons)){
   if(icon)icon.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 }
 let desktopSidebarCollapsed=true;
+let sidebarHoverOpen=false;
 function hideSidebarTip(){
   $('sidebarTooltip').hidden=true;
   document.querySelectorAll('[aria-describedby="sidebarTooltip"]').forEach(el=>el.removeAttribute('aria-describedby'));
@@ -635,11 +699,33 @@ function closeSidebarDrawer(){
 }
 applySidebar(sidebarMedia.matches||desktopSidebarCollapsed);
 $('sidebarToggle').addEventListener('click',()=>{
+  if(!sidebarMedia.matches&&sidebarHoverOpen){
+    sidebarHoverOpen=false;
+    document.body.classList.remove('sidebar-hover-open');
+    desktopSidebarCollapsed=false;
+    applySidebar(false);
+    return;
+  }
   const collapsed=!document.body.classList.contains('sidebar-collapsed');
   if(!sidebarMedia.matches){desktopSidebarCollapsed=collapsed;}
   applySidebar(collapsed);
 });
-sidebarMedia.addEventListener('change',()=>applySidebar(sidebarMedia.matches||desktopSidebarCollapsed));
+function openSidebarOnHover(){
+  if(sidebarMedia.matches||!desktopSidebarCollapsed||sidebarHoverOpen)return;
+  sidebarHoverOpen=true;
+  document.body.classList.add('sidebar-hover-open');
+  applySidebar(false);
+}
+function closeSidebarAfterHover(){
+  if(!sidebarHoverOpen)return;
+  sidebarHoverOpen=false;
+  document.body.classList.remove('sidebar-hover-open');
+  closeComparisonMenu();
+  applySidebar(true);
+}
+$('workspaceSidebar').addEventListener('pointerenter',event=>{if(event.pointerType!=='touch')openSidebarOnHover();});
+$('workspaceSidebar').addEventListener('pointerleave',closeSidebarAfterHover);
+sidebarMedia.addEventListener('change',()=>{sidebarHoverOpen=false;document.body.classList.remove('sidebar-hover-open');applySidebar(sidebarMedia.matches||desktopSidebarCollapsed);});
 $('sidebarBackdrop').addEventListener('click',closeSidebarDrawer);
 document.addEventListener('keydown',event=>{
   if(!document.body.classList.contains('sidebar-drawer-open'))return;
@@ -673,7 +759,7 @@ $('navNew').addEventListener('click',()=>{
   const rect=$('navNew').getBoundingClientRect();menu.style.left=Math.min(rect.right+10,window.innerWidth-290)+'px';menu.style.top=Math.min(rect.top,window.innerHeight-115)+'px';menu.hidden=false;$('navNew').setAttribute('aria-expanded','true');
   (uploading?$('menuContinueComparison'):$('menuNewComparison')).focus();
 });
-$('menuNewComparison').addEventListener('click',async()=>{if(uploading)return;try{await saveDraft();closeComparisonMenu();location.reload();}catch(error){showError(error);}});
+$('menuNewComparison').addEventListener('click',async()=>{if(uploading)return;try{await saveDraft();closeComparisonMenu();localStorage.removeItem('keywise-job');localStorage.removeItem(workspaceViewKey);location.reload();}catch(error){showError(error);}});
 $('menuContinueComparison').addEventListener('click',async()=>{
   closeComparisonMenu();clearError();
   try{if(!job&&!files.left&&!files.right){await restoreCurrentComparison();return;}viewingHistoryJob=false;await goView(uploading?'uploadPanel':lastComparisonView);}catch(error){showError(error);}
@@ -689,7 +775,7 @@ $('workspaceSidebar').addEventListener('scroll',closeComparisonMenu);
 
 async function loadContainers(){
   const data=await api('/api/key-containers');keyContainers=data.containers;
-  $('containerLibrary').replaceChildren();$('containerChoices').replaceChildren();
+  $('containerLibrary').replaceChildren();$('containerChoices').replaceChildren();$('containerChoices').classList.toggle('is-empty',!keyContainers.length);
   for(const item of keyContainers){
     const card=document.createElement('article');card.className='container-card';
     const title=document.createElement('h4');title.textContent=item.name;
@@ -700,8 +786,13 @@ async function loadContainers(){
     check.addEventListener('change',()=>{if(check.checked)selectedContainers.add(item.id);else selectedContainers.delete(item.id);saveDraft().catch(showError);});
     const text=document.createElement('span');text.textContent=`${item.name} — ${item.reason}`;label.append(check,text);$('containerChoices').append(label);
   }
-  if(!keyContainers.length){$('containerLibrary').textContent='No containers yet.';$('containerChoices').textContent='No saved containers. Create one in Ignore key containers.';}
+  if(!keyContainers.length){
+    $('containerLibrary').textContent='No containers yet.';
+    const empty=document.createElement('div');empty.className='ignore-container-empty';empty.innerHTML='<span class="ignore-container-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></svg></span><strong>No saved containers</strong><span>Group excluded keys by reason and reuse them in reports.</span>';
+    $('containerChoices').append(empty);
+  }
 }
+$('createContainerFromScope').addEventListener('click',()=>goView('containersPanel').catch(showError));
 $('saveContainer').addEventListener('click',async()=>{
   clearError();$('saveContainer').disabled=true;
   try{await api('/api/key-containers',{name:$('containerName').value,reason:$('containerReason').value,values:$('containerValues').value,key_width:Number($('containerWidth').value)});$('containerStatus').textContent='Container saved. Select it in Keys & scope to apply it to a comparison.';for(const id of ['containerName','containerReason','containerValues'])$(id).value='';await loadContainers();}catch(error){showError(error);}finally{$('saveContainer').disabled=false;}
@@ -897,6 +988,7 @@ function filterDocs(){
 $('docsSearch').addEventListener('input',filterDocs);
 filterDocs();
 
+let analysisPatternFilter=null;
 let analysisOffset=0, analysisTimer=null, analysisGeneration=0, columnChoicesPage=0;
 let analysisNotesCache=[],commentSelection="";
 $('openAnalysis').addEventListener('click',()=>goView('analysisPanel').catch(showError));
@@ -925,22 +1017,25 @@ function analysisContext(){
   $('analysisHeading').textContent=mode==='patterns'?'Recurring mismatch patterns':key?'Differences for this key':column?`Mismatches in ${column}`:mode==='keys'?'Records to review':'Columns with differences';
   const activeKey=key?(job.keys.length===1?[key]:JSON.parse(key)):[];
   const keyLabel=key?job.keys.map((name,i)=>`${name}: ${activeKey[i]}`).join(' · '):'';
-  $('analysisSelection').textContent=[column?'Column: '+column:'All mismatching columns',keyLabel||'All keys'].join(' · ');
-  $('analysisReset').hidden=!column&&!key;$('analysisReset').textContent=mode==='patterns'?'Back to all patterns':mode==='keys'?'Back to all keys':'Back to all columns';
+  if(analysisPatternFilter&&analysisPatternFilter.column!==column)analysisPatternFilter=null;
+  $('analysisSelection').textContent=[column?'Column: '+column:'All mismatching columns',keyLabel||'All keys'].join(' · ')+(analysisPatternFilter?' · Pattern: '+analysisPatternFilter.label:'');
+  $('analysisReset').hidden=!column&&!key;$('analysisReset').textContent=analysisPatternFilter?'Clear pattern filter':mode==='patterns'?'Back to all patterns':mode==='keys'?'Back to all keys':'Back to all columns';
   const signature=JSON.stringify([column,key]);
   if(commentSelection!==signature){commentSelection=signature;$('noteTarget').value=key?'key':'column';fillCommentEditor();}
   renderCommentScope();
 
 }
 async function resetAnalysis(mode){
-  $('analysisMode').value=mode;$('analysisColumn').value='';$('analysisColumnSearch').value='';selectAnalysisKey(null);analysisOffset=0;analysisColumns();await loadAnalysis();
+  const retainedColumn=$('analysisDrawer')?.open?$('analysisColumn').value:'';
+  analysisPatternFilter=null;
+  $('analysisMode').value=mode;$('analysisColumn').value='';$('analysisColumnSearch').value='';selectAnalysisKey(null);analysisOffset=0;analysisColumns();if(retainedColumn)$('analysisColumn').value=retainedColumn;await loadAnalysis();
 }
-async function openAnalysis(){
+async function openAnalysis(column=''){
   clearTimeout(analysisTimer);analysisGeneration++;analysisOffset=0;
   $('analysisRetry').hidden=true;$('noteComment').value='';$('analysisMode').value='columns';$('analysisKey').value='';$('analysisColumn').value='';$('analysisColumnSearch').value='';
   $('analysisKeyFields').replaceChildren();
   job.keys.forEach((name,i)=>{const label=document.createElement('label'),input=document.createElement('input');label.textContent=name;input.id='analysisKeyPart'+i;input.placeholder='Exact '+name;input.addEventListener('keydown',event=>{if(event.key==='Enter')$('analysisSearch').click();});label.append(input);$('analysisKeyFields').append(label);});
-  analysisColumns();$('analysisOverview').replaceChildren();
+  analysisPatternFilter=null;analysisColumns();$('analysisColumn').value=column;$('analysisOverview').replaceChildren();
   for(const [label,value] of [['Columns with differences',Object.values(job.summary.changed_cells_by_column).filter(n=>n>0).length],['Changed keys',job.summary.changed_rows],['Mismatched cells',job.summary.changed_cells],['Keys in one file only',job.summary.left_only+job.summary.right_only]]){const card=document.createElement('div'),title=document.createElement('span'),count=document.createElement('strong');title.textContent=label;count.textContent=number(value||0);card.append(title,count);$('analysisOverview').append(card);}
   const containers=job.summary.ignore_key_containers||[];
   $('analysisExclusions').textContent=containers.length?'Excluded containers: '+containers.map(c=>`${c.name}: ${c.reason} (${c.keys.length} configured keys)`).join(' · '):'No ignored-key containers configured.';
@@ -956,13 +1051,14 @@ async function loadAnalysis(){
   try{
     let key;
     if(keyText!==''){key=job.keys.length===1?[keyText]:JSON.parse(keyText);if(!Array.isArray(key)||key.length!==job.keys.length||key.some(v=>typeof v!=='string'))throw Error('Enter a JSON array with one text value for each key column.');}
-    let rows,headers,total,keyStatus;
+    let rows,headers,total,keyStatus,patternData;
     if(mode==='columns'&&!column&&key===undefined){
       const entries=Object.entries(job.summary.changed_cells_by_column).filter(([name,count])=>count>0&&name.toLowerCase().includes($('analysisColumnSearch').value.toLowerCase())).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));total=entries.length;
       headers=['Column','Mismatches','Mismatch %','Match %','Inspect'];
       rows=entries.slice(analysisOffset,analysisOffset+50).map(([name,count])=>[name,count,job.summary.matched_keys?(100*count/job.summary.matched_keys).toFixed(4):'N/A',job.summary.matched_keys?(100*(1-count/job.summary.matched_keys)).toFixed(4):'N/A']);
     }else{
       const params=new URLSearchParams({mode:mode==='patterns'?'patterns':mode==='keys'&&!column&&key===undefined?'keys':'cells',offset:String(analysisOffset),column});if(key!==undefined)params.set('key',JSON.stringify(key));
+      if(mode!=='patterns'&&analysisPatternFilter?.column===column){params.set('left_hash',analysisPatternFilter.left);params.set('right_hash',analysisPatternFilter.right);}
       $('analysisStatus').textContent='Loading analysis…';$('analysisStatus').classList.add('loading-status');
       const result=await api(`/api/jobs/${id}/analysis?${params}`);if(generation!==analysisGeneration||job?.id!==id||currentView!=='analysisPanel')return;
       if(result.state!=='complete'){$('cancelAnalysis').hidden=false;
@@ -972,21 +1068,21 @@ async function loadAnalysis(){
         analysisTimer=setTimeout(()=>{if(currentView==='analysisPanel'&&job?.id===id)loadAnalysis();},1500);return;
       }
       total=result.total;keyStatus=result.key_status;
-      if(mode==='patterns'){headers=['Column','Pattern','File 1 value','File 2 value','Occurrences'];rows=result.rows.map(r=>[r[0],r[1],r[2]+(r[5]>1000?' … [truncated]':''),r[3]+(r[6]>1000?' … [truncated]':''),r[4]]);$('patternSummary').textContent=(result.categories||[]).map(([name,count])=>`${name}: ${number(count)} cells`).join(' · ')||'No mismatch patterns in this scope.';}
+      if(mode==='patterns'){headers=['Column','Pattern','File 1 value','File 2 value','Occurrences','Share'];patternData=result.rows;rows=result.rows.map(r=>[r[0],r[1],r[2]+(r[5]>1000?' … [truncated]':''),r[3]+(r[6]>1000?' … [truncated]':''),r[4],((result.occurrences?100*r[4]/result.occurrences:0).toFixed(2))+'%']);$('patternSummary').textContent=(result.categories||[]).map(([name,count])=>`${name}: ${number(count)} cells`).join(' · ')||'No mismatch patterns in this scope.';}
       else if(params.get('mode')==='keys'){headers=[...job.keys,'Status','Mismatches','Inspect'];rows=result.rows.map(r=>[...JSON.parse(r[0]),({changed:'Values differ',left_only:'Only in File 1',right_only:'Only in File 2'}[r[1]]||r[1]),r[2]]);}
       else{headers=[...job.keys,'Column','File 1 value','File 2 value'];rows=result.rows.map(r=>[...JSON.parse(r[0]),r[1],r[2]+(r[4]>1000?' … [truncated]':''),r[3]+(r[5]>1000?' … [truncated]':'')]);}
     }
     $('analysisStatus').classList.remove('loading-status');$('cancelAnalysis').hidden=true;
     const head=document.createElement('tr');headers.forEach(value=>{const th=document.createElement('th');th.textContent=value==='Inspect'?'Comments':value;head.append(th);});if(headers.at(-1)!=='Inspect'){const th=document.createElement('th');th.textContent='Comments';head.append(th);}table.append(head);
-    rows.forEach(row=>{
-      if(mode==='patterns'){const tr=document.createElement('tr');row.forEach((value,i)=>{const td=document.createElement('td');td.textContent=(i===2||i===3)&&value===''?'(empty)':value;if(i===2)td.className='analysis-before';if(i===3)td.className='analysis-after';tr.append(td);});const comments=document.createElement('td');comments.textContent=commentsFor(row[0],null);tr.append(comments);const td=document.createElement('td'),button=document.createElement('button');button.className='subtle';button.textContent='Review column';button.addEventListener('click',()=>{$('analysisColumnSearch').value='';analysisColumns();$('analysisMode').value='columns';$('analysisColumn').value=row[0];analysisOffset=0;loadAnalysis();});td.append(button);tr.append(td);table.append(tr);return;}
+    rows.forEach((row,rowIndex)=>{
+      if(mode==='patterns'){const tr=document.createElement('tr');row.forEach((value,i)=>{const td=document.createElement('td');td.textContent=(i===2||i===3)&&value===''?'(empty)':value;if(i===2)td.className='analysis-before';if(i===3)td.className='analysis-after';tr.append(td);});const comments=document.createElement('td');comments.textContent=commentsFor(row[0],null);tr.append(comments);const td=document.createElement('td'),button=document.createElement('button');button.className='subtle';button.textContent='List keys';button.addEventListener('click',()=>{const p=patternData[rowIndex];analysisPatternFilter={column:row[0],left:p[7],right:p[8],label:(row[2]||'(empty)')+' → '+(row[3]||'(empty)')};$('analysisColumnSearch').value='';analysisColumns();$('analysisMode').value='columns';$('analysisColumn').value=row[0];analysisOffset=0;loadAnalysis();});td.append(button);tr.append(td);table.append(tr);return;}
       const tr=document.createElement('tr'),isDetails=headers.at(-1)!=='Inspect';
       row.forEach((value,i)=>{const td=document.createElement('td');td.textContent=isDetails&&i>=row.length-2&&value===''?'(empty)':value;if(isDetails&&i===row.length-2)td.className='analysis-before';if(isDetails&&i===row.length-1)td.className='analysis-after';tr.append(td);});
       const comments=document.createElement('td');comments.className='analysis-comments';comments.textContent=isDetails?commentsFor(row[job.keys.length],row.slice(0,job.keys.length)):mode==='columns'?commentsFor(row[0],null):commentsFor('',row.slice(0,job.keys.length));tr.append(comments);
       const td=document.createElement('td'),button=document.createElement('button');button.className='subtle';
       if(!isDetails){button.textContent=mode==='columns'?'View mismatching keys':'View this key';button.addEventListener('click',()=>{if(mode==='columns')$('analysisColumn').value=row[0];else selectAnalysisKey(row.slice(0,job.keys.length));analysisOffset=0;loadAnalysis();});}
       else{button.textContent='All changes for this key';button.addEventListener('click',()=>{$('analysisMode').value='keys';$('analysisColumn').value='';selectAnalysisKey(row.slice(0,job.keys.length));analysisOffset=0;loadAnalysis();});}
-      td.append(button);tr.append(td);table.append(tr);
+      td.append(button);if(isDetails){const comment=document.createElement('button');comment.className='subtle';comment.textContent='Comment';comment.addEventListener('click',()=>{selectAnalysisKey(row.slice(0,job.keys.length));$('noteTarget').value='key';fillCommentEditor();$('analysisPanel').querySelector('.review-comments').open=true;$('noteComment').focus();});td.append(comment);}tr.append(td);table.append(tr);
     });
     {const th=document.createElement('th');th.textContent=mode==='patterns'?'Review':headers.at(-1)==='Inspect'?'Open':'Explore record';head.append(th);}
     $('analysisStatus').textContent=total?`${number(total)} ${mode==='patterns'?'value-change patterns':headers.at(-1)==='Inspect'?(mode==='columns'?'columns':'keys'):'mismatched cells'}. ${headers.at(-1)==='Inspect'?'Choose a result below to review it.':'File 1 values are shaded red; File 2 values are shaded green.'}`:keyStatus==='left_only'?'This key exists only in File 1.':keyStatus==='right_only'?'This key exists only in File 2.':keyText?'No recorded differences for this key. It may be equal, excluded, or absent from both files.':column?'No mismatches in this column.':'No results for this view. Try a different column search or switch views.';
@@ -1108,7 +1204,7 @@ async function transitionToResults(){
   if(resultsTransitionRunning||job?.state!=='complete')return;
   if(reducedWorkspaceMotion()||$('mainWorkspace').classList.contains('review-rail')){await goView('results');return;}
   resultsTransitionRunning=true;
-  const flights=[],animations=[],buttons=['navFiles','navHeaders','navScope','navPipeline','navResults'].map($);
+  const flights=[],animations=[],buttons=['navFiles','navScope','navPipeline','navResults'].map($);
   const workspace=$('mainWorkspace'),sidebar=$('workspaceSidebar'),identity=job.id;
   let interrupted=false;
   const finishMotion=()=>{interrupted=true;for(const animation of animations)animation.cancel();};
@@ -1152,7 +1248,7 @@ async function showAnalysisDrawer(column=''){
   analysisReturnTarget=document.activeElement;
   currentView='analysisPanel';$('analysisPanel').hidden=false;
   $('analysisDrawer').showModal();
-  try{await openAnalysis();if(column&&$('analysisDrawer').open){$('analysisColumn').value=column;analysisOffset=0;renderColumnChoices();await loadAnalysis();}}catch(error){$('analysisStatus').textContent=error.message;}
+  try{await openAnalysis(column);}catch(error){$('analysisStatus').textContent=error.message;}
 }
 function rerunField(label,value='',type='text'){
   const wrap=document.createElement('label'),input=document.createElement('input');wrap.textContent=label;input.type=type;
@@ -1161,7 +1257,7 @@ function rerunField(label,value='',type='text'){
 }
 function rerunColumns(label,values,multiple=true){
   const wrap=document.createElement('label'),select=document.createElement('select');wrap.textContent=label;select.multiple=multiple;select.size=multiple?6:1;
-  for(const column of job.columns){const option=new Option(column,column);option.selected=values.includes(column);select.append(option);}
+  for(const column of job.columns){if(label==='Column'&&(rerunDraft.keys.includes(column)||rerunDraft.ignore_columns.includes(column)))continue;const option=new Option(column,column);option.selected=values.includes(column);select.append(option);}
   wrap.append(select);return {wrap,select};
 }
 function showRerunTab(tab){
@@ -1176,7 +1272,7 @@ function renderRerunRows(kind){
     const col=rerunColumns('Column',[rule.column],false);col.select.addEventListener('change',()=>rule.column=col.select.value);row.append(col.wrap);
     const fields=kind==='overrides'?[['File 1 value','left','text'],['File 2 value','right','text']]:[['Trim spaces','trim','checkbox'],['Ignore case','ignore_case','checkbox'],['Numeric tolerance (0 = same number)','tolerance','text'],['File 1 date format','left_date_format','text'],['File 2 date format','right_date_format','text']];
     for(const [label,key,type] of fields){const f=rerunField(label,rule[key]??'',type);f.input.addEventListener('input',()=>{if(type==='checkbox')rule[key]=f.input.checked;else if(kind==='rules'&&!f.input.value)delete rule[key];else rule[key]=f.input.value;});row.append(f.wrap);}
-    const remove=document.createElement('button');remove.className='subtle';remove.textContent='Remove';remove.setAttribute('aria-label','Remove '+rule.column+' rule');remove.addEventListener('click',()=>{rules.splice(index,1);renderRerunRows(kind);});row.append(remove);target.append(row);
+    const remove=document.createElement('button');remove.className='subtle';remove.textContent='Remove';remove.setAttribute('aria-label','Remove '+rule.column+' rule');remove.addEventListener('click',()=>{rules.splice(index,1);renderRerunRows(kind);scheduleReviewPlan();});row.append(remove);target.append(row);
   });
   if(!rules.length)target.textContent='No rules added.';
 }
@@ -1190,6 +1286,7 @@ function openRecomparison(){
   rerunDraft=structuredClone({keys:job.keys,ignore_columns:job.ignore_columns||[],ignore_keys:job.ignore_keys||'',ignore_container_ids:job.ignore_container_ids||[],duplicate_policy:job.duplicate_policy||'first',value_overrides:job.value_overrides||[],comparison_rules:job.comparison_rules||[]});
   const scope=$('rerun-scope');scope.replaceChildren();
   const keys=rerunColumns('Key columns (selection order retained)',rerunDraft.keys),ignored=rerunColumns('Ignored columns',rerunDraft.ignore_columns);
+  keys.select.disabled=true;keys.select.size=Math.min(3,rerunDraft.keys.length);for(const option of [...keys.select.options])if(!rerunDraft.keys.includes(option.value))option.remove();for(const option of [...ignored.select.options])if(rerunDraft.keys.includes(option.value))option.remove();keys.wrap.classList.add('locked-key-field');
   keys.select.addEventListener('change',()=>{const selectedValues=Array.from(keys.select.selectedOptions,o=>o.value);rerunDraft.keys=[...rerunDraft.keys.filter(k=>selectedValues.includes(k)),...selectedValues.filter(k=>!rerunDraft.keys.includes(k))];});
   ignored.select.addEventListener('change',()=>rerunDraft.ignore_columns=Array.from(ignored.select.selectedOptions,o=>o.value));scope.append(keys.wrap,ignored.wrap);
   const manual=rerunField('Ignored keys (comma separated; JSON tuples for composite keys)',rerunDraft.ignore_keys);manual.input.addEventListener('input',()=>rerunDraft.ignore_keys=manual.input.value);scope.append(manual.wrap);
@@ -1203,14 +1300,14 @@ function initReviewWorkspace(){
   $('navAnalysis').closest('li').hidden=true;
   $('reviewOverrides').hidden=true;
   $('runningPanel').insertAdjacentHTML('afterbegin','<button id="viewResults" class="primary heartbeat-results" hidden>View results →</button>');
-  document.body.insertAdjacentHTML('beforeend',`<button id="recompareFab" class="recompare-fab" hidden aria-haspopup="dialog" title="Recompare with updated settings"><span aria-hidden="true">↻</span> Recompare</button>
+  document.body.insertAdjacentHTML('beforeend',`<button id="recompareFab" class="recompare-fab" hidden aria-haspopup="dialog" title="Recompare · apply updated rules"><span class="fab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-15.3-6.4L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.3 6.4L21 16"/><path d="M16 16h5v5"/></svg></span><span class="fab-caption"><strong>Recompare</strong><small>Apply updated rules</small></span></button>
   <dialog id="analysisDrawer" class="analysis-drawer" aria-label="Mismatch analysis"><div class="drawer-heading"><h2>Analyze mismatches</h2><button id="closeAnalysisDrawer" class="subtle" aria-label="Close analysis">✕</button></div></dialog>
-  <dialog id="rerunDialog" class="rerun-dialog" aria-labelledby="rerunTitle"><div class="drawer-heading"><div><h2 id="rerunTitle">Recompare</h2><p>Apply rules to retained evidence · original results preserved</p></div><button id="closeRerun" class="subtle" aria-label="Close recomparison">✕</button></div><div class="rerun-tabs" role="tablist" aria-label="Recomparison settings"><button id="rerun-tab-scope" role="tab" aria-controls="rerun-scope">Keys & scope</button><button id="rerun-tab-overrides" role="tab" aria-controls="rerun-overrides">Value overrides</button><button id="rerun-tab-rules" role="tab" aria-controls="rerun-rules">Comparison rules</button></div><div class="rerun-body"><section id="rerun-scope" role="tabpanel" aria-labelledby="rerun-tab-scope"></section><section id="rerun-overrides" role="tabpanel" aria-labelledby="rerun-tab-overrides" hidden><div id="rerun-overrides-list"></div><button id="addRerunOverride" class="subtle">Add override</button></section><section id="rerun-rules" role="tabpanel" aria-labelledby="rerun-tab-rules" hidden><div id="rerun-rules-list"></div><button id="addRerunRule" class="subtle">Add column rule</button></section></div><p id="rerunError" role="alert"></p><p id="reviewPlan" role="status"></p><div class="rerun-footer"><button id="startRerun" class="primary">Check changes →</button></div></dialog>`);
+  <dialog id="rerunDialog" class="rerun-dialog" aria-labelledby="rerunTitle"><div class="drawer-heading"><div><h2 id="rerunTitle">Recompare</h2><p>Apply rules to retained evidence · original results preserved</p></div><button id="closeRerun" class="subtle" aria-label="Close recomparison">✕</button></div><div class="rerun-tabs" role="tablist" aria-label="Recomparison settings"><button id="rerun-tab-scope" role="tab" aria-controls="rerun-scope">Keys & scope</button><button id="rerun-tab-overrides" role="tab" aria-controls="rerun-overrides">Value overrides</button><button id="rerun-tab-rules" role="tab" aria-controls="rerun-rules">Comparison rules</button></div><div class="rerun-body"><section id="rerun-scope" role="tabpanel" aria-labelledby="rerun-tab-scope"></section><section id="rerun-overrides" role="tabpanel" aria-labelledby="rerun-tab-overrides" hidden><button id="addRerunOverride" class="subtle">Add override</button><div id="rerun-overrides-list"></div></section><section id="rerun-rules" role="tabpanel" aria-labelledby="rerun-tab-rules" hidden><button id="addRerunRule" class="subtle">Add column rule</button><div id="rerun-rules-list"></div></section></div><p id="rerunError" role="alert"></p><p id="reviewPlan" role="status"></p><div class="rerun-footer"><button id="startRerun" class="primary">Check changes →</button></div></dialog>`);
   $('analysisDrawer').append($('analysisPanel'));
   $('openAnalysis').hidden=true;
   $('results').querySelector('.csv-links').hidden=true;
   $('results').querySelector('.column-panel .section-title p').textContent='Select a column to analyze its mismatches.';
-  $('recompareFab').innerHTML='<span aria-hidden="true">↻</span><span class="fab-caption">Recompare</span>';$('recompareFab').setAttribute('aria-label','Recompare');
+  $('recompareFab').innerHTML='<span class="fab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-15.3-6.4L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.3 6.4L21 16"/><path d="M16 16h5v5"/></svg></span><span class="fab-caption"><strong>Recompare</strong><small>Apply updated rules</small></span>';$('recompareFab').setAttribute('aria-label','Recompare · apply updated rules');
   for(const event of ['pointerenter','focus'])$('recompareFab').addEventListener(event,()=>{clearTimeout(fabIdleTimer);$('recompareFab').classList.remove('fab-compact');});
   for(const event of ['pointerleave','blur'])$('recompareFab').addEventListener(event,scheduleFabCollapse);
   $('consoleLog').insertAdjacentHTML('beforebegin','<div class="console-controls"><input id="consoleSearch" type="search" placeholder="Search logs…" aria-label="Search comparison logs"><button id="consolePause" class="subtle" aria-pressed="false">Pause display</button><button id="consoleFollow" class="subtle" aria-pressed="true">Follow latest</button><button id="consoleCopy" class="subtle">Copy visible logs</button></div><p id="consoleStatus" class="muted" role="status"></p>');
@@ -1240,7 +1337,7 @@ function initReviewWorkspace(){
     $('rerun-tab-'+name).addEventListener('click',()=>showRerunTab(name));
     $('rerun-tab-'+name).addEventListener('keydown',event=>{const names=['scope','overrides','rules'];if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const index=event.key==='Home'?0:event.key==='End'?2:(names.indexOf(name)+(event.key==='ArrowRight'?1:2))%3;showRerunTab(names[index]);$('rerun-tab-'+names[index]).focus();}});
   }
-  for(const kind of ['overrides','rules'])$('addRerun'+(kind==='overrides'?'Override':'Rule')).addEventListener('click',()=>{const column=job.columns.find(c=>!rerunDraft.keys.includes(c)&&!rerunDraft.ignore_columns.includes(c)&&(kind==='overrides'||!rerunDraft.comparison_rules.some(r=>r.column===c)));if(!column){$('rerunError').textContent='No unused value columns available.';return;}if(kind==='overrides')rerunDraft.value_overrides.push({column,left:'',right:''});else rerunDraft.comparison_rules.push({column,trim:true});renderRerunRows(kind);});
+  for(const kind of ['overrides','rules'])$('addRerun'+(kind==='overrides'?'Override':'Rule')).addEventListener('click',()=>{const column=job.columns.find(c=>!rerunDraft.keys.includes(c)&&!rerunDraft.ignore_columns.includes(c)&&(kind==='overrides'||!rerunDraft.comparison_rules.some(r=>r.column===c)));if(!column){$('rerunError').textContent='No unused value columns available.';return;}if(kind==='overrides'){openOverrideEditor();return;}else rerunDraft.comparison_rules.push({column,trim:true});renderRerunRows(kind);});
   $('rerunDialog').addEventListener('input',scheduleReviewPlan);$('rerunDialog').addEventListener('change',scheduleReviewPlan);
   $('startRerun').addEventListener('click',async()=>{
     if($('startRerun').disabled)return;
@@ -1269,7 +1366,7 @@ function animateWorkspacePane(element){
 function updateEnterpriseShell(name){
   const heading=document.querySelector('.heading h1');
   if(!$('workspaceContext'))return;
-  const titles={projectsPanel:'Projects',uploadPanel:'New comparison',headersPanel:'Column headers',keysPanel:'Keys & scope',runningPanel:'Pipeline & logs',results:'Comparison results',jsonPanel:'JSON comparison',historyPanel:'Job history',containersPanel:'Ignore key containers',profilesPanel:'Profile templates',docsPanel:'Docs & FAQ',storagePanel:'Storage & queue',overridesPanel:'Value overrides'};
+  const titles={projectsPanel:'Projects',uploadPanel:'Files & headers',headersPanel:'Files & headers',keysPanel:'Keys & scope',runningPanel:'Pipeline & logs',results:'Analysis',jsonPanel:'JSON comparison',historyPanel:'Job history',containersPanel:'Ignore key containers',profilesPanel:'Profile templates',docsPanel:'Docs & FAQ',storagePanel:'Storage & queue',overridesPanel:'Value overrides'};
   heading.textContent=titles[name]||'Comparison workspace';
   $('workspaceContext').textContent=phaseViews.includes(name)?'Compare files':titles[name]||'Workspace';
   const changed=document.body.dataset.workspaceView!==name;
@@ -1285,9 +1382,9 @@ function applicationShortcut(event){
   if(!event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.repeat||event.isComposing||event.getModifierState?.('AltGraph'))return null;
   if(event.target?.closest?.('input,textarea,select,[contenteditable="true"],[role="textbox"]'))return null;
   // Option produces symbols on macOS; physical codes keep these shortcuts usable.
-  const codes={KeyB:'b',KeyF:'f',KeyR:'r',Slash:'/',Digit1:'1',Digit2:'2',Digit3:'3',Digit4:'4',Digit5:'5'};
+  const codes={KeyB:'b',KeyF:'f',KeyR:'r',Slash:'/',Digit1:'1',Digit2:'2',Digit3:'3',Digit4:'4'};
   const logical=String(event.key||'').toLowerCase();
-  return ['b','f','r','/','1','2','3','4','5'].includes(logical)?logical:codes[event.code]||null;
+  return ['b','f','r','/','1','2','3','4'].includes(logical)?logical:codes[event.code]||null;
 }
 function initEnterpriseShell(){
   // The controller unit harness has no layout DOM. Browser checks cover this shell.
@@ -1302,16 +1399,22 @@ function initEnterpriseShell(){
   };
   for(const [id,paths] of Object.entries(stageIcons)){const marker=$(id).firstElementChild,digit=marker.textContent;marker.innerHTML=`<span class="step-number-value">${digit}</span><svg class="step-rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;marker.setAttribute('aria-hidden','true');}
   const main=$('mainWorkspace'),heading=main.querySelector('.heading');
+  heading.querySelector('.eyebrow')?.remove();
   heading.insertAdjacentHTML('beforebegin','<div class="workspace-topbar"><div><strong>Data Compare</strong><span aria-hidden="true">/</span><span id="workspaceContext">CSV &amp; Excel</span></div><button id="keyboardHelp" class="subtle" aria-haspopup="dialog" aria-keyshortcuts="Alt+/">Keyboard shortcuts <kbd>Alt /</kbd></button></div>');
   document.querySelector('.sidebar-product').textContent='DATA COMPARE';
   // Keep the primary action in the same top-right position in every setup phase.
   const uploadActions=document.createElement('div');uploadActions.className='enterprise-setup-actions';
-  $('uploadPanel').querySelector('.section-title').append(uploadActions);uploadActions.append($('navPreview'),$('upload'));
+  const uploadFooterActions=$('uploadPanel').querySelector('.upload-actions');
+  const uploadProjectControl=uploadFooterActions.querySelector('.upload-project-control');
+  const uploadProfile=uploadFooterActions.querySelector('.upload-profile');
+  uploadProjectControl.hidden=true;
+  $('uploadPanel').querySelector('.section-title').append(uploadActions);uploadActions.append(uploadProfile,$('navPreview'),$('upload'));
+  $('uploadPanel').querySelector('.upload-footer').hidden=true;
   $('keysPanel').querySelector('.scope-title-actions').append($('scopeNext'));
   $('keysPanel').querySelector('.panel-footer').hidden=true;
   const duplicateSettings=$('keysPanel').querySelector(':scope > .settings');
   $('keysPanel').querySelector('.section-title').after(duplicateSettings);
-  $('uploadPanel').querySelector('.upload-actions').classList.add('enterprise-profile-status');
+  uploadActions.classList.add('enterprise-profile-status');
   // Keep global destinations separate from the five comparison stages.
   const manage=$('navHistory').parentElement;
   manage.insertBefore($('navHistory'),$('navProfiles'));
@@ -1378,7 +1481,7 @@ function initEnterpriseShell(){
   $('keyboardHelp').querySelector('kbd').textContent=modifier+' /';
   for(const item of $('shortcutsDialog').querySelectorAll('dd'))item.textContent=item.textContent.replace(/Alt/g,modifier);
   const platformNote=document.createElement('p');platformNote.textContent='Windows: Alt · Mac: ⌥ Option. App shortcuts are inactive while typing. Tab, Shift + Tab, Enter, Space and Escape work on both platforms.';$('shortcutsDialog').append(platformNote);
-  for(const [id,key] of [['sidebarToggle','B'],['recompareFab','R'],['navFiles','1'],['navHeaders','2'],['navScope','3'],['navPipeline','4'],['navResults','5']])$(id)?.setAttribute('aria-keyshortcuts','Alt+'+key);
+  for(const [id,key] of [['sidebarToggle','B'],['recompareFab','R'],['navFiles','1'],['navScope','2'],['navPipeline','3'],['navResults','4']])$(id)?.setAttribute('aria-keyshortcuts','Alt+'+key);
   let helpReturn;
   $('keyboardHelp').addEventListener('click',()=>{helpReturn=document.activeElement;$('shortcutsDialog').showModal();});$('closeShortcuts').addEventListener('click',()=>$('shortcutsDialog').close());$('shortcutsDialog').addEventListener('close',()=>helpReturn?.focus());
   const visible=el=>el&&!el.disabled&&!el.closest('[hidden],[inert],.enterprise-inactive')&&el.getClientRects().length>0;
@@ -1394,7 +1497,7 @@ function initEnterpriseShell(){
     if(key==='b')control=$('sidebarToggle');
     if(key==='/')control=$('keyboardHelp');
     if(key==='r')control=$('recompareFab');
-    if(/^[1-5]$/.test(key)&&phaseViews.includes(currentView))control=$(['navFiles','navHeaders','navScope','navPipeline','navResults'][Number(key)-1]);
+    if(/^[1-4]$/.test(key)&&phaseViews.includes(currentView))control=$(['navFiles','navScope','navPipeline','navResults'][Number(key)-1]);
     if(key==='f'){control=[...$(currentView).querySelectorAll('input[type="search"],input.search')].find(visible);if(!control&&currentView==='headersPanel'){$('headerSearchToggle').click();control=$('headerSearch');}if(control){event.preventDefault();control.focus();}return;}
     if(visible(control)){event.preventDefault();control.click();}
   });
@@ -1433,12 +1536,14 @@ function openRuleEditor(mode='setup'){
   $('ruleTargetScope').value='selected';$('ruleColumnPicker').hidden=false;$('ruleColumnSearch').value='';$('ruleEditorError').textContent='';
   for(const id of ['ruleTrim','ruleCase','ruleNumericFormat'])$(id).checked=false;
   for(const id of ['ruleTolerance','ruleDateLeft','ruleDateRight'])$(id).value='';
+  $('duplicatePolicy').value=mode==='rerun'?(rerunDraft.duplicate_policy||'first'):($('duplicatePolicy').value||'first');
+  $('duplicatePolicy').dispatchEvent(new Event('change',{bubbles:true}));
   $('ruleTolerance').disabled=false;renderRuleColumnChoices();renderRuleEditor();$('comparisonRulesDrawer').showModal();
 }
 function renderRerunRuleSummary(){const target=$('rerun-rules-list');target.replaceChildren();const p=document.createElement('p');p.textContent=rerunDraft.comparison_rules.length+' columns configured. Add rules to all compared columns or select specific columns.';target.append(p);for(const rule of rerunDraft.comparison_rules){const row=document.createElement('div');row.className='comparison-rule-card';const title=document.createElement('strong'),desc=document.createElement('span');title.textContent=rule.column;desc.textContent=ruleDescription(rule);row.append(title,desc);target.append(row);}}
 function initComparisonRulesDrawer(){
   if(typeof document.createDocumentFragment!=='function')return;
-  document.body.insertAdjacentHTML('beforeend',`<dialog id="comparisonRulesDrawer" class="comparison-rules-drawer" aria-labelledby="comparisonRulesTitle"><div class="drawer-heading"><div><p class="eyebrow">COMPARISON CONFIGURATION</p><h2 id="comparisonRulesTitle">Comparison rules</h2></div><button id="closeComparisonRules" class="subtle" aria-label="Close comparison rules">✕</button></div><div class="comparison-rules-body"><p class="muted">Choose columns, combine rules, then apply. Keys and ignored columns are excluded.</p><section class="comparison-rule-builder"><label>Apply to<select id="ruleTargetScope"><option value="selected">Selected columns</option><option value="all">All compared value columns</option></select></label><div id="ruleColumnPicker"><input id="ruleColumnSearch" type="search" aria-label="Find rule columns" placeholder="Find columns"><div class="rule-selection-tools"><button id="ruleSelectVisible" class="subtle">Select shown</button><button id="ruleClearSelection" class="subtle">Clear</button><span id="ruleSelectionCount"></span></div><div id="ruleColumnChoices"></div></div><div class="rule-options"><label><input id="ruleTrim" type="checkbox">Trim whitespace</label><label><input id="ruleCase" type="checkbox">Ignore case</label><label><input id="ruleNumericFormat" type="checkbox">Ignore numeric formatting</label><label>Numeric tolerance<input id="ruleTolerance" placeholder="e.g. 0.01" inputmode="decimal"></label><label>File 1 date format<input id="ruleDateLeft" placeholder="%Y-%m-%d"></label><label>File 2 date format<input id="ruleDateRight" placeholder="%d/%m/%Y"></label></div><details class="compact-help"><summary>How rules combine</summary><p>Whitespace and case rules run before numeric or date comparison. Adding rules preserves other rules on the selected columns; a new tolerance or date format replaces that setting. Numeric and date rules cannot coexist. Remove a column’s rules to reset it to exact text. All columns means the current compared value columns; profiles save this explicit selection.</p></details><button id="addValueRule" class="subtle">Add rules to selection</button></section><div class="section-title"><h3>Configured rules</h3><span id="ruleEditorCount"></span></div><p id="ruleEditorEmpty" class="muted">No rules. Values are compared as exact text.</p><div id="comparisonRuleList"></div></div><footer class="rules-drawer-footer"><p id="ruleEditorError" role="status"></p><button id="applyComparisonRules" class="primary">Apply rules</button></footer></dialog>`);
+  document.body.insertAdjacentHTML('beforeend',`<dialog id="comparisonRulesDrawer" class="comparison-rules-drawer" aria-labelledby="comparisonRulesTitle"><div class="drawer-heading"><div><p class="eyebrow">COMPARISON CONFIGURATION</p><h2 id="comparisonRulesTitle">Comparison rules</h2></div><button id="closeComparisonRules" class="subtle" aria-label="Close comparison rules">✕</button></div><div class="comparison-rules-body"><section class="duplicate-rule-setting"><div><strong>Duplicate keys</strong><small>Continue the comparison and record duplicate keys in the audit.</small></div><label><span>Keep occurrence</span><select id="duplicatePolicy"><option value="first">First source row</option><option value="last">Last source row</option></select></label></section><p class="muted">Choose columns, combine rules, then apply. Keys and ignored columns are excluded.</p><section class="comparison-rule-builder"><label>Apply to<select id="ruleTargetScope"><option value="selected">Selected columns</option><option value="all">All compared value columns</option></select></label><div id="ruleColumnPicker"><input id="ruleColumnSearch" type="search" aria-label="Find rule columns" placeholder="Find columns"><div class="rule-selection-tools"><button id="ruleSelectVisible" class="subtle">Select shown</button><button id="ruleClearSelection" class="subtle">Clear</button><span id="ruleSelectionCount"></span></div><div id="ruleColumnChoices"></div></div><div class="rule-options"><label><input id="ruleTrim" type="checkbox">Trim whitespace</label><label><input id="ruleCase" type="checkbox">Ignore case</label><label><input id="ruleNumericFormat" type="checkbox">Ignore numeric formatting</label><label>Numeric tolerance<input id="ruleTolerance" placeholder="e.g. 0.01" inputmode="decimal"></label><label>File 1 date format<input id="ruleDateLeft" placeholder="%Y-%m-%d"></label><label>File 2 date format<input id="ruleDateRight" placeholder="%d/%m/%Y"></label></div><details class="compact-help"><summary>How rules combine</summary><p>Whitespace and case rules run before numeric or date comparison. Adding rules preserves other rules on the selected columns; a new tolerance or date format replaces that setting. Numeric and date rules cannot coexist. Remove a column’s rules to reset it to exact text. All columns means the current compared value columns; profiles save this explicit selection.</p></details><button id="addValueRule" class="subtle">Add rules to selection</button></section><div class="section-title"><h3>Configured rules</h3><span id="ruleEditorCount"></span></div><p id="ruleEditorEmpty" class="muted">No rules. Values are compared as exact text.</p><div id="comparisonRuleList"></div></div><footer class="rules-drawer-footer"><p id="ruleEditorError" role="status"></p><button id="applyComparisonRules" class="primary">Apply rules</button></footer></dialog>`);
   const trigger=document.createElement('button');trigger.id='openComparisonRules';trigger.className='subtle';trigger.textContent='Comparison rules';trigger.setAttribute('aria-haspopup','dialog');trigger.addEventListener('click',()=>openRuleEditor());$('scopeNext').before(trigger);
   const prior=$('addRerunRule'),replacement=prior.cloneNode(true);replacement.textContent='Configure comparison rules';prior.replaceWith(replacement);replacement.addEventListener('click',()=>openRuleEditor('rerun'));
   $('closeComparisonRules').addEventListener('click',()=>$('comparisonRulesDrawer').close());$('comparisonRulesDrawer').addEventListener('close',()=>ruleEditorReturn?.focus());
@@ -1451,9 +1556,9 @@ function initComparisonRulesDrawer(){
     if($('ruleNumericFormat').checked)patch.tolerance='0';else if($('ruleTolerance').value!=='')patch.tolerance=$('ruleTolerance').value;
     if($('ruleDateLeft').value||$('ruleDateRight').value){patch.left_date_format=$('ruleDateLeft').value;patch.right_date_format=$('ruleDateRight').value;}
     if(!Object.keys(patch).length)throw Error('Choose at least one rule.');
-    const proposed=mergeColumnRules(ruleEditorDraft,columns,patch),scope=ruleScope();const result=await api(endpoint('/validate-rules'),{comparison_rules:proposed,keys:scope.keys,ignore_columns:scope.ignore_columns});ruleEditorDraft=result.rules;renderRuleEditor();$('ruleEditorError').textContent='Rules added. Apply to save this configuration.';
+    const proposed=mergeColumnRules(ruleEditorDraft,columns,patch),scope=ruleScope();const result=await api(endpoint('/validate-rules'),{comparison_rules:proposed,keys:scope.keys,ignore_columns:scope.ignore_columns});ruleEditorDraft=result.rules;clearRuleBuilder();renderRuleEditor();$('ruleEditorError').textContent='Rules added. Apply to save this configuration.';
   }catch(error){$('ruleEditorError').textContent=error.message;}});
-  $('applyComparisonRules').addEventListener('click',async()=>{const button=$('applyComparisonRules');button.disabled=true;try{const scope=ruleScope(),result=await api(endpoint('/validate-rules'),{comparison_rules:ruleEditorDraft,keys:scope.keys,ignore_columns:scope.ignore_columns});if(ruleEditorMode==='rerun'){rerunDraft.comparison_rules=result.rules;renderRerunRuleSummary();}else{if(job.state!=='ready')throw Error('Use Recompare to change rules for a completed comparison.');await api(endpoint('/config'),{...configuration(),comparison_rules:result.rules});valueRules=result.rules;} $('comparisonRulesDrawer').close();}catch(error){$('ruleEditorError').textContent=error.message;}finally{button.disabled=false;}});
+  $('applyComparisonRules').addEventListener('click',async()=>{if(typeof confirmRuleDraft==='function'&&!await confirmRuleDraft())return;const button=$('applyComparisonRules');button.disabled=true;try{const scope=ruleScope(),result=await api(endpoint('/validate-rules'),{comparison_rules:ruleEditorDraft,keys:scope.keys,ignore_columns:scope.ignore_columns});if(ruleEditorMode==='rerun'){rerunDraft.comparison_rules=result.rules;rerunDraft.duplicate_policy=$('duplicatePolicy').value;renderRerunRuleSummary();scheduleReviewPlan();}else{if(job.state!=='ready')throw Error('Use Recompare to change rules for a completed comparison.');await api(endpoint('/config'),{...configuration(),comparison_rules:result.rules});valueRules=result.rules;} $('comparisonRulesDrawer').close();}catch(error){$('ruleEditorError').textContent=error.message;}finally{button.disabled=false;}});
 }
 initComparisonRulesDrawer();
 
@@ -1594,4 +1699,6 @@ function initAiPackage(){
   });
   $('aiFindingsFile').addEventListener('change',async()=>{const file=$('aiFindingsFile').files[0];if(!file)return;try{if(file.size>4*1024*1024)throw Error('Use a findings file smaller than 4 MiB');const findings=JSON.parse(await file.text());await api(endpoint('/ai-findings'),{findings});aiFindingsJob=null;$('aiPackageStatus').textContent='Imported as unreviewed AI suggestions. Open a column to review them.';}catch(e){$('aiPackageStatus').textContent=e.message;}finally{$('aiFindingsFile').value='';}});
 }
-initAiPackage();
+// AI package is intentionally absent from the current export UI.
+
+window.addEventListener('DOMContentLoaded',()=>restoreWorkspaceOnReload().catch(showError).finally(()=>window.dispatchEvent(new Event('workspace-restored'))),{once:true});

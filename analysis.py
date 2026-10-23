@@ -3,6 +3,7 @@ from contextlib import closing
 import csv
 import json
 import sqlite3
+import re
 from pathlib import Path
 
 
@@ -24,19 +25,19 @@ def classify_pattern(left,right):
 def build_index(report, target, notify, cancelled=lambda:False):
     with closing(sqlite3.connect(target)) as db:
         db.set_progress_handler(lambda: 1 if cancelled() else 0,10000)
-        db.executescript('PRAGMA cache_size=-8192; PRAGMA temp_store=FILE; CREATE TABLE cells(key_json TEXT, column_name TEXT, left_value TEXT, right_value TEXT); CREATE TABLE keys(key_json TEXT PRIMARY KEY,status TEXT,changed_cells INTEGER);')
+        db.executescript('PRAGMA cache_size=-8192; PRAGMA temp_store=FILE; CREATE TABLE cells(key_json TEXT, column_name TEXT, left_value TEXT, right_value TEXT,left_hash TEXT,right_hash TEXT); CREATE TABLE keys(key_json TEXT PRIMARY KEY,status TEXT,changed_cells INTEGER);')
         db.execute('CREATE TABLE patterns(column_name TEXT,pattern TEXT,left_hash TEXT,right_hash TEXT,left_value TEXT,right_value TEXT,left_length INTEGER,right_length INTEGER,occurrences INTEGER,PRIMARY KEY(column_name,pattern,left_hash,right_hash))')
         import hashlib
         with (report/'differences.csv').open(encoding='utf-8',newline='') as stream:
             for i,row in enumerate(csv.DictReader(stream),1):
                 key=json.dumps(json.loads(row['key_json']),ensure_ascii=False,separators=(',',':'))
-                db.execute('INSERT INTO cells VALUES (?,?,?,?)',(key,row['column'],row['left_value'],row['right_value']))
+                db.execute('INSERT INTO cells VALUES (?,?,?,?,?,?)',(key,row['column'],row['left_value'],row['right_value'],hashlib.sha256(row['left_value'].encode()).hexdigest(),hashlib.sha256(row['right_value'].encode()).hexdigest()))
                 left,right=row['left_value'],row['right_value']
                 db.execute('INSERT INTO patterns VALUES (?,?,?,?,?,?,?,?,1) ON CONFLICT(column_name,pattern,left_hash,right_hash) DO UPDATE SET occurrences=occurrences+1',(row['column'],classify_pattern(left,right),hashlib.sha256(left.encode('utf-8')).hexdigest(),hashlib.sha256(right.encode('utf-8')).hexdigest(),left[:1000],right[:1000],len(left),len(right)))
                 if i%10000==0:
                     db.commit();notify(f'Indexing mismatches: {i:,} cells')
         notify('Building key and column indexes…')
-        db.executescript('CREATE INDEX cells_key ON cells(key_json,column_name); CREATE INDEX cells_column ON cells(column_name,key_json); INSERT INTO keys SELECT key_json,\'changed\',count(*) FROM cells GROUP BY key_json;')
+        db.executescript('CREATE INDEX cells_key ON cells(key_json,column_name); CREATE INDEX cells_column ON cells(column_name,left_hash,right_hash,key_json); INSERT INTO keys SELECT key_json,\'changed\',count(*) FROM cells GROUP BY key_json;')
         for kind in ('left_only','right_only'):
             with (report/(kind+'.csv')).open(encoding='utf-8',newline='') as stream:
                 rows=csv.reader(stream);next(rows)
@@ -50,7 +51,7 @@ def build_index(report, target, notify, cancelled=lambda:False):
         db.commit()
 
 
-def query_index(path, mode, offset=0, column='', key=None):
+def query_index(path, mode, offset=0, column='', key=None, left_hash=None, right_hash=None):
     if mode not in ('keys','cells','patterns'): raise ValueError('Choose key or cell analysis')
     offset=max(0,offset)
     with closing(sqlite3.connect(f'{Path(path).resolve().as_uri()}?mode=ro',uri=True)) as db:
@@ -59,14 +60,17 @@ def query_index(path, mode, offset=0, column='', key=None):
             clause=' WHERE column_name=?' if column else ''
             params=[column] if column else []
             total=db.execute('SELECT count(*) FROM patterns'+clause,params).fetchone()[0]
-            rows=db.execute('SELECT column_name,pattern,left_value,right_value,occurrences,left_length,right_length FROM patterns'+clause+' ORDER BY occurrences DESC,column_name,pattern,left_hash,right_hash LIMIT 50 OFFSET ?',params+[offset]).fetchall()
+            rows=db.execute('SELECT column_name,pattern,left_value,right_value,occurrences,left_length,right_length,left_hash,right_hash FROM patterns'+clause+' ORDER BY occurrences DESC,column_name,pattern,left_hash,right_hash LIMIT 50 OFFSET ?',params+[offset]).fetchall()
             categories=db.execute('SELECT pattern,sum(occurrences) FROM patterns'+clause+' GROUP BY pattern ORDER BY sum(occurrences) DESC',params).fetchall()
-            return dict(rows=rows,total=total,offset=offset,categories=categories)
+            return dict(rows=rows,total=total,offset=offset,categories=categories,occurrences=sum(r[1] for r in categories))
         where=[];params=[]
         if key is not None:
             where.append('key_json=?');params.append(json.dumps(key,ensure_ascii=False,separators=(',',':')))
         if mode=='cells' and column:
             where.append('column_name=?');params.append(column)
+        if left_hash is not None or right_hash is not None:
+            if mode!='cells' or not column or not all(isinstance(h,str) and re.fullmatch(r'[0-9a-f]{64}',h) for h in (left_hash,right_hash)):raise ValueError('Select an exact value-change pattern within a column')
+            where.extend(['left_hash=?','right_hash=?']);params.extend([left_hash,right_hash])
         clause=' WHERE '+' AND '.join(where) if where else ''
         table='keys' if mode=='keys' else 'cells'
         count=db.execute('SELECT count(*) FROM '+table+clause,params).fetchone()[0]

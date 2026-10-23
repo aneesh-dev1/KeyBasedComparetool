@@ -1,4 +1,10 @@
-# TransUnion-themed CSV key comparison
+# TransUnion Data Compare
+
+## On-premises team deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the Linux `nohup` launcher, five-browser
+independent active comparisons without login, shared completed history and Projects,
+server-path inputs, resource limits, and rollout checks.
 
 ## On-premises team deployment
 
@@ -18,82 +24,96 @@ On other platforms, or from a terminal in this folder:
 python3 server.py --open
 ```
 
-Open **http://127.0.0.1:8765**. No third-party packages are required.
+Open **http://127.0.0.1:8765**. CSV, Excel and JSON use the Python standard
+library. Install PyArrow from `requirements.txt` for Parquet support.
 
-1. Choose the left and right CSVs and upload them. Uploads use adaptive 256 KiB–8 MiB chunks streamed to disk; CSV chunks
-   use lossless gzip when the browser supports it and it saves at least 15% of bytes. After an interruption, reselect the same files and resume.
-2. Search and select the key columns. Memory and batch sizes are selected automatically when the job starts.
-   The 32 GB RAM profile defaults to **4 GB** and **parallel** file sorting.
-   Optionally select ignored columns and enter ignored key values.
-3. Continue to **Value Overrides** and add any allowed column/value pairs.
-   Use **File Preview** to inspect a limited sample before starting.
-4. Start the comparison. **Pipeline & Logs** shows the current phase and live
-   output. You can refresh after uploading without losing the job.
-5. Review row totals, per-column mismatch counts and the first 100 records in
-   each category. Download the full results using the report buttons.
-6. Use **Job history** in the sidebar to reopen previous results or unfinished uploads.
+The tabular workflow has four stages:
 
-The sidebar groups **CSV & Excel** and **JSON comparison** under Compare.
-Each page load opens a fresh, empty comparison. **CSV & Excel** opens a submenu
-with **New comparison** and **Continue current selection**. Continue restores the
-selection in this tab, or the last saved job when opening the app again. New opens
-a blank upload page without deleting previous jobs. During an active upload, New
-is disabled. **New comparison** is also available in the **Job history** header.
-The sidebar groups **Ignore key containers** and **Job history** under Manage.
-Files, Column
-headers, Keys & scope, Pipeline & logs, and Results
-are the five phases within New comparison. **Preview files** is optional; start
-comparison directly from Keys & scope. Completed pipelines offer a gently pulsing
-**View results** button. Results compact the steps into a vertical circle rail;
-hover or focus reveals labels and each circle returns to its phase.
-Selecting a column under **Differences by column** opens its mismatch analysis
-in a right-side drawer. Results offer one Excel report and one HTML report.
-The **Recompare** prompt has a thin moving border and contracts to an icon after
-five idle seconds; hovering or focusing expands it again. It opens tabs for Keys & scope, Value overrides,
-and Comparison rules. It creates a separate run with the same files and preserves
-the original job. Escape closes overlays; reduced-motion preferences disable animation.
-The bottom **Collapse sidebar** control switches
-to a compact icon rail; hover or keyboard-focus an icon to see its label. Desktop
-collapse preferences are remembered after refreshing. On screens up to 800 px,
-the sidebar starts as an icon rail. Expanding opens a navigation drawer; selecting
-a destination, clicking outside, or pressing Escape closes it. Keyboard focus stays
-inside the drawer while it is open.
+1. **Files & headers:** choose two CSV, Excel or Parquet files. Upload from your
+   computer, or select **Use server path** when an administrator has enabled
+   source directories. Select Excel worksheets where needed. Edit comparison
+   headers in the same stage, keeping file details available in the expandable
+   source area. Headers match without case sensitivity; only common columns
+   continue into comparison. Optionally select a profile template and project.
+2. **Keys & scope:** select keys, ignored columns and ignored keys/containers.
+   **Preview files** becomes available after applying headers and opens inline
+   tables with the applied names. The top-right **Comparison rules** drawer
+   applies rules to one, several or all value columns. Add configured rules to
+   the selection before applying; an unadded draft triggers a confirmation.
+3. **Pipeline & logs:** start comparison from the top right. Switch between
+   stage cards and the console without interrupting work. The console supports
+   search, category filters/counts, follow, pause, copy and log download.
+   HTML and Excel reports are generated during **Write results**. Completion
+   offers **View results** immediately and opens Results after five seconds.
+4. **Results:** inspect match bands and per-column differences. Click a column
+   to open its analysis drawer, with **Mismatches** and **Patterns** tabs. A
+   pattern's **List keys** action filters to that exact value pair. Add comments,
+   attach the comparison to a project, or download the HTML/Excel report.
 
-**Excel workbook:** one `.xlsx` file with exactly one sheet per mismatched
-column. Ten mismatched columns produce ten mismatch sheets. Configured key exclusions add an **Ignored key containers** audit sheet.
-Every sheet contains the original column name, the key columns, the left value
-and the right value. A sheet contains only mismatches for its own column.
-Unchanged columns are omitted. If there are no changed cells, the workbook
-contains one explanatory `No mismatches` sheet.
+The unified picker also accepts two JSON files and opens the existing array
+alignment and side-by-side JSON flow. Mixed JSON/tabular pairs are rejected.
+There is no separate JSON sidebar destination. Each fresh page load opens an
+empty comparison. **Compare files** offers **New comparison** and **Continue
+last comparison**; a new selection does not delete prior jobs. Active uploads
+remain independent and can be resumed by reselecting the same unchanged files.
 
-Sheet names use the original column names wherever Excel allows. Names longer
-than 31 characters or containing forbidden characters are shortened/sanitized;
-case-insensitive collisions get a numeric suffix. The full original name is
-always present in the first row. Values remain text, including leading zeros,
-whitespace, and strings beginning with `=`.
+**Recompare** opens Keys & scope, Value overrides and Comparison rules tabs.
+The original keys stay locked. Supported changes re-evaluate immutable retained
+raw differences and create a separate review version; they do not read/sort the
+sources again. Removing a rule can restore its accepted raw differences. The
+review plan explains when a change needs a full comparison because the original
+evidence did not cover it. The original job stays available in Job history.
 
-Excel allows 1,048,576 rows and 32,767 characters per cell. Two heading rows leave
-room for **1,048,574 mismatches per column**, sufficient for a million input
-rows with unique keys. If a column or cell exceeds those limits, the Excel
-export fails with a clear message; it never truncates records. HTML/CSV remain
-available. See [Microsoft's Excel limits](https://support.microsoft.com/en-us/excel/excel-specifications-and-limits).
+In team mode, everyone can browse completed Job history and Projects. Active
+uploads and unfinished jobs remain in their creating browser workspace. The
+creator controls cancellation, deletion, source/configuration changes and the
+job's project/audit assignment. Teammates can review completed results, add
+comments, download reports and create their own review versions. This is shared
+access without login, not authenticated per-person ownership. Profiles and
+ignore-key container libraries remain browser-workspace scoped.
 
-Keys found on only one side are not cell mismatches: their counts appear in
-HTML, and their complete records have separate CSV downloads.
+The sidebar starts collapsed and expands into labelled navigation; narrow screens
+use a drawer. **Take a tour** covers the workflow and library pages, with Back,
+Next and Skip, and can be replayed from Docs & FAQ. TU loading animation appears
+at startup and for delayed requests without imposing a fixed startup delay.
+Keyboard shortcuts use **Alt** on Windows/Linux and **Option** on Mac: B toggles
+navigation, 1–4 selects available stages, F focuses search, R opens Recompare,
+and / opens shortcut help. Tab/Shift+Tab, Enter/Space and Escape work throughout.
+Shortcuts are standardized rather than customizable. Reduced motion is respected.
 
-**HTML report:** one self-contained `comparison-report.html`, styled with the
-local TransUnion logo and colors. It includes leadership metrics, a pie chart of
-column match bands (exact 100%, 99–<100%, 95–<99%, below 95%), every mismatching
-column with counts and rates, every fully matching column, ignored containers
-with reasons and all configured keys, duplicate warnings, and review notes.
-Open it directly offline or use Print / save as PDF. No ZIP or supporting files
-are required. Individual cell mismatches remain in Excel/CSV and Analysis;
-HTML generation streams the mismatch CSV once, stopping when every changed column has up to 20 sample keys. Expand a column to see its keys and both values. Values over 1,000 characters are marked as truncated; the detailed downloads retain full values.
+**Excel workbook:** one `mismatches.xlsx` with **Comparison Summary**, **TOC**,
+and one detail sheet per mismatching column. Ten mismatching columns produce ten
+detail sheets in addition to summary/audit sheets. Summary includes source/type
+metadata, keys, rules and totals. TOC includes counts, rates, comments and internal
+View links. Detail sheets contain key column(s), **valueA**, **valueB**,
+**variable**, **Comments** and a **Back to TOC** link; redundant per-row typeA,
+typeB and diffAB fields are omitted. Configured exclusions add a highlighted
+**Ignored key containers** audit sheet; review notes are retained as well.
 
-Report generation is asynchronous. Click Excel or HTML once to generate it
-and it downloads automatically when ready. Comparison and export jobs
-share one job queue. A comparison can use two file-sort processes, but multiple
-comparisons and exports do not run simultaneously.
+Sheet names preserve column names where Excel permits. Names longer than 31
+characters or containing forbidden characters are shortened/sanitized;
+case-insensitive collisions get a numeric suffix. Full names remain in the
+workbook. Values remain text, including leading zeros, whitespace and strings
+beginning with `=`. Excel allows 1,048,576 rows and 32,767 characters per cell;
+exports fail clearly if a limit would be exceeded rather than silently truncating.
+See [Microsoft's Excel limits](https://support.microsoft.com/en-us/excel/excel-specifications-and-limits).
+
+**HTML report:** one self-contained `comparison-report.html` with TransUnion
+branding. The desktop dashboard keeps summary metrics, column match-band chart,
+mismatching columns and matching columns in one view, with contained scrolling.
+Bands use exact rates: 100%, 99–<100%, 95–<99% and below 95%. Click a mismatching
+column to open its drawer with exact recurring value pairs, count/share, comments
+and up to 20 sample keys with both values. Comparison details, coverage, ignored
+keys/containers and review notes open from the dashboard. Container names,
+reasons and configured keys are highlighted. It works offline; printing includes
+report sections. Small screens reflow for readability. Sample/pattern values
+longer than 1,000 characters are marked as shortened; Excel keeps full values.
+
+The app presents one HTML and one Excel export. The AI package is deferred from
+the current UI. Both reports are prepared in the pipeline; download buttons use
+those files directly. If notes or report versions make an export stale, a single
+click queues regeneration, shows progress and downloads it when ready. Report
+work shares the heavy-job queue with comparisons. Default concurrency is one.
 
 ### Storage and running the app
 
@@ -115,15 +135,42 @@ the mismatch data. All processing and exports stream records; they do not load
 the complete mismatch report into memory. A very large workbook may still be
 slow to open in Excel, even when generation succeeds.
 
-Keep the server running while processing. An interrupted server marks unfinished
-jobs as failed on restart. An interrupted upload can be resumed; an interrupted
-comparison must be started as a new comparison. Uploaded files and reports are
-retained across restarts. To reclaim storage, stop the server and remove the
-specific job folder from `data/` after saving its reports. Starting a new
-comparison does not delete earlier files.
+Keep the server running while processing. Upload offsets persist across restarts.
+Interrupted comparisons can reuse validated completed external-sort checkpoints;
+an interrupted in-memory hash run rebuilds its lookup. Open an eligible job's
+**Resume comparison** action in Job history. See the resume section below for
+source validation and limits. Completed jobs and reports survive restarts.
 
-This is a local, single-user application bound to `127.0.0.1`, with session-token
-protection and origin checks. It is not configured as a shared public service.
+Automatic cleanup defaults to seven days of inactivity and protects active work.
+The creator can delete a finished or unused job from Job history after saving
+needed reports. Starting a new comparison does not delete existing jobs. Cleanup
+never removes original files referenced through server paths.
+
+The default local server binds `127.0.0.1`, with request-token and origin checks.
+Use the documented on-premises launcher and `PUBLIC_URL` for shared internal
+access; shared mode does not introduce a login system.
+
+### Use files already on the server
+
+An administrator can enable read-only source directories:
+
+```bash
+python3 server.py --data-dir /srv/key-compare/data \
+  --source-root /srv/comparison-inputs --source-root /mnt/team-exports
+```
+
+Then choose **Use server path** in Files & headers and enter two absolute paths
+visible to that server. CSV and Parquet are read in place, avoiding browser
+transfer and uploaded copies. Excel still imports the selected worksheet into a
+job-local CSV. JSON opens the existing limited-size JSON workflow. Allowed roots
+are resolved before access; paths and symlinks escaping them are rejected. The
+service account needs read access. A saved file identity/size/modification-time
+check rejects sources that change before use; keep sources unchanged during the
+run. Server paths do not make a laptop-only file accessible to the server.
+
+The source mode is disabled unless at least one root is configured. Only expose
+input directories the whole trusted team is permitted to read. See
+[DEPLOYMENT.md](DEPLOYMENT.md) for `SOURCE_ROOTS` and operational details.
 
 ## Command-line usage
 
@@ -149,7 +196,8 @@ must not exist. Inputs are never modified. Progress appears every 100,000 rows.
 - Empty fields are empty strings; `NULL` is literal text. No type inference.
 - Empty key components are rejected unless `--allow-empty-keys` is supplied.
 - Only common column names are compared, ignoring header case; column order can differ.
-  Missing, empty or duplicate headers and inconsistent row widths are errors.
+  Blank headers receive `column<number>` names; duplicate/case-colliding names
+  receive distinct numeric suffixes. Inconsistent row widths remain errors.
 - Default encoding is UTF-8 with optional BOM. Use `--encoding` and
   `--delimiter` for other input formats. Quoted multiline values are supported.
 
@@ -279,11 +327,12 @@ list and the number of unequal cells accepted by overrides.
 
 Draft settings are saved when moving between comparison phases and when adding or
 removing a rule. Once a comparison is started, its configuration is immutable.
-Choose **Start recomparison** to create a separate run using the same
-uploaded files, without re-uploading. The server links the finalized inputs to
-the new job; this requires hard-link support in the data filesystem. Original
-results remain unchanged in Job history. Saved profile overrides still apply
-when a template is selected during upload.
+Choose **Start recomparison** to create a separate review version. Supported
+rule/scope changes stream immutable retained evidence without reading source
+files; unsupported changes require a full comparison. Baseline files are
+hard-linked within the data filesystem, so hard-link support is required.
+Original results remain unchanged in Job history. Saved profile overrides still
+apply when a template is selected during Files & headers.
 
 CLI example:
 
@@ -294,40 +343,30 @@ python3 compare.py left.csv right.csv --keys id --output results \
 
 ## File previews, pipeline, and job history
 
-The console supports text filtering, pausing/resuming the display, following the
-latest output, and copying visible lines. Pausing the display does not pause the
-comparison. Scrolling upward stops automatic following. Pipeline stage cards keep
-their DOM nodes as progress updates, allowing smooth active/completed transitions.
-Returning to Pipeline restores horizontal steps so View results can replay the
-circle-then-vertical transition.
+**Preview files** is optional and appears after applying the header layout.
+It expands inline tables, side by side on desktop, without creating another
+stage. It reads only the requested first 1–1,000 rows, in source order before
+scope/rule processing; it does not align records by key. Twenty columns are
+returned per page, with 500 displayed characters per cell and a 2 MB response
+cap per file. Fewer displayed rows may indicate end of file or the response cap.
+Applied comparison header names are shown. Preview never changes source values.
 
-HTML exports use a compact desktop dashboard: summary cards stay visible while
-section buttons switch between overview, mismatching columns, matching columns,
-ignored keys and containers, and review notes. Long lists scroll within the detail
-area. Mismatch samples remain expandable. Printing includes every section; small
-screens allow natural scrolling for readability.
+**Pipeline & logs** reflects actual validation, read/index or sort, comparison,
+report writing and completion stages, not simulated progress. Review revisions
+show their retained-evidence stages instead of pretending to reread sources.
+The console keeps the latest 1,000 lines, with search, category filters/counts,
+follow, pause, copy and complete-log download. Pause affects the display only;
+scrolling upward stops following. Switching views preserves the running job.
+Completed jobs offer immediate results and a visible five-second countdown.
+Failed runs retain status, error, stage and logs.
 
-The optional **Preview files** action on Files smoothly minimizes the upload cards
-and expands two inline tables, side by side on desktop. Closing restores the cards;
-it never changes the active phase. Animations respect reduced-motion preferences.
-It reads only the requested first 1–1,000 rows per file. It shows
-original file order, before exclusions/overrides, without aligning rows by key.
-Twenty columns are returned per page; use Previous/Next columns to inspect wide
-files. Cells are limited to 500 displayed characters, and responses are capped
-at 2 MB per file. Fewer displayed rows may indicate end of file or that cap.
-Previews do not scan the rest of the CSV or change source values.
-
-**Pipeline & Logs** shows validation, reading/sorting each file, comparison,
-report writing and completion. Progress is based on actual worker phases and
-counts, not simulated percentages. The console polls incremental log output and
-keeps the latest 1,000 lines. Download the complete log for the full record.
-Failed runs retain their status, error, stage and logs.
-
-**Job history** lists saved jobs newest first, 25 per page. It reads job metadata,
-not CSV contents. Open a job to inspect results, preview sources, view rules or
-logs, or resume a partial upload. History survives browser/server restarts as
-long as the same data directory is retained. Older completed jobs without the
-new metadata remain readable. All this history belongs to this local workspace.
+**Job history** lists saved jobs newest first, 25 per page, using metadata rather
+than scanning source files. In shared mode it includes all completed jobs plus
+the creating browser's unfinished jobs. Open completed results and logs, or
+resume your own partial upload/interrupted comparison when eligible. The browser
+cookie controls unfinished-job ownership; clearing it does not hide shared
+completed history but loses management access to the previous workspace. History
+persists while the data directory and its retention policy retain the job.
 
 ## Ignore key containers
 
@@ -359,7 +398,9 @@ Excel uploads finish, choose one sheet per workbook and click **Use selected
 sheets & continue**. The existing keys, scope, containers, overrides, preview,
 pipeline, history, and export flow then applies unchanged. Worksheet names are
 recorded with the job and in report source metadata. The first worksheet row
-must contain unique, nonempty headers, with matching column sets between inputs.
+is treated as headers and receives the same blank/duplicate normalization as
+CSV. The two inputs may have different column sets; comparison uses only common
+names after applying the layout.
 
 Sheet discovery reads workbook metadata only. The selected sheet is streamed
 into a local UTF-8 CSV for the disk-backed comparison engine; shared strings
@@ -368,7 +409,7 @@ import/comparison/export runs at a time. Import progress appears below the sheet
 selectors and is retained in the job log. Reserve disk space for the original
 workbooks, imported CSVs, sorting scratch, and reports. Large Excel imports have
 not been benchmarked at 6 GB. The CLI remains CSV-only; Excel selection is in
-the local web app. No additional Python packages are required.
+the web app. No additional Python packages are required for Excel.
 
 **Value rules:** compare stored cell values, not Excel display formatting. Text
 (including leading zeros) is preserved. Numeric values use their stored OOXML
@@ -387,8 +428,8 @@ workbooks remain on disk.
 
 ## JSON comparison
 
-Open **JSON comparison** in the sidebar and paste two JSON documents or load
-UTF-8 `.json` files. Choose the default array behavior: preserve order compares
+Choose two UTF-8 `.json` files in the shared Files picker (or server-path mode)
+to open JSON comparison. The JSON workspace also supports pasted documents. Choose the default array behavior: preserve order compares
 positions; ignore order matches whole blocks as a multiset (duplicates count).
 Object property order is always ignored. Strings and booleans remain distinct
 from numbers. Numbers compare by numeric value with decimal precision preserved.
@@ -412,7 +453,8 @@ refreshing clears its inputs/results, so download reports to retain them.
 JSON comparison is memory-based and separate from the disk-backed CSV/Excel
 engine: 5 MiB per input, 100 nesting levels, 200,000 values per document, 100
 rules, and 10,000 differences. Exceeding these limits produces an error, not
-a silently truncated report. Work uses the shared heavy-work queue.
+a silently truncated report. JSON uses its own serialized comparison slot; a
+concurrent request receives a retry message.
 
 ## Batch console updates
 
@@ -486,9 +528,9 @@ new ZIP, retain the existing `data` directory, restart the Windows launcher,
 and refresh the browser. A failed upload can be resumed from Job history with
 the same original files. Do not run two servers against the same data folder.
 
-### Column headers step
+### Column headers within Files & headers
 
-After CSV upload or Excel worksheet import, review **Column headers** before
+After CSV/Parquet upload or Excel worksheet import, review headers in **Files & headers** before
 choosing keys. Rename any header in either file to align differently named
 columns, such as `AT02S` and `AT01S`. Header matching ignores case, so `AT01S`
 and `at01s` match automatically. Column order may differ. Results and key/scope
@@ -497,9 +539,9 @@ lists use the spelling from file 1.
 The editor searches and pages through loaded header metadata (50 names per
 file per page). It does not read data rows or rewrite either uploaded file.
 Apply validates that every header is nonempty and unique ignoring case, and
-selects only the shared comparison names. Files with different
-column counts still need matching schemas; this step renames columns and does
-not add or remove them. Existing keys, ignored columns, and value overrides
+selects only the shared comparison names. Different column names/counts do not
+fail the step when common columns remain; non-common columns are recorded as
+out of scope. This step renames comparison headers without rewriting source data. Existing keys, ignored columns, and value overrides
 follow renamed file 1 columns by position. Header layouts persist in job history
 and become read-only when comparison starts. Cell values and key values remain
 case-sensitive. Case-only duplicate CSV headers receive distinct numeric
@@ -556,25 +598,29 @@ in Advanced array rules. Discovery supports up to 100 distinct array paths.
 
 ## Comparison reports
 
-HTML exports are single-file leadership reports. Rates are based on retained
-matched keys and compared columns; one-sided keys and exclusions are called out
-separately. Exact counts determine chart bands before percentage rounding.
-Configured ignored keys are expandable on screen and expanded when printing.
+The HTML dashboard is one offline file with metrics, exact match bands, all
+mismatching/matching columns, coverage and highlighted ignored containers.
+Click a mismatch column for a paginated pattern drawer, comments and up to 20
+sample keys. Pattern counts include all retained mismatches for that column;
+only displayed values/samples are shortened. Report generation streams pattern
+data through a disk-backed cache rather than holding all pairs in memory.
 
-Excel exports include File Summary and TOC sheets with difference counts, match
-percentages, internal View links, and an editable Comments column. Each changed
-column still has its own sheet, with keys, valueA, valueB, variable, typeA, typeB,
-diffAB and Back to TOC. Values remain text, including leading zeros and formula-like
-strings. Types are reported as text, reflecting the comparison engine; diffAB is
-a diagnostic decimal subtraction where possible, not the equality rule. Numeric
-diagnostics are omitted for nonfinite values or unusually long/extreme numbers.
-Rates use matched keys after exclusions and overrides; no matched keys means N/A.
-Old exports can be regenerated in the new layout after restarting the server.
+Excel starts with **Comparison Summary** and **TOC**. Summary records metadata,
+keys, source types, rules and totals. TOC has counts, match/mismatch rates,
+comments and internal links. Each mismatching column has a sheet containing keys,
+valueA, valueB, variable and Comments, plus Back to TOC. Types appear in Summary,
+not as repeated typeA/typeB/diffAB detail columns. Values remain text and rates
+use retained matched keys; zero matched keys yields N/A. Ignored containers and
+analysis notes retain dedicated audit sheets.
+
+Both reports are generated during Write results and refreshed for a new review
+version. Notes invalidate stale exports; one click regenerates/downloads a stale
+report. Previous exports can be regenerated after upgrading the server.
 
 ## Analysis and report progress
 
-After Results, open Analysis to review column mismatch counts and match rates,
-then inspect a column or an exact key. Single keys are literal text; composite
+In Results, click a mismatching column to open its analysis drawer. Switch
+between **Mismatches** and **Patterns**, or use the key filter to inspect a record. Single keys are literal text; composite
 keys are JSON arrays of strings. Key-level results include changed keys and
 keys found in only one file. Equal keys and excluded keys are not indexed.
 
@@ -582,12 +628,13 @@ The first detail/key query queues an on-disk SQLite index using the shared
 heavy-job worker limit. This needs additional disk space; it is removed with
 the job. Results page 50 rows at a time and cap displayed values at 1,000
 characters. Full exported values are unchanged. Indexing progress appears in
-the Analysis screen, with a retry option if preparation fails. Active analysis
+the analysis drawer, with a retry option if preparation fails. Active analysis
 preparation is protected from cleanup, just like comparison and export.
 
 Export buttons show queued/generating status with an accessible spinner and
 live progress messages. Ignore-key containers and reasons are highlighted in
-HTML summary callouts and the Excel audit sheet, with a link from File Summary.
+HTML dashboard/drawer callouts and the Excel audit sheet, with a link from
+Comparison Summary.
 
 ## Team workflow additions
 
@@ -634,18 +681,23 @@ Windows/on-prem deployment still need a representative pilot.
 
 The application automatically chooses read/sort and comparison batch sizes; Keys & scope retains first/last source occurrence for duplicates. CLI equivalents: `--read-batch-size`, `--compare-batch-size`, `--duplicate-policy`. Batch sizes accept integers from 1 to 1,000,000. Sorting flushes at the row cap or memory budget, whichever comes first. Comparison remains streaming; its batch setting controls progress reporting. Duplicate counts and skipped rows are shown in Results and exports. Match percentages use only retained rows.
 
-### Guided Analysis view
+### Column analysis and comments
 
-Use **By column** to search mismatching columns and open their key-level details.
-Use **By key** to browse changed/one-sided records or enter a value in each key
-field; composite keys do not require JSON. From any mismatch, choose **All changes
-for this key** to review the record across columns. Back clears the selection.
-File 1 and File 2 values are shaded separately, and blank values show `(empty)`.
-Review notes identify the selected column/key scope before saving.
+Click a column in Results to open **Mismatches**. Use **Patterns** to group exact
+File 1 → File 2 pairs with counts and percentage share in the current column.
+**List keys** returns to Mismatches filtered to that exact pair; the visible
+filter can be cleared without losing the selected column. Key filtering remains
+available in the drawer. **All changes for this key** shows its mismatches across
+columns. Values are shaded separately and empty strings are labelled.
 
-Run `node test_analysis_ui.cjs` for the guided navigation interaction checks,
-in addition to the Python analysis API tests. These are DOM simulation checks,
-not a browser rendering test.
+A column note remains visible as context for every key reviewed in that column.
+A key comment follows the key across all mismatching columns. Cell-specific
+comments remain scoped to that key/column. Comments annotate results and appear
+in HTML and Excel; they do not change comparison equality.
+
+Run `node test_analysis_ui.cjs` for navigation interaction checks, in addition
+to the Python analysis API tests. These are DOM simulation checks, not a browser
+rendering test.
 
 ### Resume interrupted comparisons
 
@@ -668,7 +720,7 @@ and checkpoint creation add I/O; 6 GB performance has not been benchmarked.
 
 ### Mismatch patterns and numeric formatting
 
-In Analysis, choose **Mismatch patterns**. Recurring File 1 → File 2 pairs are
+In the column analysis drawer, choose **Patterns**. Recurring File 1 → File 2 pairs are
 ranked by occurrence count, with a column filter and per-category totals. Each
 mismatched cell belongs to one category, in this order: blank → value, value →
 blank, whitespace only, case only, case plus whitespace, numeric formatting, or
@@ -681,14 +733,15 @@ To accept `0` / `0.00` and `-11` / `-11.00`, open Comparison rules in Keys & sco
 tick **Ignore numeric formatting**, then save the column rule. This uses exact
 decimal equality (zero tolerance). Keys and other columns retain their configured
 comparison rules; leading-zero numeric identifiers should remain exact text.
-Rerun a completed comparison to apply new rules.
+Use Recompare on a completed job to apply new rules to retained evidence when
+the review plan confirms coverage.
 
 HTML sample controls use native expandable dropdowns, without requiring JavaScript
 to show the 20 key samples. Regenerate old exports to get the updated controls.
 
 ### Workspace settings and comments
 
-Resource settings are calculated at worker launch. Comparison rules are chosen in Keys & scope and can be saved in profiles. In team mode, browser workspaces are separate. Rule names match common column headers without case sensitivity; key, ignored and absent columns are skipped. Explicit profile rules take precedence over legacy saved defaults. Completed runs retain their original rules. Save a numeric tolerance of zero to treat `0` and `0.00` as equivalent.
+Resource settings are calculated at worker launch. Comparison rules are chosen in Keys & scope and can be saved in profiles. In team mode, active jobs and reusable profiles/containers stay browser scoped; completed history and Projects are shared. Rule names match common column headers without case sensitivity; key, ignored and absent columns are skipped. Explicit profile rules take precedence over legacy saved defaults. Completed runs retain their original rules. Save a numeric tolerance of zero to treat `0` and `0.00` as equivalent.
 
 Analysis shows a browsable, paged list of mismatching columns, with optional filtering. Comments can apply to a whole column, a key across all columns, or a single key/column pair. Existing comments can be viewed and edited. Key comments appear alongside every mismatch for that key in analysis and report samples, and in the corresponding Excel mismatch sheets.
 
@@ -696,26 +749,26 @@ Analysis shows a browsable, paged list of mismatching columns, with optional fil
 
 Navigation starts collapsed on each page load. Expand it using the bottom toggle; narrow screens use a drawer, and reduced-motion preferences disable the transition. The expanded logo sits directly on the navy background. Redundant sidebar storage text and the upload-page disk-check button have been removed; storage management remains in Storage & queue.
 
-Analysis opens in a right drawer with compact metrics, column/key/pattern tabs, expandable filters, and a bounded mismatch table. Comments and findings show their scope explicitly; saved comments expand separately.
+Analysis opens in a right drawer with compact metrics, Mismatches/Patterns tabs, expandable key filters, and a bounded mismatch table. Comments and findings show their scope explicitly; saved comments expand separately.
 
 Keys & scope and Column headers keep explanatory text in help disclosures available on hover, keyboard focus or click. Header apply/reset actions sit at the top. Desktop scope setup uses three bounded panels with Start comparison at the top-right, matching Column headers.
 
-Choose an optional profile on Files before upload. It applies automatically once CSV headers or the selected Excel worksheets are ready; schema errors are reported for manual correction. Header rows display the original name and editable comparison name side by side.
+Choose an optional profile in Files & headers. It applies automatically once CSV headers or the selected Excel worksheets are ready; schema errors are reported for manual correction. Header rows display the original name and editable comparison name side by side.
 
-The profile picker is the template icon beside upload status, after the two file cards. **Upload & continue** and optional Preview are at the top-right. This keeps the upload canvas wide while preserving profile selection in the Files phase.
+The profile picker is the template icon beside upload status, after the two file cards. The primary upload/header actions are at the top right. Preview is offered after headers are applied. Profile selection stays in Files & headers.
 # Enterprise workspace design
 
 The UI uses a shared TransUnion-inspired visual system: navy navigation, the existing TransUnion wordmark and compact TU mark, cyan accents, yellow primary actions and light data surfaces. The sidebar starts collapsed. Expanded branding keeps clear spacing between the logo and Data Compare label.
 
-CSV/Excel retains five phases, with meaningful icons in the vertical review rail. File preview is inline, profile selection remains on Files, and selecting a mismatching column opens the analysis drawer. Recompare uses tabs for scope, overrides and column rules. JSON separates Inputs, Array alignment and Comparison; successful comparisons open the side-by-side result automatically.
+CSV/Excel/Parquet use four stages: Files & headers, Keys & scope, Pipeline & logs, and Results, with meaningful icons in the vertical review rail. File preview is optional after applying headers, profile selection remains in Files & headers, and selecting a mismatching column opens the analysis drawer. Recompare uses tabs for scope, overrides and column rules. JSON separates Inputs, Array alignment and Comparison; successful comparisons open the side-by-side result automatically.
 
-Performance is automatic; display and accessibility preferences are under Docs & FAQ. Comparison rules live in the top-right drawer on Keys & scope and can be adjusted in Recompare. Select one, several, or all current value columns and combine whitespace, case, and numeric/date rules. Keys and ignored columns are excluded. Explicit comparison rules override legacy workspace rule defaults, including an empty configuration. Storage & queue is accessible from Docs & FAQ. Resource budgets are chosen at worker launch; motion, density and shortcut preferences are local to the browser. Container creation and the saved library are side by side on desktop. Docs retain searchable content in expandable guides.
+Performance is automatic; display and accessibility preferences are under Docs & FAQ. Comparison rules live in the top-right drawer on Keys & scope and can be adjusted in Recompare. Select one, several, or all current value columns and combine whitespace, case, and numeric/date rules. Keys and ignored columns are excluded. Explicit comparison rules override legacy workspace rule defaults, including an empty configuration. Storage & queue is accessible from Docs & FAQ. Resource budgets are chosen at worker launch; motion and density preferences are local to the browser. Shortcuts use the same standard mapping throughout the app. Container creation and the saved library are side by side on desktop. Docs retain searchable content in expandable guides.
 
-Keyboard: Tab / Shift+Tab move between controls; Enter / Space activate them; arrows and Home / End navigate tab and phase controls. Alt+B toggles navigation, Alt+1–5 opens an available comparison phase, Alt+F focuses the current search, Alt+R opens recomparison, and Alt+/ opens the shortcut guide. Escape closes dialogs. Shortcuts never start, cancel, delete or export a job. Operating-system and browser shortcuts may take priority. Reduced motion follows the system preference or can be selected in Docs & FAQ → Display & accessibility.
+Keyboard: Tab / Shift+Tab move between controls; Enter / Space activate them; arrows and Home / End navigate tab and phase controls. Alt+B toggles navigation, Alt+1–4 opens an available comparison stage, Alt+F focuses the current search, Alt+R opens recomparison, and Alt+/ opens the shortcut guide. On Mac, use Option in place of Alt; physical-key handling preserves these shortcuts with Mac keyboard layouts. Escape closes dialogs. Shortcuts never start, cancel, delete or export a job. Operating-system and browser shortcuts may take priority. Reduced motion follows the system preference or can be selected in Docs & FAQ → Display & accessibility.
 
 All pages reflow at narrow widths. Data tables and long lists use bounded scrolling; controls remain reachable rather than being clipped to enforce a fixed page height.
 
-The shared Files picker detects CSV, Excel and JSON by file extension and validates JSON syntax before opening the JSON workspace. JSON pairs use the existing array alignment and side-by-side comparison flow (5 MiB per input). CSV/Excel pairs retain sheet selection, headers and key comparison. Mixed JSON/tabular pairs are rejected. JSON remains session-only and is not added to tabular Job history.
+The shared Files picker detects CSV, Excel, Parquet and JSON by file extension and validates JSON syntax before opening the JSON workspace. JSON pairs use the existing array alignment and side-by-side comparison flow (5 MiB per input). CSV/Excel pairs retain sheet selection, headers and key comparison. Mixed JSON/tabular pairs are rejected. JSON remains session-only and is not added to tabular Job history.
 
 ## Parquet comparisons
 
@@ -742,21 +795,37 @@ This generates shuffled keys and known mismatches, validates counts, and saves t
 
 ## Projects and audit workspace
 
-Projects provides a compact desktop dashboard with comparison counts, manually recorded audit statuses, a latest-run difference metric, a difference trend and an event timeline. Large lists scroll within the workspace; create, attach and review actions use keyboard-accessible drawers. Smaller screens reflow. Use **Project & audit** on a result, or **Projects → Attach comparison** to assign an existing comparison. One comparison belongs to at most one project. Recomparison inherits the project but starts with an Unreviewed audit.
+Projects provides a compact desktop dashboard with comparison counts, manually recorded audit statuses, a latest-run difference metric, a difference trend and an event timeline. Large lists scroll within the workspace; create, attach and review actions use keyboard-accessible drawers. Smaller screens reflow. Use **Attach to project** on a result, or **Projects → Attach comparison** to assign an existing comparison. One comparison belongs to at most one project. Recomparison inherits the project but starts with an Unreviewed audit.
 
-Audit statuses are Unreviewed, In review, Approved and Changes requested. Approval requires a completed comparison and does not change computed mismatch results. Reviewer names are optional labels, not authenticated identities. Projects follow the existing browser-workspace isolation; no login was added. JSON comparisons persist a compact audit summary, not the original JSON, full differences or rendered report. CSV/Excel/Parquet results remain accessible until normal job cleanup; cleanup preserves project audit summaries and marks the source/report as removed.
+Audit statuses are Unreviewed, In review, Approved and Changes requested. Approval requires a completed comparison and does not change computed mismatch results. Reviewer names are optional labels, not authenticated identities. Projects and completed comparison history are shared across the team; no login was added. The creator browser controls a tabular job's project/audit assignment; teammates can create their own review revision. The focused Results attachment drawer does not duplicate the Projects audit form. JSON comparisons persist a compact audit summary, not the original JSON, full differences or rendered report. CSV/Excel/Parquet results remain accessible until normal job cleanup; cleanup preserves project audit summaries and marks the source/report as removed.
 
-Project records and events are stored in a workspace-scoped SQLite database. The dashboard reads metadata only; it does not scan source CSV/Parquet files. Project charts report differing cells for tabular runs and changed/added/removed nodes for JSON, not a combined cross-format match percentage. Use Refresh to load changes while viewing a project. Existing tabular jobs are indexed on the first Projects visit.
+Project records and events are stored in one shared `projects.sqlite` database. Existing per-workspace project databases are migrated once at startup. The dashboard reads metadata only; it does not scan source CSV/Parquet files. Project charts report differing cells for tabular runs and changed/added/removed nodes for JSON, not a combined cross-format match percentage. Use Refresh to load changes while viewing a project. Existing tabular jobs are indexed on the first Projects visit.
 
-## Review revisions and AI evidence packages
+## Review revisions
 
-New runs retain `raw_differences.csv` (including values accepted by rules and explicit null flags) and a matched-key inventory. Applying rules creates an independent review revision, preserves the original, inherits its project as Unreviewed, and regenerates both reports. It streams retained evidence with disk-backed distinct-key counting; it does not open or sort source files. Rules can be added, removed or tightened. Additional column/key exclusions can be applied, and revision-only exclusions can be restored from the unchanged baseline. Keys, duplicate selection, header/source changes, or restoration of data excluded from the original baseline require a full comparison. Older jobs without raw evidence require one full run. The dialog explains the decision before execution. Retained evidence increases disk use, especially for widespread mismatches, and follows job cleanup; revisions hard-link immutable baseline files. Review counts distinguish original mismatches, raw differences, accepted values, excluded values and remaining mismatches. Accepted values may exceed original mismatches when the original already had rules.
+New runs retain `raw_differences.csv` (including unequal values accepted by rules
+and explicit null flags) and a matched-key inventory. Applying rules creates an
+independent review revision, preserves the original, inherits its project as
+Unreviewed, and regenerates both reports. It streams retained evidence with
+disk-backed distinct-key counting, without opening or sorting source files.
+Supported reviews still work when the original sources are unavailable.
 
-Results → AI analysis package downloads a ZIP containing `context.txt`, `columns.csv`, `patterns.csv`, `samples.csv` and `comments.csv`. The UI offers Brief, Medium and Detailed. Internally these use 8k, 32k or 128k character/4 token estimates, not exact model token limits. All mismatching columns and aggregate pattern counts are retained; 1/3/5 examples per column/pattern are budgeted and long values truncated, with original lengths and omission counts. Comments are included once by column, key or cell scope; only the latest saved note per scope is retained. Oversized mandatory context requires a larger budget rather than silent loss. ZIP compression saves transfer bytes, not model tokens. No external AI service is called. Source filenames, keys, values and comments are included: review the package before sharing it outside your environment. Optionally select up to five supporting value columns. The export then reads the sources for sampled keys (projected Parquet reads; sequential CSV reads) and adds budgeted `supporting.csv` rows, with null flags and original lengths. This opt-in step can take longer for large CSVs. The AI must request any missing evidence rather than invent explanations.
+Rules can be added, removed or tightened. Additional column/key exclusions and
+ignore-container selections can be applied; revision-only exclusions can be
+restored from the unchanged baseline. Original key columns remain locked in the
+dialog. Key, duplicate-selection, header/source changes, or restoration of data
+excluded from the original baseline require a full comparison. Older jobs without
+raw evidence require one full run. The review plan explains this before execution.
 
-AI findings can be imported as a JSON array of `column`, `pattern`, `reason`, `evidence`, `confidence` (`low`, `medium`, `high`) and `recommended_action`. They appear in the analysis drawer as unreviewed suggestions and never overwrite human comments or apply rules. Read the suggestion, then use the existing review-note controls to record your own assessment. Revisions do not automatically carry AI suggestions across changed scope.
+Retained evidence increases disk use, especially for widespread mismatches, and
+follows job cleanup. Revisions hard-link immutable baseline files and have their
+own annotations/results. Counts distinguish original mismatches, raw differences,
+accepted values, excluded values and remaining mismatches. Accepted values may
+exceed original mismatches when the original already had rules.
 
-AI packages can target all compared columns or a searchable selection of one or more. Pattern counts, examples, rule context and comments follow that scope; key comments are included only for keys with selected-column mismatches in scoped exports. Supporting columns remain a separate optional context choice. The detail-level info control opens on hover or keyboard focus and supports click/touch and Escape.
+The current Results interface offers only the HTML report and Excel workbook.
+AI evidence package controls are deferred from the UI; the existing backend
+package functionality is not part of this workflow.
 
 ## Wide-file performance validation
 
@@ -807,7 +876,8 @@ Read progress is logged every 50,000 source rows for CSV, imported Excel and Par
 
 Pipeline & logs offers **Live differences** and **Console** tabs. Once source preparation finishes, the worker publishes atomic snapshots about every 1.5 seconds while comparing. The browser polls these bounded snapshots independently of the worker: slow or disconnected browsers do not queue output or stop the run. This is live polling, not an unbounded HTTP result stream.
 
-Counts cover processed keys only until completion. A rolling sample contains at most 60 recent differences, up to three per key; values are shortened in the preview only. Pause samples freezes the table while processing continues. Null and empty text remain distinguishable. Snapshot size is capped at 256 KiB and requests use the job's workspace ownership checks. Samples remain available during automatic HTML/Excel generation. A failed/cancelled job is explicitly labelled partial. Review revisions continue to use their existing console view.
+Counts cover processed keys only until completion. A rolling sample contains at most 60 recent differences, up to three per key; values are shortened in the preview only. Pause samples freezes the table while processing continues. Null and empty text remain distinguishable. Snapshot size is capped at 256 KiB and requests use the job's workspace ownership checks. Samples remain available during automatic HTML/Excel generation. A failed/cancelled job is explicitly labelled partial. Review revisions expose their retained-evidence pipeline and console views;
+source live-sample controls are hidden for these revisions.
 
 All mismatch evidence is still written to the result files. At 50–60% of 1,780 million cells, result volume can approach one billion records; writing those records and creating a full Excel workbook remains substantial work. The app does not silently sample full exports or guarantee two-minute completion.
 

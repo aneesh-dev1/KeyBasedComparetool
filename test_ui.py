@@ -23,11 +23,11 @@ class ReportTests(unittest.TestCase):
         target=self.root/'result.xlsx';export_excel(report,target)
         with zipfile.ZipFile(target) as book:
             root=ET.fromstring(book.read('xl/workbook.xml'))
-            self.assertEqual([s.attrib['name'] for s in root.findall('s:sheets/s:sheet',NS)],['File Summary','TOC']+columns)
+            self.assertEqual([s.attrib['name'] for s in root.findall('s:sheets/s:sheet',NS)],['Comparison Summary','TOC']+columns)
             for i,column in enumerate(columns,3):
                 root=ET.fromstring(book.read(f'xl/worksheets/sheet{i}.xml'))
                 rows=[[c.find('s:is/s:t',NS).text or '' for c in row] for row in root.findall('s:sheetData/s:row',NS)]
-                self.assertEqual(rows,[['id','part','valueA','valueB','variable','typeA','typeB','diffAB','Back to TOC'],['001','A','old','new',column,'text','text','']])
+                self.assertEqual(rows,[['id','part','valueA','valueB','variable','Back to TOC'],['001','A','old','new',column]])
     def test_only_own_column(self):
         report=self.report(['a','b'],[['01','x','x'],['02','x','same'],['03','same','x']],[['01','y','y'],['02','y','same'],['03','same','y']])
         target=self.root/'result.xlsx';export_excel(report,target)
@@ -99,7 +99,7 @@ class ServerTests(unittest.TestCase):
             else:
                 with zipfile.ZipFile(io.BytesIO(payload)) as archive:
                     self.assertIsNone(archive.testzip())
-                    self.assertEqual([s.attrib['name'] for s in ET.fromstring(archive.read('xl/workbook.xml')).findall('s:sheets/s:sheet',NS)],['File Summary','TOC','price','status'])
+                    self.assertEqual([s.attrib['name'] for s in ET.fromstring(archive.read('xl/workbook.xml')).findall('s:sheets/s:sheet',NS)],['Comparison Summary','TOC','price','status'])
         self.assertIn(b'003',self.request(path+'/download/left_only.csv'));self.assertIn(b'004',self.request(path+'/download/right_only.csv'))
     def test_auth_required(self):
         with self.assertRaises(HTTPError):self.request('/api/jobs',{},auth=False)

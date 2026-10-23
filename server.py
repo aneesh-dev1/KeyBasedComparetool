@@ -63,6 +63,8 @@ class Application:
     def __init__(self, root, max_jobs=1):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        from projects import migrate_workspaces
+        migrate_workspaces(self.root)
         self.token = secrets.token_urlsafe(32)
         self.lock = threading.RLock()
         self.file_locks = {}
@@ -80,7 +82,7 @@ class Application:
                 continue
             job = json.loads(path.read_text())
             self.cleanup_upload_journal_temps(job['id'])
-            if job['state'] == 'uploading':
+            if job['state'] == 'uploading' and not job.get('source_paths'):
                 for side in ('left', 'right'):
                     self.recover_upload(job, side)
             changed = False
@@ -96,6 +98,8 @@ class Application:
                     changed = True
             if changed:
                 self.save(job)
+            else:
+                ProjectStore(project_database(self.root)).sync(job_snapshot(job))
 
     def submit(self, identity, kind, function, *args):
         with self.lock:
@@ -141,7 +145,7 @@ class Application:
             if not path.is_file():
                 raise ValueError('Comparison not found')
             job = json.loads(path.read_text())
-            if job['state'] == 'uploading':
+            if job['state'] == 'uploading' and not job.get('source_paths'):
                 for side in ('left', 'right'):
                     source = self.upload_path(job, side)
                     job['files'][side]['uploaded'] = self.upload_offsets.get(
@@ -149,7 +153,7 @@ class Application:
             for side in ('left', 'right'):
                 job['files'][side]['in_flight'] = job['state'] == 'uploading' and (identity, side) in self.upload_offsets
             job['upload_compression'] = ['gzip']
-            if job.get('analysis',{}).get('state')=='complete' and job['analysis'].get('version')!=2:
+            if job.get('analysis',{}).get('state')=='complete' and job['analysis'].get('version')!=3:
                 job['analysis']=dict(state='not_started',message='Prepare analysis to include mismatch patterns.')
             for export in job.get('exports', {}).values():
                 if export.get('state') == 'complete' and export.get('report_version') != REPORT_VERSION:
@@ -170,10 +174,11 @@ class Application:
             job.update(values)
             self.save(job)
 
-    def create(self, config, owner=None):
+    def create(self, config, owner=None, source_paths=None):
         delimiter = config.get('delimiter', ',')
         encoding = config.get('encoding', 'utf-8-sig')
-        if delimiter not in (',', '\t', ';', '|') or encoding not in ('utf-8-sig', 'utf-16', 'cp1252'):
+        valid_delimiter = isinstance(delimiter, str) and len(delimiter) == 1 and delimiter not in ('\r', '\n', '\0', '"')
+        if not valid_delimiter or encoding not in ('utf-8-sig', 'utf-16', 'cp1252'):
             raise ValueError('Unsupported delimiter or encoding')
         files = config.get('files', {})
         for side in ('left', 'right'):
@@ -191,7 +196,8 @@ class Application:
         identity = uuid.uuid4().hex
         self.directory(identity).mkdir()
         job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, comparison_engine='auto', exports={}, upload_compression=['gzip'])
-        required=sum(f['size'] for f in files.values())
+        if source_paths:job['source_paths']=source_paths
+        required=0 if source_paths else sum(f['size'] for f in files.values())
         if shutil.disk_usage(self.root).free<required+128*1024**2:
             self.directory(identity).rmdir()
             raise ValueError('Insufficient server disk space for both uploaded files. Clean up old jobs first.')
@@ -366,7 +372,13 @@ class Application:
                     self.recover_upload(job, side)
                 raise
 
+    def input_path(self,job,side):
+        from source_inputs import checked_path
+        source=job.get('source_paths',{}).get(side)
+        return checked_path(source) if source else self.upload_path(job,side)
+
     def comparison_path(self,job,side):
+        if job.get('source_paths',{}).get(side) and job['files'][side].get('format')!='excel':return self.input_path(job,side)
         return self.directory(job['id']) / (f'{side}.parquet' if job['files'][side].get('format')=='parquet' else f'{side}.csv')
 
     def prepare_sheets(self, identity):
@@ -380,7 +392,7 @@ class Application:
         try:
             columns = {}
             for side in ('left', 'right'):
-                source = self.upload_path(job, side)
+                source = self.input_path(job, side)
                 if job['files'][side].get('format') == 'excel':
                     columns[side], _ = convert_excel(source, job['files'][side]['sheet'], directory / f'{side}.csv', notify)
                 elif job['files'][side].get('format')=='parquet':
@@ -393,10 +405,11 @@ class Application:
                         for index,row in enumerate(csv.reader(stream, delimiter=job['delimiter'], strict=True)):
                             if index%10000==0:check_cancel(directory/'cancel-import')
                             writer.writerow(row)
-                    replace_retry(source, directory / f'{side}.source.csv')
-                    replace_retry(temporary, source)
-                    columns[side] = header(source, ',', 'utf-8')
-            self.patch(identity, state='ready', source_headers=columns, column_headers=columns, headers_reviewed=False, columns=common_headers(align_headers(columns)[0]), delimiter=',', encoding='utf-8', preparation_message='Selected sheets are ready')
+                    if side not in job.get('source_paths',{}):replace_retry(source, directory / f'{side}.source.csv')
+                    replace_retry(temporary, directory/f'{side}.csv')
+                    job.get('source_paths',{}).pop(side,None)
+                    columns[side] = header(directory/f'{side}.csv', ',', 'utf-8')
+            self.patch(identity, source_paths=job.get('source_paths',{}), state='ready', source_headers=columns, column_headers=columns, headers_reviewed=False, columns=common_headers(align_headers(columns)[0]), delimiter=',', encoding='utf-8', preparation_message='Selected sheets are ready')
         except Exception as error:
             self.patch(identity, state='error', error=str(error))
 
@@ -407,7 +420,7 @@ class Application:
         job=self.load(identity)
         def notify(message):
             check_cancel(directory/'cancel-comparison')
-            atomic_write_text(directory/'progress.json',json.dumps(dict(stage='compare',phase=message)))
+            atomic_write_text(directory/'progress.json',json.dumps(dict(stage='review',phase=message)))
             with (directory/'run.log').open('a') as log:log.write(f'{time.strftime("%H:%M:%S")}  {message}\n')
         try:
             notify('Applying rules to retained evidence; no source reads or sorting')
@@ -436,7 +449,8 @@ class Application:
                 raise ValueError(message or 'Comparison worker stopped unexpectedly')
             check_cancel(directory/'cancel-comparison')
             summary = json.loads((directory / 'report/summary.json').read_text())
-            summary['sources'] = [dict(side=side, file=job['files'][side]['name'], sheet=job['files'][side].get('sheet')) for side in ('left', 'right')]
+            summary['sources'] = [dict(side=side, file=job['files'][side]['name'], sheet=job['files'][side].get('sheet'), format=job['files'][side].get('format','csv')) for side in ('left', 'right')]
+            summary['source_types']={side:dict(zip(job.get('source_headers',{}).get(side,[]),job['files'][side].get('parquet',{}).get('types',[]))) if job['files'][side].get('format')=='parquet' else {'values':'stored Excel values converted to text' if job['files'][side].get('format')=='excel' else 'text'} for side in ('left','right')}
             atomic_write_text(directory / 'report/summary.json',json.dumps(summary, indent=2))
             (directory / 'report/summary.html').write_text(make_summary_html(summary), encoding='utf-8')
             self.patch(identity, summary=summary)
@@ -462,7 +476,7 @@ class Application:
             notify('Preparing a disk-backed index for key and column analysis…')
             build_index(directory/'report',temporary,notify,lambda:(directory/'cancel-analysis').exists())
             replace_retry(temporary,directory/'analysis.sqlite')
-            self.patch(identity,analysis=dict(state='complete',version=2,message='Analysis ready',updated=time.time()))
+            self.patch(identity,analysis=dict(state='complete',version=3,message='Analysis ready',updated=time.time()))
         except Exception as error:
             temporary.unlink(missing_ok=True)
             self.patch(identity,analysis=dict(state='error',message=str(error),updated=time.time()))
@@ -538,6 +552,9 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def json_response(self, value, status=200):
+        # The owner is the private workspace cookie, never shared report metadata.
+        if isinstance(value,dict) and 'files' in value and 'owner' in value:
+            value={k:v for k,v in value.items() if k!='owner'}
         body = json.dumps(value).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
@@ -608,7 +625,7 @@ class Handler(BaseHTTPRequestHandler):
             path, query = self.check_request()
             if self.command == 'GET' and path == '/health':
                 return self.json_response(dict(service='key-based-compare', status='ready', pid=os.getpid()))
-            if self.command == 'GET' and path in ('/', '/app.js', '/live-preview.js', '/upload-transport.js', '/style.css', '/assets/transunion-logo.svg'):
+            if self.command == 'GET' and path in ('/', '/app.js', '/live-preview.js', '/upload-transport.js', '/style.css', '/assets/transunion-logo.svg', '/assets/transunion-loader.svg', '/assets/tu-favicon.svg', '/enterprise.js', '/enterprise.css'):
                 target = BASE / 'web' / ('index.html' if path == '/' else path[1:])
                 data = target.read_bytes().replace(b'__APP_TOKEN__', self.app.token.encode()).replace(b'__WORKSPACE_MODE__', b'team' if self.server.shared else b'local').replace(b'__MAX_SORT_MB__', str(self.server.max_sort_mb).encode())
                 self.send_response(200)
@@ -620,8 +637,29 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            if path=='/api/source-options' and self.command=='GET':
+                return self.json_response(dict(enabled=bool(self.server.source_roots),roots=[str(p) for p in self.server.source_roots]))
+            if path=='/api/server-sources/check' and self.command=='POST':
+                from source_inputs import inspect_source
+                config=self.body();sources={side:inspect_source(config.get('files',{}).get(side),self.server.source_roots) for side in ('left','right')}
+                suffixes=[Path(v['path']).suffix.lower() for v in sources.values()]
+                if '.json' in suffixes and suffixes!=['.json','.json']:raise ValueError('Choose JSON files on both sides')
+                return self.json_response(dict(valid=True,files={side:dict(name=Path(value['path']).name,size=value['size']) for side,value in sources.items()}))
+            if path=='/api/server-sources' and self.command=='POST':
+                from source_inputs import inspect_source
+                config=self.body();sources={side:inspect_source(config.get('files',{}).get(side),self.server.source_roots) for side in ('left','right')}
+                suffixes=[Path(v['path']).suffix.lower() for v in sources.values()]
+                if '.json' in suffixes:
+                    if suffixes!=['.json','.json']:raise ValueError('Choose JSON files on both sides')
+                    if any(v['size']>5*1024**2 for v in sources.values()):raise ValueError('JSON inputs must be at most 5 MiB each')
+                    return self.json_response(dict(kind='json',documents={side:Path(v['path']).read_text(encoding='utf-8-sig') for side,v in sources.items()},names={side:Path(v['path']).name for side,v in sources.items()}))
+                config['files']={side:dict(name=Path(v['path']).name,size=v['size']) for side,v in sources.items()}
+                item=self.app.create(config,self.workspace,sources)
+                for f in item['files'].values():f['uploaded']=f['size']
+                self.app.save(item)
+                return self.json_response(item,201)
             if path.startswith('/api/projects'):
-                store=ProjectStore(project_database(self.app.root,self.workspace))
+                store=ProjectStore(project_database(self.app.root,self.workspace),self.workspace if self.server.shared else None)
                 if path=='/api/projects' and self.command=='GET':
                     # Index old jobs lazily once; only small job metadata is read.
                     marker=store.path.with_suffix('.indexed')
@@ -630,14 +668,19 @@ class Handler(BaseHTTPRequestHandler):
                             for entry in self.app.root.glob('*/job.json'):
                                 try:
                                     item=self.app.load(entry.parent.name)
-                                    if item.get('owner')==self.workspace:store.sync(job_snapshot(item))
+                                    store.sync(job_snapshot(item))
                                 except (ValueError,OSError):continue
                             marker.touch()
                     return self.json_response(dict(projects=store.overview()))
                 if path=='/api/projects' and self.command=='POST':return self.json_response(dict(id=store.create(self.body())),201)
                 if path=='/api/projects/records':
                     if self.command=='GET':return self.json_response(store.records(offset=max(0,int(query.get('offset',['0'])[0])),identity=query.get('id',[None])[0]))
-                    if self.command=='POST':store.update_record(self.body());return self.json_response(dict(saved=True))
+                    if self.command=='POST':
+                        config=self.body();record_id=config.get('comparison_id','')
+                        if re.fullmatch(r'[a-f0-9]{32}',str(record_id)) and (self.app.directory(record_id)/'job.json').exists():
+                            item=self.app.load(record_id)
+                            if self.server.shared and item.get('owner')!=self.workspace:raise ValueError('Create your own review to change this comparison’s project or audit status')
+                        store.update_record(config);return self.json_response(dict(saved=True))
                 match_project=re.fullmatch(r'/api/projects/([a-f0-9]{32})',path)
                 if match_project and self.command=='GET':return self.json_response(store.detail(match_project.group(1),max(0,int(query.get('offset',['0'])[0]))))
                 return self.json_response({'error':'Not found'},404)
@@ -651,7 +694,7 @@ class Handler(BaseHTTPRequestHandler):
                         identity=uuid.uuid4().hex
                         names=config.get('source_names',[])
                         title=' ↔ '.join(str(n)[:255] for n in names[:2]) if isinstance(names,list) and len(names)==2 else 'JSON comparison'
-                        snapshot=dict(id=identity,kind='json',created=time.time(),finished=time.time(),state='complete',title=title,formats=['json','json'],changed_cells=sum(result['counts'].values()),json_counts=result['counts'])
+                        snapshot=dict(id=identity,owner=self.workspace,kind='json',created=time.time(),finished=time.time(),state='complete',title=title,formats=['json','json'],changed_cells=sum(result['counts'].values()),json_counts=result['counts'])
                         ProjectStore(project_database(self.app.root,self.workspace)).sync(snapshot)
                         result['audit_id']=identity
                     return self.json_response(result)
@@ -759,11 +802,10 @@ class Handler(BaseHTTPRequestHandler):
                         item = self.app.load(entry.parent.name)
                     except (ValueError, OSError):
                         continue
-                    if self.server.shared and item.get('owner') != self.workspace:
-                        continue
+                    if self.server.shared and item.get('owner')!=self.workspace and item['state']!='complete':continue
                     summary = item.get('summary', {})
                     records.append(dict(id=item['id'], created=item['created'], state=item['state'],
-                        files=item['files'], busy=self.app.busy(item), keys=item.get('keys', []), changed_cells=summary.get('changed_cells'),
+                        files=item['files'], busy=self.app.busy(item), can_manage=not self.server.shared or item.get('owner')==self.workspace, keys=item.get('keys', []), changed_cells=summary.get('changed_cells'),
                         changed_rows=summary.get('changed_rows'), elapsed_seconds=summary.get('elapsed_seconds')))
                 records.sort(key=lambda item: item['created'], reverse=True)
                 return self.json_response(dict(jobs=records[offset:offset+25], total=len(records), offset=offset, retention_days=self.app.retention_days))
@@ -773,7 +815,11 @@ class Handler(BaseHTTPRequestHandler):
             identity, action = match.groups()
             job = self.app.load(identity)
             if self.server.shared and job.get('owner') != self.workspace:
-                return self.json_response({'error': 'Comparison not found in this browser workspace'}, 404)
+                if job['state']!='complete':return self.json_response({'error':'Comparison is private while it is being prepared or processed'},404)
+                shared_actions={'review-plan','review-copy','validate-rules','annotations','analysis','export/excel','export/html','export/ai','ai-findings'}
+                if self.command not in ('GET','HEAD') and action not in shared_actions:
+                    return self.json_response({'error':'Only the creating browser can edit sources, cancel or delete this job. Use Recompare to create your own review.'},403)
+            job['can_manage']=not self.server.shared or job.get('owner')==self.workspace
             self.authorized_job = identity
             directory = self.app.directory(identity)
             if action in ('review-plan','review-copy') and self.command == 'POST':
@@ -791,6 +837,7 @@ class Handler(BaseHTTPRequestHandler):
                     ids=draft.get('ignore_container_ids') or []
                     library=self.container_path()
                     available={c['id']:c for c in json.loads(library.read_text())} if library.exists() else {}
+                    for c in job.get('ignore_key_containers',[]):available.setdefault(c['id'],c)
                     if not isinstance(ids,list) or any(i not in available for i in ids):raise ValueError('An ignore container no longer exists')
                     draft['ignore_key_containers']=[available[i] for i in dict.fromkeys(ids)]
                     if draft.get('duplicate_policy') not in ('first','last'):raise ValueError('Choose first or last duplicate occurrence')
@@ -805,12 +852,14 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         # Finalized inputs are immutable. Linking keeps review runs from copying gigabytes.
                         for side in ('left','right'):
-                            source=self.app.comparison_path(job,side)
-                            os.link(source,target/source.name)
-                        fields=('owner','files','delimiter','encoding','source_headers','column_headers','columns','header_changes','header_layout_changes')
+                            if side not in job.get('source_paths',{}) or job['files'][side].get('format')=='excel':
+                                source=self.app.comparison_path(job,side)
+                                if source.exists():os.link(source,target/source.name)
+                                elif decision['mode']=='full':raise ValueError('The original source is unavailable for a fresh comparison')
+                        fields=('source_paths','files','delimiter','encoding','source_headers','column_headers','columns','header_changes','header_layout_changes')
                         copy={k:job[k] for k in fields if k in job}
                         draft['value_overrides']=rules
-                        copy.update(id=new_id,state='ready',created=time.time(),exports={},headers_reviewed=True,draft=draft,review_of=identity)
+                        copy.update(owner=self.workspace,id=new_id,state='ready',created=time.time(),exports={},headers_reviewed=True,draft=draft,review_of=identity)
                         copy['execution_mode']=decision['mode']
                         if decision['mode']=='review':
                             retained=target/'baseline';retained.mkdir()
@@ -1008,7 +1057,7 @@ class Handler(BaseHTTPRequestHandler):
                     columns = {}
                     header_changes = []
                     for side in ('left', 'right'):
-                        file = self.app.upload_path(job, side)
+                        file = self.app.input_path(job, side)
                         if not file.exists() or file.stat().st_size != job['files'][side]['size']:
                             raise ValueError('Both files must finish uploading')
                         if job['files'][side].get('format') == 'excel':
@@ -1054,6 +1103,12 @@ class Handler(BaseHTTPRequestHandler):
                     job = self.app.load(identity)
                     if job['state'] != 'ready':
                         raise ValueError('Comparison is not ready to start')
+                    # External CSV/Parquet remain read-only references. Check their
+                    # selection fingerprint before queueing; review-only jobs use
+                    # retained evidence, and Excel already has a stable local import.
+                    if job.get('execution_mode')!='review':
+                        for side in job.get('source_paths',{}):
+                            if job['files'][side].get('format')!='excel':self.app.input_path(job,side)
                     source = job.get('source_headers') or {side: header(self.app.comparison_path(job,side), job['delimiter'], job['encoding']) for side in ('left', 'right')}
                     align_headers(source, job.get('column_headers'))
                     keys = config.get('keys', [])
@@ -1070,6 +1125,10 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('Select valid ignore key containers')
                     library = self.container_path()
                     available = {item['id']: item for item in json.loads(library.read_text())} if library.exists() else {}
+                    if job.get('review_of'):
+                        # Shared reviews retain the original container snapshot even
+                        # when the reviewer's private library does not contain it.
+                        for item in job.get('draft',{}).get('ignore_key_containers',[]):available.setdefault(item['id'],item)
                     if any(i not in available for i in ids):
                         raise ValueError('An ignore key container no longer exists')
                     containers = [available[i] for i in dict.fromkeys(ids)]
@@ -1141,7 +1200,7 @@ class Handler(BaseHTTPRequestHandler):
                 key=json.loads(query['key'][0]) if 'key' in query else None
                 if key is not None and (not isinstance(key,list) or len(key)!=len(job['keys']) or any(not isinstance(v,str) for v in key)):
                     raise ValueError('Supply an exact text key with one value per key column')
-                result=query_index(directory/'analysis.sqlite',query.get('mode',['keys'])[0],int(query.get('offset',['0'])[0]),query.get('column',[''])[0],key)
+                result=query_index(directory/'analysis.sqlite',query.get('mode',['keys'])[0],int(query.get('offset',['0'])[0]),query.get('column',[''])[0],key,query.get('left_hash',[None])[0],query.get('right_hash',[None])[0])
                 return self.json_response(dict(state='complete',**result))
             if self.command == 'GET' and action == 'preview':
                 if job['state'] != 'complete':
@@ -1237,6 +1296,7 @@ def make_server(root, port=8765, host='127.0.0.1', public_url=None, max_jobs=1, 
         raise ValueError('Network binding requires --public-url, for example http://server-name:8765')
     server = ThreadingHTTPServer((host, port), Handler)
     server.shared = public_url is not None
+    server.source_roots=[]
     server.public_url = public_url
     server.max_sort_mb = max_sort_mb
     server.app = Application(root, max_jobs)
@@ -1272,6 +1332,7 @@ if __name__ == '__main__':
     parser.add_argument('--public-url', help='Team URL, such as http://compare.internal:8765; enables separate browser workspaces without login')
     parser.add_argument('--max-jobs', type=int, default=1, help='Maximum simultaneous comparisons/imports/exports; other jobs queue')
     parser.add_argument('--max-sort-mb', '--max-memory-mb', dest='max_sort_mb', type=int, default=0, help='Optional administrator memory ceiling in MB; 0 sizes automatically from available RAM')
+    parser.add_argument('--source-root', action='append', default=[], help='Allow read-only server files below this directory; repeat for multiple roots')
     parser.add_argument('--data-dir', default=str(BASE / 'data'), help='Upload, scratch and report storage; use a fast SSD')
     parser.add_argument('--retention-days', type=int, default=7, help='Delete inactive jobs after this many days; 0 disables automatic cleanup')
     parser.add_argument('--open', action='store_true', help='Open the UI in your default browser')
@@ -1280,6 +1341,8 @@ if __name__ == '__main__':
         parser.error('--retention-days must be zero or positive')
     data_lock = lock_data_directory(args.data_dir)
     server = make_server(args.data_dir, args.port, args.host, args.public_url, args.max_jobs, args.max_sort_mb)
+    server.source_roots=[Path(value).resolve(strict=True) for value in args.source_root]
+    if any(not p.is_dir() for p in server.source_roots):parser.error('--source-root must be a directory')
     server.app.retention_days = args.retention_days
     cleanup_stop = threading.Event()
     def cleanup_loop():
@@ -1293,7 +1356,7 @@ if __name__ == '__main__':
     print(f'Data directory: {server.app.root}', flush=True)
     print(f"Concurrent heavy jobs: {args.max_jobs}; comparison memory: {str(args.max_sort_mb)+' MB administrator ceiling' if args.max_sort_mb else 'automatic, no fixed ceiling'}", flush=True)
     if server.shared:
-        print('Team mode: no login; separate browser workspaces. Keep access on a trusted internal network.', flush=True)
+        print('Team mode: no login; shared history and projects, independent uploads. Keep access on a trusted internal network.', flush=True)
     if args.open:
         webbrowser.open(url)
     stopping = threading.Event()

@@ -15,7 +15,8 @@
   window.renderLiveMismatches=(job,data)=>{
     if(!data.sequence&&job.summary){const s=job.summary;data={...data,unavailable:true,phase:'compared',processed_keys:s.matched_keys+s.left_only+s.right_only,counts:s,columns_with_differences:Object.values(s.changed_cells_by_column||{}).filter(Boolean).length};}
     if(identity!==job.id){identity=job.id;sequence=-1;paused=false;lastPreview=null;el('livePause').textContent='Pause samples';el('livePause').setAttribute('aria-pressed','false');selectTab('differences');}
-    if(job.execution_mode==='review'&&!data.sequence){view.hidden=true;panel.dataset.liveTab='console';return;}view.hidden=false;
+    panel.dataset.review=String(job.execution_mode==='review');el('liveDifferencesTab').textContent=job.execution_mode==='review'?'Pipeline':'Pipeline & live samples';view.hidden=false;
+    if(job.execution_mode==='review'&&!data.sequence){el('liveDifferences').hidden=true;return;}
     el('liveKeys').textContent=fmt(data.processed_keys);el('liveCells').textContent=fmt(data.counts?.changed_cells);el('liveColumns').textContent=fmt(data.columns_with_differences);
     const stopped=['error','cancelled'].includes(job.state),prepared=['compared','reports'].includes(data.phase);
     el('livePreviewStatus').textContent=stopped?'Processing stopped. These are partial results; reports are not final.':job.state==='complete'?'Comparison complete. Open results for full column and key analysis.':prepared?'Comparison finished. Reports are being prepared; you can review these samples now.':data.phase==='prepare'?'Preparing sources. Samples appear as keys are compared.':`Comparison continues · counts cover processed keys only · ${fmt(data.counts?.left_only)} keys only in File 1 · ${fmt(data.counts?.right_only)} only in File 2.`;

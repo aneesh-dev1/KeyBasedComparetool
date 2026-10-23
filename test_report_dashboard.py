@@ -16,21 +16,58 @@ class DashboardTests(unittest.TestCase):
         (self.root/'summary.json').write_text(json.dumps(self.summary))
         for name,rows in {'differences':[['key_json','column','left_value','right_value'],['["001"]','TOC','4994','4993'],['["002"]',"a'b",'<script>x</script>','=1+1']], 'left_only':[['key_json'],['["003"]']], 'right_only':[['key_json']]}.items():
             with (self.root/(name+'.csv')).open('w',newline='') as f: csv.writer(f).writerows(rows)
+    def test_offline_pattern_evidence_is_complete_bounded_and_script_safe(self):
+        from html.parser import HTMLParser
+        class Payloads(HTMLParser):
+            def __init__(self):super().__init__();self.payloads=[];self.current=None
+            def handle_starttag(self,tag,attrs):
+                attrs=dict(attrs)
+                if tag=='script' and attrs.get('type')=='application/json':self.current=[attrs,[]]
+            def handle_data(self,data):
+                if self.current is not None:self.current[1].append(data)
+            def handle_endtag(self,tag):
+                if tag=='script' and self.current is not None:
+                    attrs,parts=self.current;self.payloads.append((attrs,json.loads(''.join(parts))));self.current=None
+        column='amount</script>"'
+        summary=dict(self.summary,changed_cells=62,matched_keys=70,changed_cells_by_column={column:62})
+        (self.root/'summary.json').write_text(json.dumps(summary))
+        with (self.root/'differences.csv').open('w',newline='') as f:
+            writer=csv.writer(f);writer.writerow(['key_json','column','left_value','right_value'])
+            for i in range(61):writer.writerow([json.dumps([str(i)]),column,'<script>bad()</script>'+str(i),'new'+str(i)])
+            writer.writerow(['["again"]',column,'<script>bad()</script>0','new0'])
+        notes=[dict(column=column,key=None,status='Expected',comment='</script><script>bad()</script>')]
+        (self.root/'annotations.json').write_text(json.dumps(notes))
+        target=self.root/'report.html';export_html(self.root,target)
+        parser=Payloads();text=target.read_text();parser.feed(text)
+        patterns=[value for attrs,value in parser.payloads if attrs.get('class')=='column-pattern-data']
+        self.assertEqual(len(patterns),1);self.assertEqual(len(patterns[0]),61)
+        self.assertEqual(sum(pair[2] for pair in patterns[0]),62)
+        self.assertEqual(patterns[0][0][2],2)
+        self.assertEqual([a['data-column'] for a,v in parser.payloads if a.get('class')=='column-pattern-data'],[column])
+        self.assertNotIn('<script>bad()</script>',text)
+        self.assertIn('20 sample keys of 62 mismatches',text)
+        self.assertIn('reportPatternNext',text);self.assertIn('reportDetailContent',text)
+        # Regeneration reuses immutable pair evidence but includes fresh comments.
+        notes[0]['comment']='Updated review note';(self.root/'annotations.json').write_text(json.dumps(notes))
+        export_html(self.root,target);parser=Payloads();parser.feed(target.read_text())
+        self.assertEqual(next(v for a,v in parser.payloads if a.get('id')=='report-comment-data'),notes)
+
     def test_workbook_links_types_and_reserved_names(self):
         target=self.root/'report.xlsx';export_excel(self.root,target)
         with zipfile.ZipFile(target) as z:
             sheets=ET.fromstring(z.read('xl/workbook.xml')).findall('s:sheets/s:sheet',NS)
             names=[s.attrib['name'] for s in sheets]
-            self.assertEqual(names,['File Summary','TOC','TOC (2)',"a'b"])
+            self.assertEqual(names,['Comparison Summary','TOC','TOC (2)',"a'b"])
             toc=ET.fromstring(z.read('xl/worksheets/sheet2.xml'))
             links=toc.findall('s:hyperlinks/s:hyperlink',NS)
             self.assertEqual([l.attrib['location'] for l in links],["'TOC (2)'!A1","'a''b'!A1"])
             detail=ET.fromstring(z.read('xl/worksheets/sheet3.xml'))
             self.assertEqual(detail.find('s:hyperlinks/s:hyperlink',NS).attrib['location'],"'TOC'!A1")
             values=[v.text for v in detail.findall('.//s:t',NS)]
-            for value in ['001','4994','4993','diffAB','1','text']: self.assertIn(value,values)
+            for value in ['001','4994','4993','variable']: self.assertIn(value,values)
+            for obsolete in ['typeA','typeB','diffAB']:self.assertNotIn(obsolete,values)
             self.assertFalse(detail.findall('.//s:f',NS))
-            self.assertEqual(detail.find('s:autoFilter',NS).attrib['ref'],'A1:H2')
+            self.assertEqual(detail.find('s:autoFilter',NS).attrib['ref'],'A1:E2')
             for name in z.namelist():
                 if name.endswith('.xml'): ET.fromstring(z.read(name))
     def test_single_report_all_columns_and_streamed_samples(self):
