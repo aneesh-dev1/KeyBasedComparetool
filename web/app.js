@@ -1034,6 +1034,11 @@ async function resetAnalysis(mode){
   analysisPatternFilter=null;
   $('analysisMode').value=mode;$('analysisColumn').value='';$('analysisColumnSearch').value='';selectAnalysisKey(null);analysisOffset=0;analysisColumns();if(retainedColumn)$('analysisColumn').value=retainedColumn;await loadAnalysis();
 }
+function percentText(part,whole){
+  if(!whole)return 'N/A';const value=100*part/whole;
+  // A partial share never displays as exactly 0% or 100%.
+  return value>0&&value<0.01?'<0.01%':value<100&&value>99.99?'>99.99%':value.toFixed(2)+'%';
+}
 async function openAnalysis(column=''){
   clearTimeout(analysisTimer);analysisGeneration++;analysisOffset=0;
   $('analysisRetry').hidden=true;$('noteComment').value='';$('analysisMode').value='columns';$('analysisKey').value='';$('analysisColumn').value='';$('analysisColumnSearch').value='';
@@ -1059,7 +1064,7 @@ async function loadAnalysis(){
     if(mode==='columns'&&!column&&key===undefined){
       const entries=Object.entries(job.summary.changed_cells_by_column).filter(([name,count])=>count>0&&name.toLowerCase().includes($('analysisColumnSearch').value.toLowerCase())).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]));total=entries.length;
       headers=['Column','Mismatches','Mismatch %','Match %','Inspect'];
-      rows=entries.slice(analysisOffset,analysisOffset+50).map(([name,count])=>[name,count,job.summary.matched_keys?(100*count/job.summary.matched_keys).toFixed(4):'N/A',job.summary.matched_keys?(100*(1-count/job.summary.matched_keys)).toFixed(4):'N/A']);
+      rows=entries.slice(analysisOffset,analysisOffset+50).map(([name,count])=>[name,count,percentText(count,job.summary.matched_keys),percentText(job.summary.matched_keys-count,job.summary.matched_keys)]);
     }else{
       const params=new URLSearchParams({mode:mode==='patterns'?'patterns':mode==='keys'&&!column&&key===undefined?'keys':'cells',offset:String(analysisOffset),column});if(key!==undefined)params.set('key',JSON.stringify(key));
       if(mode!=='patterns'&&analysisPatternFilter?.column===column){params.set('left_hash',analysisPatternFilter.left);params.set('right_hash',analysisPatternFilter.right);}
@@ -1473,7 +1478,7 @@ function initEnterpriseShell(){
   const titleWrap=document.createElement('div');contextLabel.before(titleWrap);titleWrap.append(contextLabel,drawerTitle);
   const updateDrawerTitle=()=>{drawerTitle.textContent=$('analysisHeading').textContent||'Mismatch review';};new MutationObserver(updateDrawerTitle).observe($('analysisHeading'),{childList:true,characterData:true,subtree:true});
   const comments=analysis.querySelector('.review-comments');comments.classList.add('enterprise-comments');comments.querySelector('summary').textContent='Comments & findings';
-  comments.open=true;
+  comments.open=false;
   const savedNotes=document.createElement('details');savedNotes.className='saved-review-notes';savedNotes.innerHTML='<summary>Saved comments</summary>';$('analysisNotes').before(savedNotes);savedNotes.append($('analysisNotes'));
   $('analysisByKey').addEventListener('click',()=>{filterDisclosure.open=true;});
   $('analysisDrawer').addEventListener('close',()=>{filterDisclosure.open=false;});
@@ -1513,7 +1518,9 @@ initEnterpriseShell();
 
 // A rule selection expands to explicit per-column settings for auditable profiles/reports.
 let ruleEditorDraft=[],ruleEditorMode='setup',ruleEditorReturn=null;
+function ruleChips(rule){return [rule.trim&&'Trim',rule.ignore_case&&'Ignore case',rule.tolerance!==undefined&&(Number(rule.tolerance)===0?'Same number':'± '+rule.tolerance),rule.left_date_format&&`Date ${rule.left_date_format} → ${rule.right_date_format}`].filter(Boolean);}
 function ruleDescription(rule){return [rule.trim?'Trim whitespace':'',rule.ignore_case?'Ignore case':'',rule.tolerance!==undefined?(Number(rule.tolerance)===0?'Same numeric value':'Tolerance '+rule.tolerance):'',rule.left_date_format?'Date formats: '+rule.left_date_format+' → '+rule.right_date_format:''].filter(Boolean).join(' · ')||'Exact text';}
+function ruleStatus(text,tone='error'){const status=$('ruleEditorError');status.textContent=text;status.dataset.tone=tone;}
 function ruleScope(){return ruleEditorMode==='rerun'?rerunDraft:{keys:[...selected],ignore_columns:[...ignoredColumns]};}
 function eligibleRuleColumns(){const scope=ruleScope();return (job?.columns||[]).filter(c=>!scope.keys.includes(c)&&!scope.ignore_columns.includes(c));}
 function mergeColumnRules(existing,columns,patch){
@@ -1524,9 +1531,21 @@ function mergeColumnRules(existing,columns,patch){
 }
 function renderRuleEditor(){
   const target=$('comparisonRuleList');target.replaceChildren();
-  for(const rule of ruleEditorDraft){const row=document.createElement('div');row.className='comparison-rule-card';const title=document.createElement('strong'),desc=document.createElement('span'),remove=document.createElement('button');title.textContent=rule.column;desc.textContent=ruleDescription(rule);remove.textContent='Remove';remove.className='subtle';remove.setAttribute('aria-label','Remove rules for '+rule.column);remove.addEventListener('click',()=>{ruleEditorDraft=ruleEditorDraft.filter(r=>r.column!==rule.column);renderRuleEditor();});row.append(title,desc,remove);target.append(row);}
-  $('ruleEditorCount').textContent=ruleEditorDraft.length+' columns configured';
+  for(const rule of ruleEditorDraft){
+    const row=document.createElement('div');row.className='comparison-rule-card';
+    const title=document.createElement('strong'),desc=document.createElement('span'),remove=document.createElement('button');
+    title.textContent=rule.column;title.title=rule.column;desc.className='rule-chips';desc.setAttribute('aria-label',ruleDescription(rule));
+    for(const text of ruleChips(rule)){const chip=document.createElement('span');chip.className='rule-chip';chip.textContent=text;desc.append(chip);}
+    remove.className='subtle rule-remove';remove.title='Remove rules';remove.setAttribute('aria-label','Remove rules for '+rule.column);
+    if(typeof lucideNode==='function')remove.append(lucideNode('trash-2'));else remove.textContent='Remove';
+    remove.addEventListener('click',()=>{ruleEditorDraft=ruleEditorDraft.filter(r=>r.column!==rule.column);renderRuleEditor();});
+    row.append(title,desc,remove);target.append(row);
+  }
+  $('ruleEditorCount').textContent=ruleEditorDraft.length+(ruleEditorDraft.length===1?' column':' columns')+' configured';
   $('ruleEditorEmpty').hidden=!!ruleEditorDraft.length;
+  // Columns that already have rules are marked in the picker.
+  const ruled=new Set(ruleEditorDraft.map(rule=>rule.column));
+  for(const label of $('ruleColumnChoices').children)label.classList.toggle('has-rule',ruled.has(label.querySelector('input')?.value));
 }
 function renderRuleColumnChoices(){
   const q=$('ruleColumnSearch').value.toLowerCase();let visible=0;
@@ -1536,7 +1555,7 @@ function renderRuleColumnChoices(){
 function openRuleEditor(mode='setup'){
   ruleEditorMode=mode;ruleEditorReturn=document.activeElement;
   const allowed=eligibleRuleColumns();ruleEditorDraft=structuredClone(mode==='rerun'?rerunDraft.comparison_rules:valueRules).filter(r=>allowed.includes(r.column));
-  $('ruleColumnChoices').replaceChildren();for(const column of allowed){const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.value=column;input.addEventListener('change',renderRuleColumnChoices);label.append(input,document.createTextNode(column));$('ruleColumnChoices').append(label);}
+  $('ruleColumnChoices').replaceChildren();for(const column of allowed){const label=document.createElement('label'),input=document.createElement('input'),name=document.createElement('span');input.type='checkbox';input.value=column;input.addEventListener('change',renderRuleColumnChoices);name.textContent=column;label.title=column;label.append(input,name);$('ruleColumnChoices').append(label);}
   $('ruleTargetScope').value='selected';$('ruleColumnPicker').hidden=false;$('ruleColumnSearch').value='';$('ruleEditorError').textContent='';
   for(const id of ['ruleTrim','ruleCase','ruleNumericFormat'])$(id).checked=false;
   for(const id of ['ruleTolerance','ruleDateLeft','ruleDateRight'])$(id).value='';
@@ -1560,9 +1579,9 @@ function initComparisonRulesDrawer(){
     if($('ruleNumericFormat').checked)patch.tolerance='0';else if($('ruleTolerance').value!=='')patch.tolerance=$('ruleTolerance').value;
     if($('ruleDateLeft').value||$('ruleDateRight').value){patch.left_date_format=$('ruleDateLeft').value;patch.right_date_format=$('ruleDateRight').value;}
     if(!Object.keys(patch).length)throw Error('Choose at least one rule.');
-    const proposed=mergeColumnRules(ruleEditorDraft,columns,patch),scope=ruleScope();const result=await api(endpoint('/validate-rules'),{comparison_rules:proposed,keys:scope.keys,ignore_columns:scope.ignore_columns});ruleEditorDraft=result.rules;clearRuleBuilder();renderRuleEditor();$('ruleEditorError').textContent='Rules added. Apply to save this configuration.';
-  }catch(error){$('ruleEditorError').textContent=error.message;}});
-  $('applyComparisonRules').addEventListener('click',async()=>{if(typeof confirmRuleDraft==='function'&&!await confirmRuleDraft())return;const button=$('applyComparisonRules');button.disabled=true;try{const scope=ruleScope(),result=await api(endpoint('/validate-rules'),{comparison_rules:ruleEditorDraft,keys:scope.keys,ignore_columns:scope.ignore_columns});if(ruleEditorMode==='rerun'){rerunDraft.comparison_rules=result.rules;rerunDraft.duplicate_policy=$('duplicatePolicy').value;renderRerunRuleSummary();scheduleReviewPlan();}else{if(job.state!=='ready')throw Error('Use Recompare to change rules for a completed comparison.');await api(endpoint('/config'),{...configuration(),comparison_rules:result.rules});valueRules=result.rules;} $('comparisonRulesDrawer').close();}catch(error){$('ruleEditorError').textContent=error.message;}finally{button.disabled=false;}});
+    const proposed=mergeColumnRules(ruleEditorDraft,columns,patch),scope=ruleScope();const result=await api(endpoint('/validate-rules'),{comparison_rules:proposed,keys:scope.keys,ignore_columns:scope.ignore_columns});ruleEditorDraft=result.rules;clearRuleBuilder();renderRuleEditor();ruleStatus(`Rules added to ${columns.length} column${columns.length===1?'':'s'}. Apply to save this configuration.`,'success');
+  }catch(error){ruleStatus(error.message);}});
+  $('applyComparisonRules').addEventListener('click',async()=>{if(typeof confirmRuleDraft==='function'&&!await confirmRuleDraft())return;const button=$('applyComparisonRules');button.disabled=true;try{const scope=ruleScope(),result=await api(endpoint('/validate-rules'),{comparison_rules:ruleEditorDraft,keys:scope.keys,ignore_columns:scope.ignore_columns});if(ruleEditorMode==='rerun'){rerunDraft.comparison_rules=result.rules;rerunDraft.duplicate_policy=$('duplicatePolicy').value;renderRerunRuleSummary();scheduleReviewPlan();}else{if(job.state!=='ready')throw Error('Use Recompare to change rules for a completed comparison.');await api(endpoint('/config'),{...configuration(),comparison_rules:result.rules});valueRules=result.rules;} $('comparisonRulesDrawer').close();}catch(error){ruleStatus(error.message);}finally{button.disabled=false;}});
 }
 initComparisonRulesDrawer();
 

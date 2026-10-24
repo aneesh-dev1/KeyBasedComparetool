@@ -1200,3 +1200,80 @@ function redesignAnalysis(){
  const renderHeadersBeforeFit=renderHeaders;renderHeaders=function(){renderHeadersBeforeFit();schedule();};
  schedule();
 }
+
+// Comparison rules drawer, two panes: rules are built on the left while the configured rules stay visible
+// on the right. Each pane scrolls on its own, so nothing important falls below the fold.
+{
+ const drawer=$('comparisonRulesDrawer'),body=drawer.querySelector('.comparison-rules-body'),builder=drawer.querySelector('.comparison-rule-builder');
+ const panes=document.createElement('div');panes.className='ds-rules-panes';
+ const configured=document.createElement('section');configured.className='ds-rules-configured';configured.setAttribute('aria-label','Configured rules');
+ builder.before(panes);panes.append(builder,configured);
+ configured.append(body.querySelector(':scope>.section-title'),$('configuredRuleSearch'),$('ruleEditorEmpty'),$('comparisonRuleList'));
+ $('ruleEditorEmpty').textContent='No rules yet. Values are compared as exact text.';
+ // The add button says how many columns it will change.
+ const add=$('addValueRule'),addText=document.createElement('span');
+ for(const node of [...add.childNodes])if(node.nodeType===Node.TEXT_NODE)node.remove();
+ add.append(addText);
+ function syncAddLabel(){
+  const all=$('ruleTargetScope').value==='all',count=all?eligibleRuleColumns().length:$('ruleColumnChoices').querySelectorAll('input:checked').length;
+  addText.textContent=all?`Add rules to all ${count} columns`:count?`Add rules to ${count} column${count===1?'':'s'}`:'Add rules to selection';
+ }
+ const renderChoicesBeforeLabel=renderRuleColumnChoices;
+ renderRuleColumnChoices=function(){renderChoicesBeforeLabel();syncAddLabel();};
+ $('ruleTargetScope').addEventListener('change',syncAddLabel);
+ // After rules are added the column selection clears too, ready for the next set of columns.
+ const clearBuilderBeforeColumns=clearRuleBuilder;
+ clearRuleBuilder=function(){clearBuilderBeforeColumns();for(const input of $('ruleColumnChoices').querySelectorAll('input:checked'))input.checked=false;renderRuleColumnChoices();};
+ const cancel=Object.assign(document.createElement('button'),{type:'button',className:'subtle',textContent:'Cancel'});
+ cancel.addEventListener('click',()=>drawer.close());$('applyComparisonRules').before(cancel);
+}
+
+// Mismatch review drawer: a wide data drawer. One toolbar row, a table that fills the height with compact
+// rows and icon actions, and comments in a collapsible footer, so most mismatches are visible at once.
+{
+ const drawer=$('analysisDrawer'),panel=$('analysisPanel');
+ if(drawer&&panel&&$('analysisFilterDisclosure')){
+  drawer.classList.add('ds','ds-mismatch');
+  const close=$('closeAnalysisDrawer');close.className='ds-icon-btn';close.innerHTML=lucide('x');
+  const tabs=panel.querySelector('.analysis-tabs'),filter=$('analysisFilterDisclosure'),back=$('analysisReset');
+  const toolbar=document.createElement('div');toolbar.className='ds-mismatch-toolbar';tabs.before(toolbar);
+  const where=document.createElement('div');where.className='ds-mismatch-where';where.append($('analysisSelection'));
+  const filterButton=document.createElement('button');filterButton.type='button';filterButton.className='ds-toolbar-btn';
+  filterButton.setAttribute('aria-controls',filter.id);filterButton.setAttribute('aria-expanded','false');
+  filterButton.append(lucideNode('list-filter'),Object.assign(document.createElement('span'),{textContent:'Change column or find a key'}));
+  filterButton.addEventListener('click',()=>{filter.open=!filter.open;});
+  filter.addEventListener('toggle',()=>{filterButton.setAttribute('aria-expanded',String(filter.open));filterButton.classList.toggle('is-active',filter.open);});
+  back.classList.add('ds-toolbar-btn','ds-back-btn');
+  toolbar.append(tabs,where,back,filterButton);
+  // Keys is a third view beside Mismatches and Patterns rather than a button inside the filters.
+  const byKey=$('analysisByKey');byKey.textContent='Keys';$('analysisByPattern').before(byKey);
+  // Row actions become labelled icon buttons; a single-column view drops its repeated Column column.
+  const table=$('analysisTable');
+  const icons={'All changes for this key':'scan-search','Comment':'message-square-text','View mismatching keys':'chevron-right','View this key':'chevron-right'};
+  function enhanceTable(){
+   const rows=[...table.rows];if(!rows.length)return;
+   const head=[...rows[0].cells],columnIndex=head.findIndex(cell=>cell.textContent==='Column');
+   const single=columnIndex>=0&&$('analysisMode').value==='columns'&&!!$('analysisColumn').value;
+   for(const row of rows)if(row.cells[columnIndex])row.cells[columnIndex].hidden=single;
+   head.at(-1)?.classList.add('ds-actions-head');
+   for(const row of rows.slice(1)){
+    row.cells[row.cells.length-1]?.classList.add('ds-actions-cell');
+    for(const cell of row.cells)if(!cell.title&&cell.textContent.length>40)cell.title=cell.textContent;
+   }
+   for(const button of table.querySelectorAll('td button:not([data-ds-icon])')){
+    const label=button.textContent.trim(),icon=icons[label];if(!icon)continue;
+    button.dataset.dsIcon='1';button.classList.add('ds-row-action');button.title=label;button.setAttribute('aria-label',label);
+    if(icon==='chevron-right'){button.classList.add('has-text');button.replaceChildren(Object.assign(document.createElement('span'),{textContent:'Open'}),lucideNode(icon));}
+    else button.replaceChildren(lucideNode(icon));
+   }
+  }
+  new MutationObserver(enhanceTable).observe(table,{childList:true});
+  // Comments & findings: a collapsible footer that shows how many comments are saved.
+  const comments=panel.querySelector('.review-comments'),summary=comments.querySelector('summary');
+  const badge=Object.assign(document.createElement('span'),{className:'ds-count-badge'});
+  summary.replaceChildren(lucideNode('message-square-text'),Object.assign(document.createElement('span'),{textContent:'Comments & findings'}),badge,lucideNode('chevron-down','ds-summary-chevron'));
+  const syncCount=()=>{const count=(typeof analysisNotesCache!=='undefined'&&analysisNotesCache?.length)||0;badge.textContent=count?`${count} saved`:'';badge.hidden=!count;};
+  const loadNotesBeforeCount=loadNotes;loadNotes=async function(){await loadNotesBeforeCount();syncCount();};syncCount();
+  comments.open=false;
+ }
+}

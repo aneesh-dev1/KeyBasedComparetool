@@ -828,3 +828,150 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
  #headersPanel.ds .source-preview-grid{grid-row:4;grid-template-columns:minmax(0,1fr)}
 }
 @media (prefers-reduced-motion:reduce){#headersPanel.ds .header-editors{transition:none}}
+
+/* ───────────── Comparison rules drawer: two panes ───────────── */
+.ds-drawer.comparison-rules-drawer{width:min(980px,100vw)!important}
+.ds-drawer .drawer-heading{padding:var(--space-4) var(--space-6)!important}
+.ds-drawer .comparison-rules-body{flex:1;min-height:0;gap:var(--space-3)!important;padding:var(--space-4) var(--space-6)!important;overflow:hidden!important}
+/* Duplicate keys: one slim bar. */
+.ds-drawer .duplicate-rule-setting{flex:none;grid-template-columns:minmax(0,1fr) 330px!important;padding:var(--space-2) var(--space-2) var(--space-2) var(--space-4)!important}
+.ds-drawer .duplicate-rule-setting small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ds-drawer .duplicate-rule-setting label{grid-template-columns:auto minmax(0,1fr);align-items:center;gap:var(--space-2)!important}
+.ds-drawer .duplicate-rule-setting .tu-select-trigger{min-height:32px!important;height:32px}
+.ds-rules-panes{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:var(--space-4)}
+.ds-drawer .comparison-rule-builder{min-height:0;overflow:auto;scrollbar-width:thin;gap:var(--space-3)!important}
+.ds-drawer #ruleColumnPicker{flex:1 1 auto;min-height:0;grid-template-rows:auto minmax(96px,1fr)}
+.ds-drawer #ruleColumnChoices{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))!important;align-content:start;max-height:none!important;min-height:96px;height:100%}
+.ds-drawer #ruleColumnChoices label>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Columns that already have rules carry a small marker. */
+.ds-drawer #ruleColumnChoices label.has-rule::after{content:"";width:6px;height:6px;margin-left:auto;flex:none;border-radius:50%;background:var(--tu-cyan-600)}
+.ds-drawer #ruleColumnChoices label.has-rule{padding-right:var(--space-3)!important}
+.ds-drawer .rule-options{display:flex!important;flex-wrap:wrap;align-items:flex-end;gap:var(--space-2)!important}
+.ds-drawer .rule-options label:has(input[type=checkbox]){flex:0 0 auto;min-height:32px;white-space:nowrap}
+.ds-drawer .rule-options label:not(:has(input[type=checkbox])){flex:1 1 calc(33% - var(--space-2));min-width:112px}
+.ds-drawer #addValueRule{align-self:stretch;justify-content:center}
+.ds-rules-configured{min-height:0;display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-4);border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-sunken)}
+.ds-rules-configured>.section-title{display:flex!important;align-items:center;justify-content:space-between;margin:0!important;padding:0!important;border:0!important}
+.ds-rules-configured>.section-title h3{margin:0;font-size:var(--text-sm);font-weight:650;color:var(--text-strong)}
+.ds-rules-configured #configuredRuleSearch{height:32px;margin:0;font-size:var(--text-xs)}
+.ds-rules-configured #ruleEditorEmpty{flex:1;display:grid;place-items:center;margin:0;padding:var(--space-4);border:1.5px dashed var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);font-size:var(--text-sm);color:var(--text-muted);text-align:center}
+.ds-rules-configured #ruleEditorEmpty[hidden]{display:none}
+.ds-rules-configured #comparisonRuleList{flex:1;min-height:0;max-height:none!important;display:flex;flex-direction:column;gap:4px;overflow:auto;scrollbar-width:thin}
+.ds-drawer .comparison-rule-card{display:grid!important;grid-template-columns:minmax(96px,38%) minmax(0,1fr) auto!important;align-items:center;gap:var(--space-2);margin:0!important;padding:6px 6px 6px var(--space-3)!important;border:1px solid var(--border-default)!important;border-radius:var(--radius-md)!important;background:var(--surface-card)!important}
+.ds-drawer .comparison-rule-card[hidden]{display:none!important}
+.ds-drawer .comparison-rule-card>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 var(--text-xs)/1.3 var(--font-mono);color:var(--text-strong)}
+.ds-drawer .rule-chips{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
+.ds-drawer .rule-chip{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--radius-full);background:var(--tu-cyan-50);color:var(--tu-cyan-700);font:600 var(--text-2xs)/1 var(--font-sans);white-space:nowrap}
+.ds-drawer .rule-remove{display:inline-grid!important;place-items:center;width:28px;height:28px!important;min-height:0!important;padding:0!important;border:1px solid transparent!important;border-radius:6px!important;background:transparent!important;color:var(--text-faint)!important;cursor:pointer}
+.ds-drawer .rule-remove:hover{border-color:color-mix(in srgb,var(--danger) 35%,#fff)!important;background:var(--danger-50)!important;color:var(--danger-text)!important}
+.ds-drawer .rule-remove .lucide{width:14px;height:14px}
+.ds-drawer .rules-drawer-footer{flex:none}
+.ds-drawer #ruleEditorError[data-tone=success]{color:var(--success)}
+@media (max-width:900px){
+ .ds-drawer .comparison-rules-body{overflow:auto!important}
+ /* Stacked: each pane keeps its natural height and the drawer body scrolls. */
+ .ds-rules-panes{flex:none;display:flex;flex-direction:column}
+ .ds-drawer .comparison-rule-builder,.ds-rules-configured,.ds-drawer #ruleColumnPicker{flex:none;min-height:auto;overflow:visible}
+ .ds-drawer #ruleColumnPicker{grid-template-rows:auto auto}
+ .ds-drawer #ruleColumnChoices{height:auto;max-height:220px!important}
+ .ds-rules-configured #comparisonRuleList{flex:none;overflow:visible}
+ .ds-drawer .duplicate-rule-setting{grid-template-columns:minmax(0,1fr)!important}
+}
+
+/* ───────────── Mismatch review drawer ───────────── */
+.enterprise-ui #analysisDrawer.ds-mismatch{width:min(1180px,94vw)!important;padding:0!important;background:var(--surface-card)!important;font-family:var(--font-sans)}
+#analysisDrawer.ds-mismatch[open]{display:flex!important;flex-direction:column;height:100dvh;max-height:100dvh}
+#analysisDrawer.ds-mismatch .drawer-heading{flex:none;display:flex!important;align-items:center;justify-content:space-between;gap:var(--space-3);margin:0!important;padding:var(--space-4) var(--space-6)!important;border-bottom:1px solid var(--border-default)!important;background:var(--surface-card)!important;box-shadow:none!important}
+#analysisDrawer.ds-mismatch .analysis-drawer-eyebrow{margin:0 0 2px!important;font:600 var(--text-2xs)/1.2 var(--font-sans)!important;letter-spacing:.08em!important;color:var(--tu-cyan-700)!important}
+#analysisDrawer.ds-mismatch .drawer-heading h2{margin:0;font-size:var(--text-xl)!important;font-weight:650;color:var(--text-strong)}
+#analysisDrawer.ds-mismatch #analysisPanel{flex:1;min-height:0;display:flex!important;flex-direction:column;gap:var(--space-3);margin:0!important;padding:var(--space-3) var(--space-6) var(--space-4)!important;overflow:hidden;background:var(--surface-card)!important;border:0!important;box-shadow:none!important}
+#analysisDrawer.ds-mismatch #analysisPanel>*{flex:none;margin:0!important}
+#analysisDrawer.ds-mismatch #analysisPanel>:is(.eyebrow,h2,#analysisOverview){display:none!important}
+/* Toolbar: view switch, current selection, back and filter in one row. */
+#analysisDrawer.ds-mismatch .ds-mismatch-toolbar{display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap}
+#analysisDrawer.ds-mismatch .analysis-tabs{display:inline-flex!important;gap:2px;margin:0!important;padding:3px!important;border:0!important;border-radius:var(--radius-md);background:var(--surface-sunken)}
+#analysisDrawer.ds-mismatch .analysis-tabs button{height:30px;min-height:0!important;padding:0 var(--space-3)!important;border:0!important;border-radius:6px!important;background:transparent!important;color:var(--text-muted)!important;font:600 var(--text-xs)/1 var(--font-sans)!important;box-shadow:none!important}
+#analysisDrawer.ds-mismatch .analysis-tabs button[aria-pressed=true]{background:var(--surface-card)!important;color:var(--text-strong)!important;box-shadow:var(--shadow-1)!important}
+#analysisDrawer.ds-mismatch .ds-mismatch-where{flex:1;min-width:120px}
+#analysisDrawer.ds-mismatch #analysisSelection{margin:0;overflow:hidden;font-size:var(--text-sm);color:var(--text-muted);white-space:nowrap;text-overflow:ellipsis}
+#analysisDrawer.ds-mismatch .ds-toolbar-btn{display:inline-flex;align-items:center;gap:6px;height:32px;min-height:0!important;padding:0 var(--space-3)!important;border:1px solid var(--border-default)!important;border-radius:var(--radius-md)!important;background:var(--surface-card)!important;color:var(--text-default)!important;font:600 var(--text-xs)/1 var(--font-sans)!important;white-space:nowrap;cursor:pointer;transition:background var(--dur-1) var(--ease-out),border-color var(--dur-1) var(--ease-out)}
+#analysisDrawer.ds-mismatch .ds-toolbar-btn:hover{background:var(--surface-hover)!important;border-color:var(--border-strong)!important}
+#analysisDrawer.ds-mismatch .ds-toolbar-btn.is-active{background:var(--tu-cyan-50)!important;border-color:var(--tu-cyan-300)!important;color:var(--tu-cyan-700)!important}
+#analysisDrawer.ds-mismatch .ds-toolbar-btn[hidden]{display:none!important}
+#analysisDrawer.ds-mismatch .ds-toolbar-btn .lucide{width:14px;height:14px}
+#analysisDrawer.ds-mismatch .ds-back-btn::before{content:"";width:14px;height:14px;background:currentColor;-webkit-mask:var(--ds-arrow) center/contain no-repeat;mask:var(--ds-arrow) center/contain no-repeat;transform:scaleX(-1)}
+/* Filters open below the toolbar only when asked for. */
+#analysisDrawer.ds-mismatch .analysis-filter-disclosure:not([open]){display:none!important}
+#analysisDrawer.ds-mismatch .analysis-filter-disclosure{border:1px solid var(--border-default)!important;border-radius:var(--radius-lg)!important;background:var(--surface-sunken)!important;animation:ds-dialect-in var(--dur-2) var(--ease-out)}
+#analysisDrawer.ds-mismatch .analysis-filter-disclosure>summary{display:none}
+#analysisDrawer.ds-mismatch .analysis-filter-disclosure .analysis-filter-grid{max-height:min(280px,34dvh)!important;padding:var(--space-3) var(--space-4)!important;border:0!important;background:transparent!important}
+/* The table takes all remaining height. */
+#analysisDrawer.ds-mismatch .analysis-workbench{flex:1 1 auto!important;min-height:0;width:100%;display:flex!important;flex-direction:column}
+#analysisDrawer.ds-mismatch .analysis-results{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;gap:var(--space-2)}
+#analysisDrawer.ds-mismatch .analysis-results>*{flex:none;margin:0!important}
+#analysisDrawer.ds-mismatch .analysis-context{display:none!important}
+#analysisDrawer.ds-mismatch #analysisStatus{font-size:var(--text-xs)!important;color:var(--text-muted)}
+#analysisDrawer.ds-mismatch .analysis-results>.table-scroll{flex:0 1 auto;width:100%;min-height:0;max-height:none!important;overflow:auto;border:1px solid var(--border-default)!important;border-radius:var(--radius-lg)!important;scrollbar-width:thin}
+#analysisDrawer.ds-mismatch #analysisTable{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--text-xs)}
+#analysisDrawer.ds-mismatch #analysisTable :is(th,td){min-width:0!important;max-width:38ch;padding:7px var(--space-3)!important;font-size:var(--text-xs)!important;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid var(--border-subtle)}
+#analysisDrawer.ds-mismatch #analysisTable th{position:sticky;top:0;z-index:1;height:34px;font-weight:600;letter-spacing:.01em}
+#analysisDrawer.ds-mismatch #analysisTable td{font-family:var(--font-mono)}
+#analysisDrawer.ds-mismatch #analysisTable tr:hover>td:not(.analysis-before):not(.analysis-after){background:var(--surface-sunken)}
+#analysisDrawer.ds-mismatch #analysisTable :is(th,td)[hidden]{display:none}
+#analysisDrawer.ds-mismatch #analysisTable .ds-actions-head{width:1%;text-align:right}
+#analysisDrawer.ds-mismatch #analysisTable td.ds-actions-cell{width:1%;padding-block:3px!important;text-align:right;overflow:visible}
+#analysisDrawer.ds-mismatch .ds-row-action{display:inline-grid;place-items:center;width:28px;height:28px;min-height:0!important;margin:0 0 0 4px;padding:0!important;border:1px solid var(--border-default)!important;border-radius:6px!important;background:var(--surface-card)!important;color:var(--text-muted)!important;font-family:var(--font-sans);cursor:pointer;vertical-align:middle}
+#analysisDrawer.ds-mismatch .ds-row-action.has-text{display:inline-flex;align-items:center;gap:2px;width:auto;padding:0 6px 0 10px!important;font:600 var(--text-xs)/1 var(--font-sans)!important;color:var(--text-link)!important}
+#analysisDrawer.ds-mismatch .ds-row-action:hover{border-color:var(--tu-cyan-300)!important;background:var(--tu-cyan-50)!important;color:var(--tu-cyan-700)!important}
+#analysisDrawer.ds-mismatch .ds-row-action .lucide{width:14px;height:14px}
+/* Pagination and help: one compact line each. */
+#analysisDrawer.ds-mismatch .analysis-results>.list-navigation{display:flex;align-items:center;gap:var(--space-2)}
+#analysisDrawer.ds-mismatch #analysisRange{margin-right:auto;font-size:var(--text-xs);color:var(--text-muted);font-variant-numeric:tabular-nums}
+#analysisDrawer.ds-mismatch .analysis-results>.list-navigation button{height:30px;min-height:0!important;padding:0 var(--space-3)!important;font-size:var(--text-xs)!important}
+#analysisDrawer.ds-mismatch .analysis-help{font-size:var(--text-xs)!important;color:var(--text-muted)}
+#analysisDrawer.ds-mismatch .analysis-help>summary{cursor:pointer;font-weight:600;color:var(--text-link)}
+#analysisDrawer.ds-mismatch .analysis-help[open]{max-height:22dvh;overflow:auto}
+/* Comments & findings: a collapsible footer. */
+#analysisDrawer.ds-mismatch .enterprise-comments{padding:0!important;border:1px solid var(--border-default)!important;border-radius:var(--radius-lg)!important;background:var(--surface-sunken)!important}
+#analysisDrawer.ds-mismatch .enterprise-comments[open]{max-height:44dvh;overflow:auto;scrollbar-width:thin}
+#analysisDrawer.ds-mismatch .enterprise-comments>summary{display:flex;align-items:center;gap:var(--space-2);padding:10px var(--space-4);list-style:none;font:600 var(--text-sm)/1.2 var(--font-sans)!important;color:var(--text-strong)!important;cursor:pointer}
+#analysisDrawer.ds-mismatch .enterprise-comments>summary::-webkit-details-marker{display:none}
+#analysisDrawer.ds-mismatch .enterprise-comments>summary .lucide{width:16px;height:16px;color:var(--text-muted)}
+#analysisDrawer.ds-mismatch .enterprise-comments .ds-summary-chevron{margin-left:auto;transition:transform var(--dur-2) var(--ease-out)}
+#analysisDrawer.ds-mismatch .enterprise-comments[open] .ds-summary-chevron{transform:rotate(180deg)}
+#analysisDrawer.ds-mismatch .ds-count-badge{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--radius-full);background:var(--tu-cyan-50);color:var(--tu-cyan-700);font:600 var(--text-2xs)/1 var(--font-sans)}
+#analysisDrawer.ds-mismatch .ds-count-badge[hidden]{display:none}
+#analysisDrawer.ds-mismatch .enterprise-comments>:not(summary){margin:0 var(--space-4) var(--space-3)!important}
+#analysisDrawer.ds-mismatch .enterprise-comments .preview-controls{display:grid!important;grid-template-columns:180px minmax(0,1fr) auto;align-items:stretch;gap:var(--space-2)!important}
+#analysisDrawer.ds-mismatch .enterprise-comments #noteComment{height:64px;min-height:64px;margin:0;resize:vertical;font-size:var(--text-sm)}
+#analysisDrawer.ds-mismatch .enterprise-comments #saveNote{align-self:end;height:36px;white-space:nowrap}
+/* Filters: column choice on the left, key search on the right, in a compact panel. */
+#analysisDrawer.ds-mismatch .analysis-filter-grid{display:grid!important;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr)!important;gap:var(--space-5)!important;align-items:start}
+#analysisDrawer.ds-mismatch #analysisColumnControls{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:4px var(--space-3);align-items:end}
+#analysisDrawer.ds-mismatch #analysisColumnControls>label[for=analysisColumnSearch]{grid-column:1;grid-row:1}
+#analysisDrawer.ds-mismatch #analysisColumnSearch{grid-column:1;grid-row:2;height:34px;margin:0!important}
+#analysisDrawer.ds-mismatch #analysisColumnControls>label[for=analysisColumn]{grid-column:2;grid-row:1}
+#analysisDrawer.ds-mismatch #analysisColumnControls>.tu-select{grid-column:2;grid-row:2}
+#analysisDrawer.ds-mismatch #analysisColumnChoices{grid-column:1/-1;grid-row:3;display:flex!important;flex-wrap:wrap;gap:4px;max-height:76px!important;margin:6px 0 0!important;overflow:auto}
+#analysisDrawer.ds-mismatch #analysisColumnChoices button{height:26px;min-height:0!important;padding:0 10px!important;font:500 var(--text-xs)/1 var(--font-mono)!important}
+#analysisDrawer.ds-mismatch #analysisColumnControls>.list-navigation{grid-column:1/-1;grid-row:4;display:flex;align-items:center;gap:var(--space-2);margin:0!important;font-size:var(--text-xs);color:var(--text-muted)}
+#analysisDrawer.ds-mismatch #analysisColumnControls>.list-navigation button{height:28px;min-height:0!important;padding:0 10px!important;font-size:var(--text-xs)!important}
+#analysisDrawer.ds-mismatch :is(#analysisColumnControls>label,#analysisKeyLabel){margin:0!important;font:600 var(--text-2xs)/1.4 var(--font-sans)!important;letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint)!important}
+#analysisDrawer.ds-mismatch #analysisKeyControls{display:grid!important;grid-template-columns:minmax(0,1fr) auto;gap:4px var(--space-2);align-items:end}
+#analysisDrawer.ds-mismatch #analysisKeyControls[hidden]{display:none!important}
+#analysisDrawer.ds-mismatch #analysisKeyLabel{grid-column:1/-1}
+#analysisDrawer.ds-mismatch #analysisKeyFields{grid-column:1;display:grid!important;gap:6px;margin:0!important}
+#analysisDrawer.ds-mismatch #analysisKeyFields label{display:grid!important;gap:3px;margin:0;font:500 var(--text-2xs)/1.3 var(--font-mono);color:var(--text-muted)}
+#analysisDrawer.ds-mismatch #analysisKeyFields input{height:34px;margin:0!important}
+#analysisDrawer.ds-mismatch #analysisSearch{grid-column:2;height:34px;min-height:0!important;margin:0!important}
+/* Comment form: target on one line, scope note tight. */
+#analysisDrawer.ds-mismatch .enterprise-comments>label{display:grid!important;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:var(--space-3);font-size:var(--text-xs)!important;font-weight:600}
+#analysisDrawer.ds-mismatch .enterprise-comments #noteScope{margin-bottom:6px!important;padding:6px 10px!important;font-size:var(--text-xs)!important}
+#analysisDrawer.ds-mismatch .enterprise-comments>p.muted{margin-top:-6px!important;font-size:var(--text-2xs)!important}
+@media (max-width:800px){
+ .enterprise-ui #analysisDrawer.ds-mismatch{width:100vw!important}
+ #analysisDrawer.ds-mismatch .analysis-filter-grid{grid-template-columns:minmax(0,1fr)!important}
+ #analysisDrawer.ds-mismatch :is(.drawer-heading,#analysisPanel){padding-inline:var(--space-4)!important}
+ #analysisDrawer.ds-mismatch .ds-mismatch-where{order:5;flex-basis:100%}
+ #analysisDrawer.ds-mismatch .enterprise-comments .preview-controls{grid-template-columns:minmax(0,1fr)}
+}
