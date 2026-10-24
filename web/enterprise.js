@@ -1277,6 +1277,26 @@ function redesignAnalysis(){
   const syncCount=()=>{const count=(typeof analysisNotesCache!=='undefined'&&analysisNotesCache?.length)||0;badge.textContent=count?`${count} saved`:'';badge.hidden=!count;};
   const loadNotesBeforeCount=loadNotes;loadNotes=async function(){await loadNotesBeforeCount();syncCount();};syncCount();
   comments.open=false;
+  // The footer slides up when opened (by its header or a row's Comment button) and back down when closed.
+  const nativeOpen=Object.getOwnPropertyDescriptor(HTMLDetailsElement.prototype,'open'),reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
+  // A gentle ease-in-out: slow start, smooth middle, soft landing.
+  const easing='cubic-bezier(.45,0,.2,1)';let slide=null;
+  function slideComments(opening){
+   const from=comments.getBoundingClientRect().height,borders=comments.offsetHeight-comments.clientHeight;
+   slide?.cancel();comments.classList.toggle('is-expanded',opening);comments.classList.add('is-sliding');
+   if(opening)nativeOpen.set.call(comments,true);
+   const to=opening?comments.getBoundingClientRect().height:summary.offsetHeight+borders,duration=reducedMotion.matches?0:opening?720:560;
+   slide=comments.animate([{height:from+'px'},{height:to+'px'}],{duration,easing});
+   if(opening)for(const part of comments.children)if(part!==summary)part.animate([{opacity:0,transform:'translateY(12px)'},{opacity:1,transform:'none'}],{duration,delay:reducedMotion.matches?0:120,easing,fill:'backwards'});
+   const finish=()=>{slide=null;comments.classList.remove('is-sliding');};
+   slide.onfinish=()=>{finish();if(!opening)nativeOpen.set.call(comments,false);};slide.oncancel=finish;
+  }
+  summary.addEventListener('click',event=>{event.preventDefault();slideComments(!comments.classList.contains('is-expanded'));});
+  // app.js opens the footer by setting .open; route that through the same slide.
+  Object.defineProperty(comments,'open',{configurable:true,get(){return nativeOpen.get.call(this);},set(value){
+   if(value&&!comments.classList.contains('is-expanded'))slideComments(true);
+   else if(!value){slide?.cancel();comments.classList.remove('is-expanded');nativeOpen.set.call(this,false);}
+  }});
  }
 }
 

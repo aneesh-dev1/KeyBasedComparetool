@@ -938,8 +938,9 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #analysisDrawer.ds-mismatch .enterprise-comments>summary{display:flex;align-items:center;gap:var(--space-2);padding:10px var(--space-4);list-style:none;font:600 var(--text-sm)/1.2 var(--font-sans)!important;color:var(--text-strong)!important;cursor:pointer}
 #analysisDrawer.ds-mismatch .enterprise-comments>summary::-webkit-details-marker{display:none}
 #analysisDrawer.ds-mismatch .enterprise-comments>summary .lucide{width:16px;height:16px;color:var(--text-muted)}
-#analysisDrawer.ds-mismatch .enterprise-comments .ds-summary-chevron{margin-left:auto;transition:transform var(--dur-2) var(--ease-out)}
-#analysisDrawer.ds-mismatch .enterprise-comments[open] .ds-summary-chevron{transform:rotate(180deg)}
+#analysisDrawer.ds-mismatch .enterprise-comments .ds-summary-chevron{margin-left:auto;transition:transform .64s cubic-bezier(.45,0,.2,1)}
+#analysisDrawer.ds-mismatch .enterprise-comments.is-expanded .ds-summary-chevron{transform:rotate(180deg)}
+#analysisDrawer.ds-mismatch .enterprise-comments.is-sliding{overflow:hidden!important}
 #analysisDrawer.ds-mismatch .ds-count-badge{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--radius-full);background:var(--tu-cyan-50);color:var(--tu-cyan-700);font:600 var(--text-2xs)/1 var(--font-sans)}
 #analysisDrawer.ds-mismatch .ds-count-badge[hidden]{display:none}
 #analysisDrawer.ds-mismatch .enterprise-comments>:not(summary){margin:0 var(--space-4) var(--space-3)!important}
