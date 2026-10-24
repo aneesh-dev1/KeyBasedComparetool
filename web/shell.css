@@ -894,6 +894,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #analysisDrawer.ds-mismatch .analysis-tabs button[aria-pressed=true]{background:var(--surface-card)!important;color:var(--text-strong)!important;box-shadow:var(--shadow-1)!important}
 #analysisDrawer.ds-mismatch .ds-mismatch-where{flex:1;min-width:120px}
 #analysisDrawer.ds-mismatch #analysisSelection{margin:0;overflow:hidden;font-size:var(--text-sm);color:var(--text-muted);white-space:nowrap;text-overflow:ellipsis}
+#analysisDrawer.ds-mismatch :is(#analysisSelection,.analysis-help)[hidden]{display:none!important}
 #analysisDrawer.ds-mismatch .ds-toolbar-btn{display:inline-flex;align-items:center;gap:6px;height:32px;min-height:0!important;padding:0 var(--space-3)!important;border:1px solid var(--border-default)!important;border-radius:var(--radius-md)!important;background:var(--surface-card)!important;color:var(--text-default)!important;font:600 var(--text-xs)/1 var(--font-sans)!important;white-space:nowrap;cursor:pointer;transition:background var(--dur-1) var(--ease-out),border-color var(--dur-1) var(--ease-out)}
 #analysisDrawer.ds-mismatch .ds-toolbar-btn:hover{background:var(--surface-hover)!important;border-color:var(--border-strong)!important}
 #analysisDrawer.ds-mismatch .ds-toolbar-btn.is-active{background:var(--tu-cyan-50)!important;border-color:var(--tu-cyan-300)!important;color:var(--tu-cyan-700)!important}
@@ -975,3 +976,46 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
  #analysisDrawer.ds-mismatch .ds-mismatch-where{order:5;flex-basis:100%}
  #analysisDrawer.ds-mismatch .enterprise-comments .preview-controls{grid-template-columns:minmax(0,1fr)}
 }
+
+/* ───────────── Attach to project popover ───────────── */
+.ds-attach{position:relative;display:inline-flex;flex:none}
+.ds-attach>.ds-attach-btn{display:inline-flex!important;align-items:center;gap:var(--space-2);height:40px;max-width:260px;padding:0 var(--space-3) 0 14px!important;border:1px solid var(--border-default)!important;border-radius:var(--radius-md)!important;background:var(--surface-card)!important;color:var(--text-default)!important;font:600 var(--text-sm)/1 var(--font-sans)!important;box-shadow:none!important;cursor:pointer;transition:background var(--dur-1) var(--ease-out),border-color var(--dur-1) var(--ease-out)}
+.ds-attach>.ds-attach-btn:hover,.ds-attach>.ds-attach-btn[aria-expanded=true]{background:var(--surface-hover)!important;border-color:var(--border-strong)!important}
+.ds-attach>.ds-attach-btn:focus-visible{outline:none;box-shadow:var(--focus-ring)!important}
+.ds-attach>.ds-attach-btn>svg.lucide{width:16px;height:16px;flex:none;color:var(--text-muted)}
+.ds-attach.is-attached>.ds-attach-btn>svg.lucide:first-child{color:var(--tu-cyan-700)}
+.ds-attach-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ds-attach .ds-attach-chevron{width:14px!important;height:14px!important;transition:transform var(--dur-2) var(--ease-out)}
+.ds-attach-btn[aria-expanded=true] .ds-attach-chevron{transform:rotate(180deg)}
+.ds-attach-popover{position:absolute;right:0;top:calc(100% + 8px);z-index:45;display:flex;flex-direction:column;gap:var(--space-2);width:min(340px,calc(100vw - 32px));padding:var(--space-4);border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-card);box-shadow:var(--shadow-2);text-align:left;animation:ds-pop var(--dur-2) var(--ease-out);transform-origin:top right;font-family:var(--font-sans)}
+.ds-attach-popover[hidden]{display:none}
+.ds-attach-head{display:flex;flex-direction:column;gap:2px;margin-bottom:2px}
+.ds-attach-head strong{font-size:var(--text-md);font-weight:650;color:var(--text-strong)}
+.ds-attach-head span{font-size:var(--text-xs);line-height:1.45;color:var(--text-muted)}
+.ds-attach-search{height:34px;margin:0}
+.ds-attach-search[hidden]{display:none}
+.ds-attach-list{display:flex;flex-direction:column;gap:2px;max-height:min(240px,40dvh);margin:0 calc(var(--space-2) * -1);padding:0 var(--space-2);overflow:auto;scrollbar-width:thin}
+.ds-attach-list:empty{display:none}
+.ds-attach-option{display:grid!important;grid-template-columns:16px minmax(0,1fr) 16px;align-items:center;gap:var(--space-2);width:100%;height:36px;min-height:0!important;padding:0 var(--space-3)!important;border:1px solid transparent!important;border-radius:var(--radius-md)!important;background:transparent!important;color:var(--text-default)!important;font:500 var(--text-sm)/1 var(--font-sans)!important;text-align:left;box-shadow:none!important;cursor:pointer}
+.ds-attach-option[hidden]{display:none!important}
+.ds-attach-option:hover,.ds-attach-option:focus-visible{outline:none;background:var(--surface-sunken)!important}
+.ds-attach-option>svg.lucide{width:16px;height:16px;color:var(--text-faint)}
+.ds-attach-option .ds-attach-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ds-attach-option .ds-attach-check{visibility:hidden;color:var(--tu-cyan-700)!important}
+.ds-attach-option[aria-selected=true]{border-color:color-mix(in srgb,var(--tu-cyan-600) 35%,#fff)!important;background:var(--tu-cyan-50)!important;color:var(--text-strong)!important;font-weight:600!important}
+.ds-attach-option[aria-selected=true]>svg.lucide{color:var(--tu-cyan-700)}
+.ds-attach-option[aria-selected=true] .ds-attach-check{visibility:visible}
+.ds-attach-empty{margin:0;padding:var(--space-3);border:1.5px dashed var(--border-default);border-radius:var(--radius-md);font-size:var(--text-xs);color:var(--text-muted);text-align:center}
+.ds-attach-empty[hidden]{display:none}
+.ds-attach-create{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--space-2);margin:0;padding-top:var(--space-3);border-top:1px solid var(--border-subtle)}
+.ds-attach-create input{height:34px;margin:0;font-size:var(--text-sm)}
+.ds-attach-create button{display:inline-flex!important;align-items:center;gap:4px;height:34px;min-height:0!important;padding:0 var(--space-3)!important;font-size:var(--text-xs)!important;white-space:nowrap}
+.ds-attach-create button svg.lucide{width:14px;height:14px}
+.ds-attach-remove{align-self:flex-start;height:auto!important;min-height:0!important;padding:2px 0!important;border:0!important;background:none!important;box-shadow:none!important;color:var(--danger-text)!important;font:600 var(--text-xs)/1.4 var(--font-sans)!important;cursor:pointer}
+.ds-attach-remove:hover{text-decoration:underline}
+.ds-attach-remove[hidden]{display:none!important}
+.ds-attach-status{margin:0;font-size:var(--text-xs);color:var(--text-muted)}
+.ds-attach-status:empty{display:none}
+.ds-attach-status[data-tone=success]{color:var(--success)}
+.ds-attach-status[data-tone=error]{color:var(--danger-text)}
+.ds-attach-popover.align-left{right:auto;left:0;transform-origin:top left}

@@ -1235,18 +1235,20 @@ function redesignAnalysis(){
  if(drawer&&panel&&$('analysisFilterDisclosure')){
   drawer.classList.add('ds','ds-mismatch');
   const close=$('closeAnalysisDrawer');close.className='ds-icon-btn';close.innerHTML=lucide('x');
+  drawer.querySelector('.analysis-drawer-eyebrow')?.remove();
   const tabs=panel.querySelector('.analysis-tabs'),filter=$('analysisFilterDisclosure'),back=$('analysisReset');
   const toolbar=document.createElement('div');toolbar.className='ds-mismatch-toolbar';tabs.before(toolbar);
-  const where=document.createElement('div');where.className='ds-mismatch-where';where.append($('analysisSelection'));
-  const filterButton=document.createElement('button');filterButton.type='button';filterButton.className='ds-toolbar-btn';
-  filterButton.setAttribute('aria-controls',filter.id);filterButton.setAttribute('aria-expanded','false');
-  filterButton.append(lucideNode('list-filter'),Object.assign(document.createElement('span'),{textContent:'Change column or find a key'}));
-  filterButton.addEventListener('click',()=>{filter.open=!filter.open;});
-  filter.addEventListener('toggle',()=>{filterButton.setAttribute('aria-expanded',String(filter.open));filterButton.classList.toggle('is-active',filter.open);});
+  // The selection line repeats the title, except when one key is open: then it names that key.
+  const selection=$('analysisSelection'),where=document.createElement('div');where.className='ds-mismatch-where';
   back.classList.add('ds-toolbar-btn','ds-back-btn');
-  toolbar.append(tabs,where,back,filterButton);
-  // Keys is a third view beside Mismatches and Patterns rather than a button inside the filters.
+  toolbar.append(tabs,where,back);where.append(selection);
+  const syncWhere=()=>{selection.hidden=!$('analysisKey').value;};
+  new MutationObserver(syncWhere).observe(selection,{childList:true,characterData:true,subtree:true});syncWhere();
+  // Keys is a third view beside Mismatches and Patterns. Its key search shows only in that view.
   const byKey=$('analysisByKey');byKey.textContent='Keys';$('analysisByPattern').before(byKey);
+  for(const view of [$('analysisByColumn'),$('analysisByPattern')])view.addEventListener('click',()=>{filter.open=false;});
+  // "What is included in this view?" is not shown; its elements stay for the code that fills them.
+  panel.querySelector('.analysis-help').hidden=true;
   // Row actions become labelled icon buttons; a single-column view drops its repeated Column column.
   const table=$('analysisTable');
   const icons={'All changes for this key':'scan-search','Comment':'message-square-text','View mismatching keys':'chevron-right','View this key':'chevron-right'};
@@ -1276,4 +1278,110 @@ function redesignAnalysis(){
   const loadNotesBeforeCount=loadNotes;loadNotes=async function(){await loadNotesBeforeCount();syncCount();};syncCount();
   comments.open=false;
  }
+}
+
+// Attach to project: a popover anchored to its button instead of a full drawer. One click files the
+// comparison (its audit status, notes and reviewer are kept), a project can be created inline, and the
+// button shows the project the comparison is filed under. Projects keeps the full audit drawer.
+{
+ const wraps=[];
+ function setupAttach(button,identityOf){
+  if(!button||button.dataset.attachTrigger)return;
+  button.dataset.attachTrigger='1';
+  const wrap=document.createElement('span');wrap.className='ds-attach';button.before(wrap);wrap.append(button);
+  button.classList.add('ds-attach-btn');button.setAttribute('aria-haspopup','dialog');button.setAttribute('aria-expanded','false');
+  const label=Object.assign(document.createElement('span'),{className:'ds-attach-label',textContent:'Attach to project'});
+  button.replaceChildren(lucideNode('folder'),label,lucideNode('chevron-down','ds-attach-chevron'));
+  const popover=document.createElement('div');popover.className='ds-attach-popover';popover.hidden=true;popover.setAttribute('role','dialog');popover.setAttribute('aria-label','Attach to project');
+  wrap.append(popover);wraps.push({wrap,button,label,popover,identityOf});
+ }
+ function showLabel(entry,name){
+  entry.label.textContent=name||'Attach to project';entry.wrap.classList.toggle('is-attached',!!name);
+  entry.button.title=name?`Filed in ${name}. Click to change.`:'';
+ }
+ function close(entry,focus=false){if(entry.popover.hidden)return;entry.popover.hidden=true;entry.button.setAttribute('aria-expanded','false');if(focus)entry.button.focus();}
+ async function render(entry,identity){
+  const [recordData,catalog]=await Promise.all([api('/api/projects/records?id='+identity),api('/api/projects')]);
+  const record=recordData.records[0];if(!record)throw Error('Comparison is not available.');
+  const projects=catalog.projects||[],popover=entry.popover;popover.replaceChildren();
+  const head=document.createElement('div');head.className='ds-attach-head';
+  head.innerHTML='<strong>Attach to project</strong><span>Group this comparison with related runs. Its audit status and notes are kept.</span>';
+  const search=Object.assign(document.createElement('input'),{type:'search',placeholder:'Find a project',className:'ds-attach-search'});search.setAttribute('aria-label','Find a project');search.hidden=projects.length<7;
+  const list=document.createElement('div');list.className='ds-attach-list';list.setAttribute('role','listbox');list.setAttribute('aria-label','Projects');
+  const status=Object.assign(document.createElement('p'),{className:'ds-attach-status'});status.setAttribute('role','status');
+  const nameOf=id=>projects.find(project=>project.id===id)?.name||'';
+  async function attach(projectId,name){
+   status.textContent='Saving…';status.dataset.tone='';
+   try{
+    await api('/api/projects/records',{comparison_id:identity,project_id:projectId||null,status:record.audit_status,note:record.audit_note,reviewer:record.reviewer});
+    record.project_id=projectId||null;showLabel(entry,name);
+    for(const option of list.children)option.setAttribute('aria-selected',String(option.dataset.id===record.project_id));
+    status.textContent=projectId?`Filed in ${name}.`:'Removed from project.';status.dataset.tone='success';
+    setTimeout(()=>close(entry,true),650);
+   }catch(error){status.textContent=error.message;status.dataset.tone='error';}
+  }
+  for(const project of projects){
+   const option=document.createElement('button');option.type='button';option.className='ds-attach-option';option.dataset.id=project.id;
+   option.setAttribute('role','option');option.setAttribute('aria-selected',String(project.id===record.project_id));
+   const name=Object.assign(document.createElement('span'),{className:'ds-attach-name',textContent:project.name});name.title=project.name;
+   option.append(lucideNode('folder'),name,lucideNode('check','ds-attach-check'));
+   option.addEventListener('click',()=>{if(project.id!==record.project_id)attach(project.id,project.name);else close(entry,true);});
+   list.append(option);
+  }
+  const empty=Object.assign(document.createElement('p'),{className:'ds-attach-empty',textContent:'No projects yet. Create the first one below.'});empty.hidden=!!projects.length;
+  search.addEventListener('input',()=>{const q=search.value.toLowerCase();for(const option of list.children)option.hidden=!option.textContent.toLowerCase().includes(q);});
+  list.addEventListener('keydown',event=>{
+   if(!['ArrowDown','ArrowUp'].includes(event.key))return;event.preventDefault();
+   const options=[...list.children].filter(option=>!option.hidden),index=options.indexOf(document.activeElement);
+   options[(index+(event.key==='ArrowDown'?1:-1)+options.length)%options.length]?.focus();
+  });
+  // New project: created and attached in one step.
+  const create=document.createElement('form');create.className='ds-attach-create';
+  const nameInput=Object.assign(document.createElement('input'),{placeholder:'New project name',maxLength:100});nameInput.setAttribute('aria-label','New project name');
+  const createButton=Object.assign(document.createElement('button'),{type:'submit',className:'subtle'});createButton.append(lucideNode('plus'),Object.assign(document.createElement('span'),{textContent:'Create'}));
+  create.append(nameInput,createButton);
+  create.addEventListener('submit',async event=>{
+   event.preventDefault();const name=nameInput.value.trim();if(!name){nameInput.focus();return;}
+   createButton.disabled=true;
+   try{const created=await api('/api/projects',{name,description:''});await attach(created.id,name);}
+   catch(error){status.textContent=error.message;status.dataset.tone='error';}
+   finally{createButton.disabled=false;}
+  });
+  const remove=document.createElement('button');remove.type='button';remove.className='ds-attach-remove';remove.textContent='Remove from project';remove.hidden=!record.project_id;
+  remove.addEventListener('click',()=>attach(null,''));
+  popover.append(head,search,list,empty,create,remove,status);
+  showLabel(entry,nameOf(record.project_id));
+  return {search,list,nameInput,projects};
+ }
+ async function open(entry,identity){
+  for(const other of wraps)if(other!==entry)close(other);
+  $('reportsMenu')&&($('reportsMenu').open=false);
+  const parts=await render(entry,identity);
+  // Right-aligned under the button, unless that would push it off the left edge of the window.
+  entry.popover.classList.toggle('align-left',entry.wrap.getBoundingClientRect().right<Math.min(340,innerWidth-32)+16);
+  entry.popover.hidden=false;entry.button.setAttribute('aria-expanded','true');
+  (parts.projects.length?(parts.search.hidden?parts.list.querySelector('[aria-selected=true]')||parts.list.firstElementChild:parts.search):parts.nameInput)?.focus();
+ }
+ const auditBeforePopover=openProjectAudit;
+ openProjectAudit=async function(identity,attach=false){
+  const entry=currentView==='projectsPanel'?null:wraps.find(item=>item.wrap.offsetParent&&item.identityOf()===identity);
+  if(!entry)return auditBeforePopover(identity,attach);
+  if(!entry.popover.hidden){close(entry,true);return;}
+  await open(entry,identity);
+ };
+ document.addEventListener('pointerdown',event=>{for(const entry of wraps)if(!entry.wrap.contains(event.target))close(entry);});
+ document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;for(const entry of wraps)if(!entry.popover.hidden){event.stopPropagation();close(entry,true);}},true);
+ setupAttach([...$('results').querySelectorAll('button')].find(button=>/Attach to project/.test(button.textContent)),()=>job?.id);
+ setupAttach([...($('jsonResult')?.querySelectorAll('button')||[])].find(button=>/Project & audit/.test(button.textContent)),()=>typeof jsonResult!=='undefined'?jsonResult?.audit_id:null);
+ // The results button shows where this comparison is filed.
+ async function syncResultsLabel(){
+  const entry=wraps[0];if(!entry||!job?.id||job.state!=='complete')return;const identity=job.id;
+  try{
+   const [recordData,catalog]=await Promise.all([api('/api/projects/records?id='+identity),api('/api/projects')]);
+   if(job?.id!==identity)return;const projectId=recordData.records[0]?.project_id;
+   showLabel(entry,(catalog.projects||[]).find(project=>project.id===projectId)?.name||'');
+  }catch{}
+ }
+ const renderSummaryBeforeAttach=renderSummary;renderSummary=function(){renderSummaryBeforeAttach();syncResultsLabel();};
+ syncResultsLabel();
 }
