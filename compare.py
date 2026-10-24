@@ -93,21 +93,33 @@ def common_headers(aligned):
     return [name for name in aligned['left'] if name.casefold() in right]
 
 
-def read_header(path, delimiter, encoding):
+def dialect(args, side=None):
+    """Delimiter, encoding and header flag for one side; each file may have its own text dialect."""
+    chosen = (getattr(args, 'dialects', None) or {}).get(side) or {}
+    return (chosen.get('delimiter', getattr(args, 'delimiter', ',')),
+            chosen.get('encoding', getattr(args, 'encoding', 'utf-8-sig')),
+            chosen.get('header', not getattr(args, 'no_header', False)))
+
+
+def read_header(path, delimiter, encoding, has_header=True):
     if is_parquet(path):
         from parquet_input import metadata
         original=metadata(path)['columns'];normalized=normalize_headers(original)
         return normalized,[dict(column=i,original=a,normalized=b) for i,(a,b) in enumerate(zip(original,normalized),1) if a!=b]
     with open(path, encoding=encoding, newline='') as stream:
         original = next(csv.reader(stream, delimiter=delimiter, strict=True), None)
+    if original is not None and not has_header:
+        # Header-less data files (common for .dat extracts): name columns column1…columnN.
+        original = [''] * len(original)
     normalized = normalize_headers(original)
+    # Generated names are not edits to the file's own header, so they are not reported as changes.
     changes = [dict(column=i, original=before, normalized=after)
-               for i,(before,after) in enumerate(zip(original,normalized),1) if before != after]
+               for i,(before,after) in enumerate(zip(original,normalized),1) if before != after] if has_header else []
     return normalized, changes
 
 
-def header(path, delimiter, encoding):
-    return read_header(path, delimiter, encoding)[0]
+def header(path, delimiter, encoding, has_header=True):
+    return read_header(path, delimiter, encoding, has_header)[0]
 
 
 def validate_scope(keys, columns, ignored_columns=None, ignored_keys_text=''):
@@ -237,16 +249,17 @@ def sort_csv(path, names, canonical, keys, temp, prefix, args):
 
 
 @contextlib.contextmanager
-def input_rows(path,args,position=0,indices=None):
+def input_rows(path,args,position=0,indices=None,side=None):
     if is_parquet(path):
         from parquet_input import Rows
         with Rows(path,indices,position,getattr(args,'read_batch_size',100000),args.memory_mb,getattr(args,'native_batch_bytes',None)) as source:
             yield source,iter(source)
     else:
-        with open(path,encoding=args.encoding,newline='',buffering=1024*1024) as source:
+        delimiter,encoding,has_header=dialect(args,side)
+        with open(path,encoding=encoding,newline='',buffering=1024*1024) as source:
             if position: source.seek(position)
-            reader=csv.reader(iter(source.readline,''),delimiter=args.delimiter,strict=True)
-            if not position: next(reader)
+            reader=csv.reader(iter(source.readline,''),delimiter=delimiter,strict=True)
+            if not position and has_header: next(reader)
             yield source,reader
 
 
@@ -300,9 +313,9 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
                 with PackedRows(path,projection,key_positions,position,args.read_batch_size,args.memory_mb,getattr(args,'native_batch_bytes',None)) as source:yield source,iter(source)
             elif native_csv:
                 from csv_input import PackedRows
-                with PackedRows(path,names,order,key_positions,args,position,count) as source:yield source,iter(source)
+                with PackedRows(path,names,order,key_positions,args,position,count,prefix) as source:yield source,iter(source)
             else:
-                with input_rows(path,args,position,projection) as pair:yield pair
+                with input_rows(path,args,position,projection,prefix) as pair:yield pair
         with source_rows() as (stream,reader):
             for row in reader:
                 count += 1
@@ -439,7 +452,7 @@ def execution_settings(config):
     if policy not in ('first', 'last'):
         raise ValueError('Duplicate handling must be first or last')
     engine=config.get('comparison_engine','auto')
-    if engine not in ('auto','sort'):raise ValueError('Comparison engine must be auto or sort')
+    if engine not in ('auto','sort','partitioned'):raise ValueError('Comparison engine must be auto, sort or partitioned')
     return dict(settings, duplicate_policy=policy, comparison_engine=engine)
 
 
@@ -487,6 +500,57 @@ def merge_pairs(left, right):
             a,b=next(left,None),next(right,None)
 
 
+def compare_pair_stream(pairs, column_count, policies, writers, stats, columns, on_row=None, cancel_file=None):
+    """Compare aligned (left, right) records and write every output row. Shared by all engines.
+
+    ``on_row(count, finished)`` runs before and after each pair; without it the cancel file is
+    checked every 1,024 pairs. Returns the number of pairs processed.
+    """
+    from mismatch_scan import differences_for_pairs
+    raw_write=writers['raw_differences'].writerows
+    difference_write=writers['differences'].writerows
+    matched_write=writers['matched_keys'].writerow
+    left_write=writers['left_only'].writerow
+    right_write=writers['right_only'].writerow
+    processed=0
+    for a,b,differences in differences_for_pairs(pairs,column_count):
+        if on_row is not None:on_row(processed,False)
+        processed+=1
+        if b is None:
+            left_write(json.loads(a[0]))
+            stats['left_only'] += 1
+        elif a is None:
+            right_write(json.loads(b[0]))
+            stats['right_only'] += 1
+        else:
+            stats['matched_keys'] += 1
+            key_text=a[0].decode('utf-8')
+            matched_write([key_text])
+            changed=False
+            raw_rows=[];difference_rows=[];pending_bytes=0
+            for index,av,bv in differences:
+                name,allowed,rule=policies[index]
+                raw_rows.append((key_text,name,av,bv,int(av is None),int(bv is None)))
+                pending_bytes+=len(av or '')+len(bv or '')
+                if allowed and (av,bv) in allowed:
+                    stats['override_equivalent_cells']+=1
+                elif rule and equivalent(av,bv,rule):
+                    stats['rule_equivalent_cells']+=1
+                else:
+                    changed=True
+                    columns[name]+=1
+                    stats['changed_cells']+=1
+                    difference_rows.append((key_text,name,'[NULL]' if av is None else '[NULL] (text)' if av=='[NULL]' else av,'[NULL]' if bv is None else '[NULL] (text)' if bv=='[NULL]' else bv))
+                if len(raw_rows)>=1024 or pending_bytes>=1024*1024:
+                    raw_write(raw_rows);difference_write(difference_rows)
+                    raw_rows.clear();difference_rows.clear();pending_bytes=0
+            if raw_rows:raw_write(raw_rows);difference_write(difference_rows)
+            stats['changed_rows' if changed else 'equal_rows']+=1
+        if on_row is not None:on_row(processed,True)
+        elif processed&1023==0:check_cancel(cancel_file)
+    return processed
+
+
 def compare(args):
     if getattr(args,'checkpoint_dir',None):
         from checkpoints import lock
@@ -499,7 +563,7 @@ def _compare(args):
     csv.field_size_limit(args.max_field_mb * 1024 * 1024)
     if not getattr(args,'memory_mb',0):
         from runtime_resources import size_worker
-        sizing=size_worker(dict(columns=read_header(args.left,args.delimiter,args.encoding)[0]),args.temp_dir or Path(args.left).parent)
+        sizing=size_worker(dict(columns=read_header(args.left,*dialect(args,'left'))[0]),args.temp_dir or Path(args.left).parent)
         args.memory_mb=sizing['memory_mb']
         args.native_batch_bytes=sizing['native_batch_bytes']
         args.io_buffer_bytes=sizing['io_buffer_bytes']
@@ -510,8 +574,8 @@ def _compare(args):
     progress(args, 'Validating configuration')
     # CSV cells can exceed Python's small default field limit.
     csv.field_size_limit(args.max_field_mb * 1024 * 1024)
-    left_names, left_header_changes = read_header(args.left, args.delimiter, args.encoding)
-    right_names, right_header_changes = read_header(args.right, args.delimiter, args.encoding)
+    left_names, left_header_changes = read_header(args.left, *dialect(args, 'left'))
+    right_names, right_header_changes = read_header(args.right, *dialect(args, 'right'))
     aligned, layout_changes = align_headers(dict(left=left_names, right=right_names), getattr(args, 'column_headers', None))
     left_names, right_names = aligned['left'], aligned['right']
     common = common_headers(aligned)
@@ -541,6 +605,9 @@ def _compare(args):
     if checkpoint_dir:
         from checkpoints import validate
         configuration=dict(keys=args.keys,headers=aligned,canonical=canonical,excluded=sorted(k.decode('utf-8') for k in args.excluded_keys),overrides=overrides,rules=rules,duplicate_policy=args.duplicate_policy,delimiter=args.delimiter,encoding=args.encoding,allow_empty_keys=args.allow_empty_keys)
+        # Effective per-file settings, so equivalent shared and per-file configurations resume each other.
+        effective={side:list(dialect(args,side)) for side in ('left','right')}
+        if any(value!=[args.delimiter,args.encoding,True] for value in effective.values()):configuration['dialects']=effective
         validate(checkpoint_dir,args,configuration,lambda message:progress(args,message))
     # Exclusive creation prevents accidental replacement of previous reports.
     out = Path(args.output)
@@ -557,93 +624,72 @@ def _compare(args):
     columns = {name: 0 for name in canonical if name not in args.keys}
     with contextlib.ExitStack() as resources, (contextlib.nullcontext(str(checkpoint_dir)) if checkpoint_dir else tempfile.TemporaryDirectory(prefix='csv-compare-', dir=args.temp_dir)) as work:
         temp = Path(work)
-        joined=None
-        if args.comparison_engine=='auto':
-            from hash_join import try_build
-            joined=try_build(args,left_names,right_names,canonical,temp,stats,progress)
-            if joined is not None:resources.callback(joined.close)
-        if joined is None:
-            left_result, right_result = sort_inputs(args, left_names, right_names, canonical, temp)
-            left_paths, stats['left_rows'], stats['left_excluded_rows'] = left_result
-            right_paths, stats['right_rows'], stats['right_excluded_rows'] = right_result
-        stats['execution_engine']='hash' if joined is not None else 'sort'
-        if checkpoint_dir:
-            from checkpoints import verify_sources
-            verify_sources(checkpoint_dir)
-        progress(args, 'Comparing keys', rows=0)
-        with contextlib.ExitStack() as stack:
-            writers = {}
-            for name, fields in [('differences', ['key_json', 'column', 'left_value', 'right_value']),
-                                 ('left_only', args.keys), ('right_only', args.keys),
-                                 ('matched_keys', ['key_json']),
-                                 ('raw_differences', ['key_json','column','left_value','right_value','left_null','right_null']),
-                                 ('duplicate_keys', ['side', 'key_json', 'occurrences', 'skipped_rows', 'kept_occurrence'])]:
-                stream = stack.enter_context(open(out / f'{name}.csv', 'w', encoding='utf-8', newline='', buffering=getattr(args,'io_buffer_bytes',4*1024*1024)))
-                writers[name] = csv.writer(stream)
-                writers[name].writerow(fields)
-            if joined is not None:
-                pairs=joined.iter_pairs(stats,writers['duplicate_keys'],args)
-            else:
-                left_merge = stack.enter_context(contextlib.closing(merge(left_paths)))
-                right_merge = stack.enter_context(contextlib.closing(merge(right_paths)))
-                left = unique(left_merge, 'left',getattr(args,'diagnostics_file',None),args,stats,writers['duplicate_keys'])
-                right = unique(right_merge, 'right',getattr(args,'diagnostics_file',None),args,stats,writers['duplicate_keys'])
-                pairs=merge_pairs(left,right)
-            from mismatch_scan import differences_for_pairs
-            processed = 0
-            batch_size = args.compare_batch_size
-            batch_start = last_update = time.monotonic()
-            policies=[(name,override_lookup.get(name),rule_lookup.get(name)) for name in canonical]
-            raw_write=writers['raw_differences'].writerows
-            difference_write=writers['differences'].writerows
-            matched_write=writers['matched_keys'].writerow
-            for a,b,differences in differences_for_pairs(pairs,len(canonical)):
-                if processed % batch_size == 0:
-                    batch_start = time.monotonic()
-                    progress(args, 'Comparison batch started', stage='compare', batch=processed//batch_size+1, rows=processed, max_keys=batch_size, status='ongoing')
-                processed += 1
-                if b is None:
-                    writers['left_only'].writerow(json.loads(a[0]))
-                    stats['left_only'] += 1
-                elif a is None:
-                    writers['right_only'].writerow(json.loads(b[0]))
-                    stats['right_only'] += 1
+        policies=[(name,override_lookup.get(name),rule_lookup.get(name)) for name in canonical]
+        # Large inputs use the parallel partitioned engine; a resumed disk sort keeps its saved batches.
+        from partitioned import should_use, run as run_partitioned
+        resuming_sort=any((temp/(side+'.json')).exists() for side in ('left','right'))
+        if not resuming_sort and should_use(args):
+            stats['execution_engine']='partitioned'
+            run_partitioned(args,left_names,right_names,canonical,temp,stats,columns,out,policies,progress)
+            if checkpoint_dir:
+                from checkpoints import verify_sources
+                verify_sources(checkpoint_dir)
+        else:
+            joined=None
+            if args.comparison_engine=='auto':
+                from hash_join import try_build
+                joined=try_build(args,left_names,right_names,canonical,temp,stats,progress)
+                if joined is not None:resources.callback(joined.close)
+            if joined is None:
+                left_result, right_result = sort_inputs(args, left_names, right_names, canonical, temp)
+                left_paths, stats['left_rows'], stats['left_excluded_rows'] = left_result
+                right_paths, stats['right_rows'], stats['right_excluded_rows'] = right_result
+            stats['execution_engine']='hash' if joined is not None else 'sort'
+            if checkpoint_dir:
+                from checkpoints import verify_sources
+                verify_sources(checkpoint_dir)
+            progress(args, 'Comparing keys', rows=0)
+            with contextlib.ExitStack() as stack:
+                writers = {}
+                for name, fields in [('differences', ['key_json', 'column', 'left_value', 'right_value']),
+                                     ('left_only', args.keys), ('right_only', args.keys),
+                                     ('matched_keys', ['key_json']),
+                                     ('raw_differences', ['key_json','column','left_value','right_value','left_null','right_null']),
+                                     ('duplicate_keys', ['side', 'key_json', 'occurrences', 'skipped_rows', 'kept_occurrence'])]:
+                    stream = stack.enter_context(open(out / f'{name}.csv', 'w', encoding='utf-8', newline='', buffering=getattr(args,'io_buffer_bytes',4*1024*1024)))
+                    writers[name] = csv.writer(stream)
+                    writers[name].writerow(fields)
+                if joined is not None:
+                    pairs=joined.iter_pairs(stats,writers['duplicate_keys'],args)
                 else:
-                    stats['matched_keys'] += 1
-                    key_text=a[0].decode('utf-8')
-                    matched_write([key_text])
-                    changed=False
-                    raw_rows=[];difference_rows=[];pending_bytes=0
-                    for index,av,bv in differences:
-                        name,allowed,rule=policies[index]
-                        raw_rows.append((key_text,name,av,bv,int(av is None),int(bv is None)))
-                        pending_bytes+=len(av or '')+len(bv or '')
-                        if allowed and (av,bv) in allowed:
-                            stats['override_equivalent_cells']+=1
-                        elif rule and equivalent(av,bv,rule):
-                            stats['rule_equivalent_cells']+=1
-                        else:
-                            changed=True
-                            columns[name]+=1
-                            stats['changed_cells']+=1
-                            difference_rows.append((key_text,name,'[NULL]' if av is None else '[NULL] (text)' if av=='[NULL]' else av,'[NULL]' if bv is None else '[NULL] (text)' if bv=='[NULL]' else bv))
-                        if len(raw_rows)>=1024 or pending_bytes>=1024*1024:
-                            raw_write(raw_rows);difference_write(difference_rows)
-                            raw_rows.clear();difference_rows.clear();pending_bytes=0
-                    if raw_rows:raw_write(raw_rows);difference_write(difference_rows)
-                    stats['changed_rows' if changed else 'equal_rows']+=1
-                if processed%64==0:
-                    check_cancel(getattr(args,'cancel_file',None))
-                    now=time.monotonic()
-                    if now-last_update>=2:
-                        progress(args,'Comparison progress',stage='compare',rows=processed,changed_cells=stats['changed_cells'],status='ongoing')
-                        last_update=now
-                if processed % batch_size == 0:
-                    progress(args, 'Comparison batch complete', stage='compare', batch=(processed-1)//batch_size+1, batch_keys=batch_size, rows=processed, changed_cells=stats['changed_cells'], status='completed', elapsed_seconds=round(time.monotonic()-batch_start, 3))
-            if processed%batch_size:
-                progress(args, 'Comparison batch complete', stage='compare', batch=(processed-1)//batch_size+1, batch_keys=processed%batch_size, rows=processed, changed_cells=stats['changed_cells'], status='completed', elapsed_seconds=round(time.monotonic()-batch_start,3))
-            progress(args, 'Comparing keys', stage='compare', rows=processed, completed_batches=(processed+batch_size-1)//batch_size, status='completed')
-            if joined is not None:joined.close()
+                    left_merge = stack.enter_context(contextlib.closing(merge(left_paths)))
+                    right_merge = stack.enter_context(contextlib.closing(merge(right_paths)))
+                    left = unique(left_merge, 'left',getattr(args,'diagnostics_file',None),args,stats,writers['duplicate_keys'])
+                    right = unique(right_merge, 'right',getattr(args,'diagnostics_file',None),args,stats,writers['duplicate_keys'])
+                    pairs=merge_pairs(left,right)
+                processed = 0
+                batch_size = args.compare_batch_size
+                batch_start = last_update = time.monotonic()
+                def on_row(count, finished):
+                    nonlocal batch_start, last_update
+                    if not finished:
+                        if count % batch_size == 0:
+                            batch_start = time.monotonic()
+                            progress(args, 'Comparison batch started', stage='compare', batch=count//batch_size+1, rows=count, max_keys=batch_size, status='ongoing')
+                        return
+                    if count%64==0:
+                        check_cancel(getattr(args,'cancel_file',None))
+                        now=time.monotonic()
+                        if now-last_update>=2:
+                            progress(args,'Comparison progress',stage='compare',rows=count,changed_cells=stats['changed_cells'],status='ongoing')
+                            last_update=now
+                    if count % batch_size == 0:
+                        progress(args, 'Comparison batch complete', stage='compare', batch=(count-1)//batch_size+1, batch_keys=batch_size, rows=count, changed_cells=stats['changed_cells'], status='completed', elapsed_seconds=round(time.monotonic()-batch_start, 3))
+                processed=compare_pair_stream(pairs,len(canonical),policies,writers,stats,columns,on_row)
+                if processed%batch_size:
+                    progress(args, 'Comparison batch complete', stage='compare', batch=(processed-1)//batch_size+1, batch_keys=processed%batch_size, rows=processed, changed_cells=stats['changed_cells'], status='completed', elapsed_seconds=round(time.monotonic()-batch_start,3))
+                progress(args, 'Comparing keys', stage='compare', rows=processed, completed_batches=(processed+batch_size-1)//batch_size, status='completed')
+                if joined is not None:joined.close()
 
     if stats['left_duplicate_keys'] or stats['right_duplicate_keys']:
         progress(args, 'WARNING: duplicate keys found; extra rows skipped', policy=args.duplicate_policy, left_skipped=stats['left_duplicate_rows_skipped'], right_skipped=stats['right_duplicate_rows_skipped'])
@@ -670,7 +716,8 @@ def parser():
     p.add_argument('--keys', nargs='+', required=True)
     p.add_argument('--output', required=True, help='New report directory; must not exist')
     p.add_argument('--memory-mb', type=int, default=0, help='Optional comparison budget in MB; 0 selects from available system RAM')
-    p.add_argument('--engine', dest='comparison_engine', choices=('auto','sort'), default='auto', help='Try an exact in-memory hash join, or always use compressed disk sorting')
+    p.add_argument('--engine', dest='comparison_engine', choices=('auto','sort','partitioned'), default='auto', help='auto: parallel partitioned engine for large inputs, else in-memory hash join with disk-sort fallback')
+    p.add_argument('--workers', dest='parallel_workers', type=int, default=0, help='Parallel worker processes for the partitioned engine; 0 uses the CPU count (max 16)')
     p.add_argument('--sort-workers', type=int, choices=(1,2), default=1, help='Parallel file-sorting processes; memory-mb is split between them')
     p.add_argument('--read-batch-size', type=int, default=100000)
     p.add_argument('--compare-batch-size', type=int, default=10000)
@@ -680,6 +727,8 @@ def parser():
     p.add_argument('--fan-in', type=int, default=16, help='Maximum sorted streams per merge')
     p.add_argument('--delimiter', default=',')
     p.add_argument('--encoding', default='utf-8-sig')
+    p.add_argument('--right-delimiter', help='Delimiter for the right file when it differs from --delimiter')
+    p.add_argument('--no-header', action='store_true', help='Files have no header row; columns are named column1…columnN')
     p.add_argument('--max-field-mb', type=int, default=64)
     p.add_argument('--allow-empty-keys', action='store_true')
     p.add_argument('--ignore-columns', nargs='+', default=[], help='Column names excluded from value comparison')
@@ -696,6 +745,8 @@ def main():
         p.error('Memory/field limits must be positive; fan-in must be between 2 and 64')
     if len(args.delimiter) != 1:
         p.error('Delimiter must be one character')
+    if args.right_delimiter:
+        args.dialects = {'left': dict(delimiter=args.delimiter), 'right': dict(delimiter=args.right_delimiter)}
     try:
         stats = compare(args)
     except (ValueError, OSError, csv.Error, UnicodeError) as error:

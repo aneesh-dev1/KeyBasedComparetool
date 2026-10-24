@@ -84,7 +84,7 @@ const originalPanel=panel;panel=function(name){originalPanel(name);if(name==='ke
 $('navPreview').addEventListener('click',()=>{$('keysPanel').classList.toggle('preview-expanded',previewExpanded);});
 
 // Read server files directly; browser transfers remain resumable and independent.
-uploadedSourcesBody.insertAdjacentHTML('afterbegin','<div class="source-mode" role="group" aria-label="File source"><button id="computerSource" class="subtle" aria-pressed="true">Upload from computer</button><button id="serverSource" class="subtle" aria-pressed="false">Use server paths</button></div><div id="serverSourceFields" class="server-source-workspace" hidden><div class="server-path-grid"><label class="server-path-card"><span class="file-top"><span class="label">CHAMPION DATASET</span><span class="file-symbol">A</span></span><span class="server-path-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="3" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg></span><span class="server-path-copy"><strong>Champion server path</strong><small>CSV, Excel, Parquet or JSON</small></span><input id="leftServerPath" aria-label="Champion server path" placeholder="/shared/input/champion.csv" autocomplete="off"></label><label class="server-path-card"><span class="file-top"><span class="label">CHALLENGER DATASET</span><span class="file-symbol">B</span></span><span class="server-path-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="3" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg></span><span class="server-path-copy"><strong>Challenger server path</strong><small>CSV, Excel, Parquet or JSON</small></span><input id="rightServerPath" aria-label="Challenger server path" placeholder="/shared/input/challenger.parquet" autocomplete="off"></label></div><div class="server-source-actions"><span class="server-source-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span id="serverSourceHelp" role="status"></span></span><button id="useServerSources" class="primary">Load server files →</button></div></div>');
+uploadedSourcesBody.insertAdjacentHTML('afterbegin','<div class="source-mode" role="group" aria-label="File source"><button id="computerSource" class="subtle" aria-pressed="true">Upload from computer</button><button id="serverSource" class="subtle" aria-pressed="false">Use server paths</button></div><div id="serverSourceFields" class="server-source-workspace" hidden><div class="server-path-grid"><label class="server-path-card"><span class="file-top"><span class="label">CHAMPION DATASET</span><span class="file-symbol">A</span></span><span class="server-path-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="3" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg></span><span class="server-path-copy"><strong>Champion server path</strong><small>CSV, DAT, Excel, Parquet or JSON</small></span><input id="leftServerPath" aria-label="Champion server path" placeholder="/shared/input/champion.csv" autocomplete="off"></label><label class="server-path-card"><span class="file-top"><span class="label">CHALLENGER DATASET</span><span class="file-symbol">B</span></span><span class="server-path-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="3" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg></span><span class="server-path-copy"><strong>Challenger server path</strong><small>CSV, DAT, Excel, Parquet or JSON</small></span><input id="rightServerPath" aria-label="Challenger server path" placeholder="/shared/input/challenger.parquet" autocomplete="off"></label></div><div class="server-source-actions"><span class="server-source-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span id="serverSourceHelp" role="status"></span></span><button id="useServerSources" class="primary">Load server files →</button></div></div>');
 $('uploadPanel').querySelector('.enterprise-setup-actions').insertBefore($('useServerSources'),$('upload'));
 $('useServerSources').hidden=true;
 let sourceMode='computer';
@@ -107,7 +107,7 @@ api('/api/source-options').then(config=>{serverFilesEnabled=config.enabled;serve
 $('useServerSources').onclick=async()=>{
   const button=$('useServerSources');button.disabled=true;clearError();
   try{
-    const result=await api('/api/server-sources',{files:{left:$('leftServerPath').value,right:$('rightServerPath').value},delimiter:selectedDelimiter(),encoding:$('encoding').value});
+    const result=await api('/api/server-sources',{files:{left:$('leftServerPath').value,right:$('rightServerPath').value},delimiter:selectedDelimiter(),encoding:$('encoding').value,header:$('headerRow').value});
     if(result.kind==='json'){
       for(const side of ['left','right'])files[side]={name:result.names[side]};
       $('jsonLeft').value=result.documents.left;$('jsonRight').value=result.documents.right;resetJsonDiscovery();invalidateJson();panel('jsonPanel');return;
@@ -175,7 +175,7 @@ if($('shortcutPreference')){$('shortcutPreference').value='on';$('shortcutPrefer
 // Full-app guide: it explains unavailable phases without creating sample jobs.
 const tourSteps=[
  ['navNew','Compare files','Start a new comparison, or continue your last selection.'],
- ['uploadedSources','Choose file sources','Upload CSV, Excel, Parquet or JSON from your computer, or read files inside configured server directories.'],
+ ['uploadedSources','Choose file sources','Upload CSV, DAT, Excel, Parquet or JSON from your computer, or read files inside configured server directories.'],
  ['quickProfile','Profile templates','Save and reuse header mappings, keys, scope, overrides and value rules from Profile templates.'],
  ['uploadProject','Attach a project','Choose a shared project for this comparison, or create one here.'],
  ['navFiles','Files & headers','Files and editable headers share this stage. Expand the file summary to review sources. Only common headers proceed.'],
@@ -443,13 +443,13 @@ for(const [side,label] of [['left','Champion'],['right','Challenger']]){
  const card=$(side+'Card');
  if(!card.querySelector('.file-drop-icon')){
   const icon=document.createElement('span');icon.className='file-drop-icon';icon.innerHTML=lucide('upload');
-  const types=document.createElement('span');types.className='file-type-line';types.textContent='CSV · Excel · Parquet · JSON';
+  const types=document.createElement('span');types.className='file-type-line';types.textContent='CSV · DAT · Excel · Parquet · JSON';
   card.querySelector('.file-top').after(icon);card.querySelector('.muted').after(types);
   card.querySelector('.label').textContent=label.toUpperCase()+' DATASET';
   const picker=card.querySelector('input[type=file]');
   const name=card.querySelector('strong');
-  if(picker)picker.setAttribute('aria-label',`Choose ${label.toLowerCase()} CSV, Excel, Parquet or JSON`);
-  if(name&&!files[side])name.textContent=`Choose ${label.toLowerCase()} CSV, Excel, Parquet or JSON`;
+  if(picker)picker.setAttribute('aria-label',`Choose ${label.toLowerCase()} CSV, DAT, Excel, Parquet or JSON`);
+  if(name&&!files[side])name.textContent=`Choose ${label.toLowerCase()} file`;
   const arrow=card.querySelector('.browse>span');if(arrow)arrow.innerHTML=lucide('chevron');
  }
 }
@@ -459,7 +459,7 @@ const exactPill=$('uploadPanel').querySelector('.section-title>.pill');
 exactPill?.remove();
 const uploadSettings=$('uploadPanel').querySelector('.settings');
 const uploadFormatSettings=document.createElement('details');uploadFormatSettings.id='uploadFormatSettings';uploadFormatSettings.className='upload-format-settings';
-uploadFormatSettings.innerHTML=`<summary aria-label="File settings" title="CSV delimiter and encoding">${lucide('sliders')}</summary><div class="file-settings-menu"><div class="file-settings-heading"><span>${lucide('sliders')}</span><div><strong>CSV file settings</strong><small>Delimiter and text encoding</small></div></div><p>Used only when a selected source is CSV.</p></div>`;
+uploadFormatSettings.innerHTML=`<summary aria-label="Text file settings" title="Delimiter, encoding and header row">${lucide('sliders')}</summary><div class="file-settings-menu"><div class="file-settings-heading"><span>${lucide('sliders')}</span><div><strong>Text file settings</strong><small>CSV, DAT, TXT and TSV files</small></div></div><p>Auto-detect reads the first 1 MB of each file. You can review and change the result per file on the next step.</p></div>`;
 $('uploadPanel').querySelector('.enterprise-setup-actions').prepend(uploadFormatSettings);
 uploadFormatSettings.querySelector('.file-settings-menu').append(uploadSettings);
 uploadFormatSettings.hidden=!!job&&['ready','queued','running','complete'].includes(job.state);
@@ -583,7 +583,7 @@ new MutationObserver(syncStepProgress).observe($('comparisonFlow'),{subtree:true
  // The profile note only appears once a template is chosen or applied.
  const profileStatus=$('quickProfileStatus'),syncProfileStatus=()=>profileStatus.classList.toggle('is-idle',/^(Applied after both files|No template selected)/.test(profileStatus.textContent));
  new MutationObserver(syncProfileStatus).observe(profileStatus,{childList:true,characterData:true,subtree:true});syncProfileStatus();
- for(const [summary,label] of [[$('uploadFormatSettings').querySelector('summary'),'CSV settings'],[$('uploadPanel').querySelector('.upload-profile>summary'),'Profile templates']]){
+ for(const [summary,label] of [[$('uploadFormatSettings').querySelector('summary'),'Text settings'],[$('uploadPanel').querySelector('.upload-profile>summary'),'Profile templates']]){
   summary.removeAttribute('title');summary.prepend(Object.assign(document.createElement('span'),{className:'ds-action-label',textContent:label}));
  }
  setLucide($('headerSearchToggle'),'search');
@@ -1070,4 +1070,99 @@ function redesignAnalysis(){
  builder.prepend(step(1,'Choose columns'));
  builder.querySelector('.rule-options')?.before(step(2,'Choose how values are normalised'));
  $('addValueRule').className='primary';$('addValueRule').prepend(lucideNode('plus'));
+}
+
+// Delimited text files: each header card shows the delimiter, encoding and header row used for that file,
+// detected or chosen, and can change them before the comparison starts. Header-less extracts can take the
+// other file's column names in one step.
+{
+ const delimiterNames={',':'Comma (,)','|':'Pipe (|)','\t':'Tab',';':'Semicolon (;)','\x01':'Ctrl-A (\\x01)','\x1f':'Unit separator','~':'Tilde (~)','^':'Caret (^)'};
+ const encodingNames={'utf-8-sig':'UTF-8','utf-16':'UTF-16','cp1252':'Windows-1252'};
+ const fileFormat=side=>job?.files?.[side]?.format||'csv';
+ function dialectEditor(side){
+  const form=document.createElement('form');form.className='ds-dialect-editor';form.hidden=true;
+  const option=(value,label)=>Object.assign(document.createElement('option'),{value,textContent:label});
+  const field=(label,select)=>{const wrap=document.createElement('label');wrap.append(label,select);return wrap;};
+  const delimiter=document.createElement('select');delimiter.append(...Object.entries(delimiterNames).map(([value,label])=>option(value,label)),option('custom','Custom…'));
+  const encoding=document.createElement('select');encoding.append(...Object.entries(encodingNames).map(([value,label])=>option(value,label)));
+  const header=document.createElement('select');header.append(option('yes','Header'),option('no','Data'));
+  const custom=Object.assign(document.createElement('input'),{maxLength:1,autocomplete:'off',spellcheck:false,placeholder:'^',className:'ds-dialect-custom'});custom.setAttribute('aria-label','Custom delimiter character');
+  const actions=document.createElement('div');actions.className='ds-dialect-actions';
+  const cancel=Object.assign(document.createElement('button'),{type:'button',className:'subtle',textContent:'Cancel'});
+  const apply=Object.assign(document.createElement('button'),{type:'submit',className:'primary',textContent:'Apply'});
+  const status=document.createElement('p');status.className='ds-dialect-status';status.setAttribute('role','status');
+  actions.append(status,cancel,apply);
+  const delimiterField=field('Delimiter',delimiter);delimiterField.append(custom);
+  form.append(delimiterField,field('Encoding',encoding),field('First row',header),actions);
+  const syncCustom=()=>{custom.hidden=delimiter.value!=='custom';};
+  delimiter.addEventListener('change',()=>{syncCustom();if(!custom.hidden)custom.focus();});
+  form.load=chosen=>{
+   const known=chosen.delimiter in delimiterNames;delimiter.value=known?chosen.delimiter:'custom';custom.value=known?'':chosen.delimiter;
+   encoding.value=chosen.encoding in encodingNames?chosen.encoding:'utf-8-sig';header.value=chosen.header===false?'no':'yes';status.textContent='';syncCustom();
+   for(const select of [delimiter,encoding,header])select.dispatchEvent(new Event('change'));
+  };
+  cancel.addEventListener('click',()=>setDialectEditing(side,false));
+  form.addEventListener('keydown',event=>{if(event.key==='Escape'&&!openSelectWidget){event.preventDefault();setDialectEditing(side,false);}});
+  form.addEventListener('submit',async event=>{
+   event.preventDefault();
+   const value=delimiter.value==='custom'?custom.value:delimiter.value;
+   if([...value].length!==1||['\r','\n','\0','"'].includes(value)){status.textContent='Enter one delimiter character. Line breaks, null and double quotes are not supported.';custom.focus();return;}
+   apply.disabled=true;status.textContent='Reading column names…';
+   const other=side==='left'?'right':'left',kept=headerDirty&&headerDraftJob===job.id?headerDraft[other]:null;
+   try{
+    job=await api(endpoint('/dialect'),{side,delimiter:value,encoding:encoding.value,header:header.value==='yes'});
+    headerDraftJob=null;hydratedId=null;$('headerChangesTable').dataset.job='';
+    setDialectEditing(side,false);hydrate();renderHeaders();
+    // Unsaved renames on the other file survive a dialect change on this one.
+    if(kept&&kept.length===headerDraft[other].length){headerDraft[other]=kept;headerDirty=true;renderHeaders();}
+    syncNavigation();
+   }catch(error){status.textContent=error.message;}
+   finally{apply.disabled=false;}
+  });
+  return form;
+ }
+ const parts={};
+ for(const side of ['left','right']){
+  const section=$(side==='left'?'headerLeftList':'headerRightList').closest('section');
+  const strip=document.createElement('div');strip.className='ds-dialect';
+  strip.innerHTML=`<span class="ds-dialect-icon">${lucide('file-text')}</span><span class="ds-dialect-summary"></span><span class="ds-dialect-badge">${lucide('sparkle')}Detected</span><button type="button" class="ds-dialect-change">${lucide('pencil')}<span>Change</span></button>`;
+  const hint=document.createElement('div');hint.className='ds-dialect-hint';hint.hidden=true;
+  hint.innerHTML=`${lucide('info')}<span class="ds-dialect-hint-text"></span><button type="button" class="ds-dialect-borrow"></button>`;
+  const editor=dialectEditor(side);
+  section.querySelector('h3').after(strip,editor,hint);
+  for(const select of editor.querySelectorAll('select'))enhanceSelect(select);
+  strip.querySelector('.ds-dialect-change').addEventListener('click',()=>setDialectEditing(side,editor.hidden));
+  hint.querySelector('.ds-dialect-borrow').addEventListener('click',()=>{
+   const other=side==='left'?'right':'left';headerDraft[side]=[...headerDraft[other]];headerDirty=true;headerPage=0;renderHeaders();
+  });
+  parts[side]={section,strip,hint,editor};
+ }
+ function setDialectEditing(side,open){
+  const {section,strip,editor}=parts[side];
+  if(open)editor.load(job.dialects?.[side]||{delimiter:job.delimiter,encoding:job.encoding,header:true});
+  editor.hidden=!open;section.classList.toggle('is-editing-dialect',open);
+  strip.querySelector('.ds-dialect-change').setAttribute('aria-expanded',String(open));
+  if(open)editor.querySelector('.tu-select-trigger')?.focus();else strip.querySelector('.ds-dialect-change').focus({preventScroll:true});
+ }
+ function renderDialects(){
+  if(!job?.files)return;
+  for(const side of ['left','right']){
+   const {strip,hint,editor}=parts[side],format=fileFormat(side),chosen=job.dialects?.[side],text=format==='csv'&&chosen;
+   const other=side==='left'?'right':'left',otherNumber=side==='left'?2:1;
+   strip.querySelector('.ds-dialect-summary').textContent=format==='excel'?`Excel worksheet · ${job.files[side].sheet||''}`:format==='parquet'?'Parquet · typed columns':
+    chosen?`${delimiterNames[chosen.delimiter]||`Custom (${chosen.delimiter})`} · ${encodingNames[chosen.encoding]||chosen.encoding} · ${chosen.header===false?'No header row':'Header row'}`:'Delimited text';
+   strip.querySelector('.ds-dialect-badge').hidden=!(text&&chosen.detected?.length);
+   strip.querySelector('.ds-dialect-badge').title=text&&chosen.detected?.length?'Detected from the first 1 MB: '+chosen.detected.join(', '):'';
+   strip.querySelector('.ds-dialect-change').hidden=!text||job.state!=='ready';
+   if(!text||job.state!=='ready')editor.hidden=true;
+   const headerless=text&&chosen.header===false,sameWidth=headerDraft?.[side]?.length===headerDraft?.[other]?.length;
+   const borrowed=headerless&&sameWidth&&headerDraft[side].every((name,index)=>name===headerDraft[other][index]);
+   hint.hidden=!headerless||borrowed;
+   hint.querySelector('.ds-dialect-hint-text').textContent=sameWidth?'No header row, so columns are numbered.':`No header row, so columns are numbered. Rename them to match File ${otherNumber}.`;
+   const borrow=hint.querySelector('.ds-dialect-borrow');borrow.hidden=!sameWidth||job.state!=='ready';borrow.textContent=`Use File ${otherNumber} names`;
+  }
+ }
+ const renderHeadersWithoutDialects=renderHeaders;
+ renderHeaders=function(){renderHeadersWithoutDialects();renderDialects();};
+ if(job)renderDialects();
 }

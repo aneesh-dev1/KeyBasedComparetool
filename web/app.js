@@ -24,6 +24,7 @@ function syncCustomDelimiter(){
 function selectedDelimiter(){
   const value=$('delimiter').value;
   if(value==='tab')return '\t';
+  if(value==='ctrl-a')return '\x01';
   if(value!=='custom')return value;
   const custom=$('customDelimiter').value;
   if([...custom].length!==1||['\r','\n','\0','"'].includes(custom))throw new Error('Enter one custom delimiter character. Line breaks, null, and double quotes are not supported.');
@@ -144,7 +145,7 @@ function choose(side, file) {
   if (uploading || (job && job.state!=='uploading')) return;
   if(file&&!/\.(csv|xlsx|xlsm|json|parquet)$/i.test(file.name)){showError('Choose CSV, Parquet, JSON, .xlsx or .xlsm. Save older .xls files as .xlsx first.');return;}
   files[side] = file || null;
-  $(`${side}Name`).textContent = file ? file.name : `Choose ${side==='left'?'original':'updated'} CSV, Excel, Parquet or JSON`;
+  $(`${side}Name`).textContent = file ? file.name : `Choose ${side==='left'?'champion':'challenger'} file`;
   $(`${side}Size`).textContent = file ? bytes(file.size) : 'Click to browse or drop a file here';
   $('upload').disabled = !files.left || !files.right;
   updateDetectedFiles();
@@ -207,7 +208,7 @@ function showPausedUpload(){
 }
 $('upload').addEventListener('click', async () => {
   if(uploading)return;
-  if(files.left&&files.right){const left=detectedFileType(files.left),right=detectedFileType(files.right);if((left==='JSON')!==(right==='JSON')){showError('Choose two JSON files, or a pair of CSV/Excel/Parquet files. JSON cannot be compared to a table.');return;}if(left==='JSON'){await loadUnifiedJson();return;}}
+  if(files.left&&files.right){const left=detectedFileType(files.left),right=detectedFileType(files.right);if((left==='JSON')!==(right==='JSON')){showError('Choose two JSON files, or a pair of CSV/DAT/Excel/Parquet files. JSON cannot be compared to a table.');return;}if(left==='JSON'){await loadUnifiedJson();return;}}
   let delimiter;
   try{delimiter=selectedDelimiter();}catch(error){showError(error);return;}
   clearError(); uploading=true;pauseUploadRequested=false;lastUploadPaint=0;lastUploadAnnouncement=0;uploadPaintSide=null;uploadController=new AbortController();
@@ -215,13 +216,13 @@ $('upload').addEventListener('click', async () => {
   $('pauseUpload').hidden=false;$('pauseUpload').disabled=false;$('pauseUpload').textContent='Pause upload';$('uploadActivity').hidden=false;$('uploadActivityText').textContent='Preparing upload…';
   syncNavigation(); $('upload').disabled=true;$('upload').textContent='Uploading…';$('reset').disabled=true;
   for(const side of ['left','right']) $(`${side}File`).disabled = true;
-  $('delimiter').disabled = $('encoding').disabled = true;syncCustomDelimiter();
+  $('delimiter').disabled = $('encoding').disabled = $('headerRow').disabled = true;syncCustomDelimiter();
   try {
     if (!job) {
       const space=await api('/api/preflight',{bytes:files.left.size+files.right.size},undefined,uploadController.signal);
       if(!space.can_upload)throw Error('Insufficient server disk space for the uploaded copies. Use Storage & queue to clean up old jobs.');
       if(space.free<space.suggested_free_bytes&&!confirm(`${bytes(space.free)} free; at least ${bytes(space.suggested_free_bytes)} is suggested. Reports may need more. Continue uploading?`))return;
-      job = await api('/api/jobs',{delimiter,encoding:$('encoding').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))},undefined,uploadController.signal);
+      job = await api('/api/jobs',{delimiter,encoding:$('encoding').value,header:$('headerRow').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))},undefined,uploadController.signal);
       localStorage.setItem('keywise-job',job.id);
     }
     await attachUploadProject(job.id,uploadController.signal);
@@ -262,7 +263,7 @@ $('upload').addEventListener('click', async () => {
     $('pauseUpload').hidden=true;
     $('uploadActivity').hidden=job?.state!=='uploading';
     if(job?.state==='uploading')showPausedUpload();
-    if(!job) $('delimiter').disabled=$('encoding').disabled=false;syncCustomDelimiter();syncNavigation();
+    if(!job) $('delimiter').disabled=$('encoding').disabled=$('headerRow').disabled=false;syncCustomDelimiter();syncNavigation();
   }
 });
 function renderKeys() {
@@ -490,10 +491,11 @@ async function refresh() {
   } else if(['error','cancelled'].includes(job.state)){
     if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);await loadDiagnostics();}
   } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel'].includes(currentView)){
-    panel('uploadPanel');$('delimiter').disabled=$('encoding').disabled=true;
-    if(['\t',',',';','|'].includes(job.delimiter))$('delimiter').value=job.delimiter==='\t'?'tab':job.delimiter;
+    panel('uploadPanel');$('delimiter').disabled=$('encoding').disabled=$('headerRow').disabled=true;
+    const named={'\t':'tab','\x01':'ctrl-a'}[job.delimiter];
+    if(named||['auto',',',';','|'].includes(job.delimiter))$('delimiter').value=named||job.delimiter;
     else{$('delimiter').value='custom';$('customDelimiter').value=job.delimiter;}
-    $('encoding').value=job.encoding;syncCustomDelimiter();$('delimiter').dispatchEvent(new Event('change'));
+    $('encoding').value=job.encoding;$('headerRow').value=job.header||'yes';syncCustomDelimiter();$('delimiter').dispatchEvent(new Event('change'));
   }
 }
 function pollError(error){showError(error);pollTimer=setTimeout(()=>refresh().catch(pollError),5000);}
@@ -1564,13 +1566,13 @@ function initComparisonRulesDrawer(){
 }
 initComparisonRulesDrawer();
 
-function detectedFileType(file){return !file?'':/\.json$/i.test(file.name)?'JSON':/\.(xlsx|xlsm)$/i.test(file.name)?'Excel':/\.parquet$/i.test(file.name)?'Parquet':'CSV';}
+function detectedFileType(file){return !file?'':/\.json$/i.test(file.name)?'JSON':/\.(xlsx|xlsm)$/i.test(file.name)?'Excel':/\.parquet$/i.test(file.name)?'Parquet':/\.(dat|txt|tsv|psv)$/i.test(file.name)?file.name.split('.').pop().toUpperCase():'CSV';}
 function updateDetectedFiles(){
   if(!$('detectedFileStatus'))return;
   const types=['left','right'].map(side=>detectedFileType(files[side]));
   for(const side of ['left','right'])if(files[side])$(`${side}Size`).textContent=detectedFileType(files[side])+' · '+bytes(files[side].size);
   const json=types.includes('JSON'),mixed=types.every(Boolean)&&json&&types[0]!==types[1];
-  $('detectedFileStatus').textContent=mixed?'Choose two JSON files, or two tabular files (CSV/Excel/Parquet).':json?'JSON detected · up to 5 MiB per file. Configure array matching after loading.':types.every(Boolean)?types.join(' ↔ ')+' · column headers are read after upload.':'File format is detected automatically.';
+  $('detectedFileStatus').textContent=mixed?'Choose two JSON files, or two tabular files (CSV/DAT/Excel/Parquet).':json?'JSON detected · up to 5 MiB per file. Configure array matching after loading.':types.every(Boolean)?types.join(' ↔ ')+(types.some(type=>!['Excel','Parquet'].includes(type))?' · delimiter, encoding and header row are detected after upload.':' · column headers are read after upload.'):'File format is detected automatically.';
   $('upload').disabled=mixed||!files.left||!files.right;
   $('delimiter').closest('.settings').hidden=json;
   document.querySelector('.upload-profile').hidden=json;
@@ -1586,8 +1588,8 @@ async function loadUnifiedJson(){
 function initUnifiedUpload(){
   if(typeof document.createDocumentFragment!=='function')return;
   $('navJson').hidden=true;
-  $('navNew').querySelector('.side-description').textContent='CSV, Excel, Parquet & JSON';
-  for(const side of ['left','right']){$(`${side}File`).accept='.csv,.xlsx,.xlsm,.parquet,.json,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';$(`${side}File`).setAttribute('aria-label','Choose '+(side==='left'?'original':'updated')+' CSV, Excel, Parquet or JSON');$(`${side}Name`).textContent='Choose '+(side==='left'?'original':'updated')+' CSV, Excel, Parquet or JSON';}
+  $('navNew').querySelector('.side-description').textContent='CSV, DAT, Excel, Parquet & JSON';
+  for(const side of ['left','right']){$(`${side}File`).accept='.csv,.dat,.txt,.tsv,.psv,.xlsx,.xlsm,.parquet,.json,text/csv,text/plain,text/tab-separated-values,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';$(`${side}File`).setAttribute('aria-label','Choose '+(side==='left'?'original':'updated')+' CSV, DAT, Excel, Parquet or JSON');$(`${side}Name`).textContent='Choose '+(side==='left'?'champion':'challenger')+' file';}
   $('uploadPanel').querySelector('.section-title').insertAdjacentHTML('afterend','<p id="detectedFileStatus" class="muted detected-file-status" role="status">File format is detected automatically.</p>');
   $('jsonPanel').querySelector('h2').insertAdjacentHTML('afterend','<div class="json-source-bar"><span id="jsonSourceFiles"></span><button id="changeJsonFiles" class="subtle">Change files</button></div>');
   $('changeJsonFiles').addEventListener('click',()=>{panel('uploadPanel');updateDetectedFiles();});

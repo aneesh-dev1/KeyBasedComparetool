@@ -33,6 +33,19 @@ from excel_input import sheets as excel_sheets, convert as convert_excel
 from file_io import atomic_write_text, replace_retry
 from compare import execution_settings, common_headers, align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
 from reports import export_excel, export_html, make_summary_html, REPORT_VERSION
+import text_dialect
+
+
+def side_dialect(job, side):
+    """(delimiter, encoding, has_header) for one file. Older jobs share one delimiter and encoding."""
+    chosen = (job.get('dialects') or {}).get(side) or {}
+    return (chosen.get('delimiter', job.get('delimiter', ',')), chosen.get('encoding', job.get('encoding', 'utf-8-sig')),
+            chosen.get('header', True))
+
+
+def resolve_dialect(job, side, path):
+    """Apply the job's text settings to one file, detecting anything left on 'auto'."""
+    return text_dialect.detect(path, job.get('delimiter', ','), job.get('encoding', 'utf-8-sig'), job.get('header', 'yes'))
 
 BASE = Path(__file__).resolve().parent
 CHUNK = 8 * 1024 * 1024
@@ -183,17 +196,20 @@ class Application:
     def create(self, config, owner=None, source_paths=None):
         delimiter = config.get('delimiter', ',')
         encoding = config.get('encoding', 'utf-8-sig')
-        valid_delimiter = isinstance(delimiter, str) and len(delimiter) == 1 and delimiter not in ('\r', '\n', '\0', '"')
-        if not valid_delimiter or encoding not in ('utf-8-sig', 'utf-16', 'cp1252'):
+        has_header = config.get('header', 'yes')
+        # 'auto' settings are resolved per file once its bytes are on the server (see finalize).
+        if not (delimiter == 'auto' or text_dialect.valid_delimiter(delimiter)) or encoding not in ('auto', *text_dialect.ENCODINGS):
             raise ValueError('Unsupported delimiter or encoding')
+        if has_header not in ('auto', 'yes', 'no'):
+            raise ValueError('First-row setting must be auto, yes or no')
         files = config.get('files', {})
         for side in ('left', 'right'):
             if not isinstance(files.get(side), dict) or not isinstance(files[side].get('size'), int) or not 0 < files[side]['size'] <= 100 * 1024**3:
                 raise ValueError('Select two nonempty CSV, Excel or Parquet files (up to 100 GB each)')
             name = str(files[side].get('name', side))[:255]
             suffix = Path(name).suffix.lower()
-            if suffix not in ('.csv', '.xlsx', '.xlsm', '.parquet'):
-                raise ValueError('Choose CSV, Parquet, .xlsx or .xlsm files. Save older .xls workbooks as .xlsx first.')
+            if suffix not in (*text_dialect.TEXT_SUFFIXES, '.xlsx', '.xlsm', '.parquet'):
+                raise ValueError('Choose CSV, DAT/TXT/TSV, Parquet, .xlsx or .xlsm files. Save older .xls workbooks as .xlsx first.')
             files[side] = dict(name=name, size=files[side]['size'], uploaded=0, complete=False,
                                format='excel' if suffix in ('.xlsx', '.xlsm') else 'parquet' if suffix=='.parquet' else 'csv')
         if any(f['format']=='parquet' for f in files.values()):
@@ -201,7 +217,7 @@ class Application:
             arrow()
         identity = uuid.uuid4().hex
         self.directory(identity).mkdir()
-        job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, comparison_engine='auto', exports={}, upload_compression=['gzip'])
+        job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, header=has_header, comparison_engine='auto', exports={}, upload_compression=['gzip'])
         if source_paths:job['source_paths']=source_paths
         required=0 if source_paths else sum(f['size'] for f in files.values())
         if shutil.disk_usage(self.root).free<required+128*1024**2:
@@ -404,18 +420,18 @@ class Application:
                 elif job['files'][side].get('format')=='parquet':
                     columns[side]=header(source,',','utf-8')
                 else:
-                    notify(f'Preparing {side} CSV for mixed-format comparison')
-                    temporary = directory / f'{side}.normalized'
-                    with source.open(encoding=job['encoding'], newline='') as stream, temporary.open('w', encoding='utf-8', newline='') as output:
-                        writer = csv.writer(output)
-                        for index,row in enumerate(csv.reader(stream, delimiter=job['delimiter'], strict=True)):
-                            if index%10000==0:check_cancel(directory/'cancel-import')
-                            writer.writerow(row)
-                    if side not in job.get('source_paths',{}):replace_retry(source, directory / f'{side}.source.csv')
-                    replace_retry(temporary, directory/f'{side}.csv')
-                    job.get('source_paths',{}).pop(side,None)
-                    columns[side] = header(directory/f'{side}.csv', ',', 'utf-8')
-            self.patch(identity, source_paths=job.get('source_paths',{}), state='ready', source_headers=columns, column_headers=columns, headers_reviewed=False, columns=common_headers(align_headers(columns)[0]), delimiter=',', encoding='utf-8', preparation_message='Selected sheets are ready')
+                    # Each file keeps its own dialect, so text is never re-encoded to match a worksheet. Server
+                    # files are copied byte for byte so later full reviews do not depend on the original path.
+                    if side in job.get('source_paths', {}):
+                        notify(f'Copying {side} file for mixed-format comparison')
+                        temporary = directory / f'{side}.copying'
+                        shutil.copyfile(source, temporary)
+                        replace_retry(temporary, directory / f'{side}.csv')
+                        job['source_paths'].pop(side)
+                    columns[side] = header(self.comparison_path(job, side), *side_dialect(job, side))
+            dialects = dict(job.get('dialects') or {})
+            dialects.update({side: dict(delimiter=',', encoding='utf-8', header=True, detected=[]) for side in ('left', 'right') if job['files'][side].get('format') == 'excel'})
+            self.patch(identity, source_paths=job.get('source_paths', {}), state='ready', source_headers=columns, column_headers=columns, headers_reviewed=False, columns=common_headers(align_headers(columns)[0]), dialects=dialects, preparation_message='Selected sheets are ready')
         except Exception as error:
             self.patch(identity, state='error', error=str(error))
 
@@ -493,11 +509,11 @@ class Application:
         job=self.load(identity)
         wanted={encode(json.loads(k)):k for k in sample_keys}
         fields=job['keys']+columns;width=len(job['keys'])
-        args=SimpleNamespace(encoding=job['encoding'],delimiter=job['delimiter'],memory_mb=64,read_batch_size=10000)
+        args=SimpleNamespace(dialects={side:dict(zip(('delimiter','encoding','header'),side_dialect(job,side))) for side in ('left','right')},memory_mb=64,read_batch_size=10000)
         for side in ('left','right'):
             names=job['column_headers'][side];indices=[names.index(c) for c in fields]
             path=self.comparison_path(job,side);found={}
-            with input_rows(path,args,indices=indices) as (_,rows):
+            with input_rows(path,args,indices=indices,side=side) as (_,rows):
                 for i,row in enumerate(rows,1):
                     if i%10000==0:notify(f'Reading {side} supporting fields: {i:,} rows')
                     values=row if path.suffix=='.parquet' else [row[index] for index in indices]
@@ -867,7 +883,7 @@ class Handler(BaseHTTPRequestHandler):
                                 source=self.app.comparison_path(job,side)
                                 if source.exists():os.link(source,target/source.name)
                                 elif decision['mode']=='full':raise ValueError('The original source is unavailable for a fresh comparison')
-                        fields=('source_paths','files','delimiter','encoding','source_headers','column_headers','columns','header_changes','header_layout_changes')
+                        fields=('source_paths','files','delimiter','encoding','header','dialects','source_headers','column_headers','columns','header_changes','header_layout_changes')
                         copy={k:job[k] for k in fields if k in job}
                         draft['value_overrides']=rules
                         copy.update(owner=self.workspace,id=new_id,state='ready',created=time.time(),exports={},headers_reviewed=True,draft=draft,review_of=identity)
@@ -958,7 +974,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({'deleted': True})
             if self.command == 'GET' and action is None:
                 if 'source_headers' not in job and job['state'] in ('ready', 'queued', 'running', 'complete'):
-                    job['source_headers'] = {side: header(self.app.comparison_path(job,side), job['delimiter'], job['encoding']) for side in ('left', 'right')}
+                    job['source_headers'] = {side: header(self.app.comparison_path(job,side), *side_dialect(job,side)) for side in ('left', 'right')}
                     job.setdefault('column_headers', job['source_headers'])
                 progress = directory / 'progress.json'
                 if progress.exists():
@@ -994,14 +1010,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Choose file 1 or file 2 and between 1 and 1,000 preview rows')
                 rows, size = [], 0
                 source_path=self.app.comparison_path(job,side)
-                names=job.get('column_headers',{}).get(side) or header(source_path,job['delimiter'],job['encoding'])
+                names=job.get('column_headers',{}).get(side) or header(source_path,*side_dialect(job,side))
                 if start >= len(names): raise ValueError('Invalid column page')
                 from compare import input_rows
                 from types import SimpleNamespace
                 from parquet_input import is_parquet
                 parquet=is_parquet(source_path)
-                options=SimpleNamespace(encoding=job['encoding'],delimiter=job['delimiter'],read_batch_size=limit,memory_mb=16)
-                with input_rows(source_path,options,indices=list(range(start,min(start+20,len(names))))) as (_,reader):
+                options=SimpleNamespace(dialects={side:dict(zip(('delimiter','encoding','header'),side_dialect(job,side)))},read_batch_size=limit,memory_mb=16)
+                with input_rows(source_path,options,indices=list(range(start,min(start+20,len(names)))),side=side) as (_,reader):
                     for row in itertools.islice(reader,limit):
                         if not parquet and len(row)!=len(names): raise ValueError('Invalid row width in preview')
                         values=[('[NULL]' if cell is None else cell[:500]) for cell in (row if parquet else row[start:start+20])]
@@ -1010,13 +1026,44 @@ class Handler(BaseHTTPRequestHandler):
                         size+=added;rows.append(values)
                 return self.json_response(dict(headers=names[start:start+20], rows=rows, requested_rows=limit,
                     total_columns=len(names), column_offset=start, limited=len(rows)<limit))
+            if self.command == 'POST' and action == 'dialect':
+                config = self.body()
+                side = config.get('side')
+                delimiter, encoding, has_header = config.get('delimiter'), config.get('encoding'), config.get('header')
+                with self.app.lock:
+                    job = self.app.load(identity)
+                    if job['state'] != 'ready':
+                        raise ValueError('File settings are locked after comparison starts')
+                    if side not in ('left', 'right') or job['files'][side].get('format', 'csv') != 'csv':
+                        raise ValueError('Delimiter settings apply to delimited text files only')
+                    if not text_dialect.valid_delimiter(delimiter) or encoding not in text_dialect.ENCODINGS or not isinstance(has_header, bool):
+                        raise ValueError('Unsupported delimiter, encoding or first-row setting')
+                    names, changes = read_header(self.app.comparison_path(job, side), delimiter, encoding, has_header)
+                    job.setdefault('dialects', {})[side] = dict(delimiter=delimiter, encoding=encoding, header=has_header, detected=[])
+                    source = dict(job.get('source_headers') or {})
+                    source[side] = names
+                    for other in ('left', 'right'):
+                        source.setdefault(other, header(self.app.comparison_path(job, other), *side_dialect(job, other)))
+                    layout = dict(job.get('column_headers') or source, **{side: names})
+                    aligned, layout_changes = align_headers(source, layout)
+                    common = common_headers(aligned)
+                    draft = job.get('draft', {})
+                    # Selections that no longer name a shared column are dropped rather than silently remapped.
+                    for key in ('keys', 'ignore_columns'):
+                        draft[key] = [name for name in (draft.get(key) or []) if name in common]
+                    for key in ('value_overrides', 'comparison_rules'):
+                        draft[key] = [rule for rule in (draft.get(key) or []) if rule.get('column') in common]
+                    job['header_changes'] = [item for item in job.get('header_changes', []) if item.get('side') != side] + [dict(side=side, **change) for change in changes]
+                    job.update(source_headers=source, column_headers=layout, columns=common, header_layout_changes=layout_changes, headers_reviewed=False, draft=draft)
+                    self.app.save(job)
+                return self.json_response(job)
             if self.command == 'POST' and action == 'headers':
                 config = self.body()
                 with self.app.lock:
                     job = self.app.load(identity)
                     if job['state'] != 'ready':
                         raise ValueError('Column headers are locked after comparison starts')
-                    source = job.get('source_headers') or {side: header(self.app.comparison_path(job,side), job['delimiter'], job['encoding']) for side in ('left', 'right')}
+                    source = job.get('source_headers') or {side: header(self.app.comparison_path(job,side), *side_dialect(job,side)) for side in ('left', 'right')}
                     layout = config.get('column_headers')
                     if layout is None:
                         raise ValueError('Column headers are required')
@@ -1071,7 +1118,10 @@ class Handler(BaseHTTPRequestHandler):
                         if job['files'][side].get('format') == 'excel':
                             job['files'][side]['sheets'] = excel_sheets(file)
                         else:
-                            columns[side], changes = read_header(file, job['delimiter'], job['encoding'])
+                            if job['files'][side].get('format') != 'parquet':
+                                # Delimiter, encoding and header row are detected per file when left on auto.
+                                job.setdefault('dialects', {})[side] = resolve_dialect(job, side, file)
+                            columns[side], changes = read_header(file, *side_dialect(job, side))
                             if job['files'][side].get('format')=='parquet':
                                 from parquet_input import metadata
                                 job['files'][side]['parquet']=metadata(file)
@@ -1117,7 +1167,7 @@ class Handler(BaseHTTPRequestHandler):
                     if job.get('execution_mode')!='review':
                         for side in job.get('source_paths',{}):
                             if job['files'][side].get('format')!='excel':self.app.input_path(job,side)
-                    source = job.get('source_headers') or {side: header(self.app.comparison_path(job,side), job['delimiter'], job['encoding']) for side in ('left', 'right')}
+                    source = job.get('source_headers') or {side: header(self.app.comparison_path(job,side), *side_dialect(job,side)) for side in ('left', 'right')}
                     align_headers(source, job.get('column_headers'))
                     keys = config.get('keys', [])
                     if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys) or len(set(keys)) != len(keys) or any(k not in job['columns'] for k in keys):

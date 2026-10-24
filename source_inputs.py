@@ -2,7 +2,7 @@
 from pathlib import Path
 import stat
 
-SUPPORTED={'.csv','.xlsx','.xlsm','.parquet','.json'}
+SUPPORTED={'.csv','.dat','.txt','.tsv','.psv','.xlsx','.xlsm','.parquet','.json'}
 
 def inspect_source(value, roots):
     if not roots:
@@ -15,7 +15,7 @@ def inspect_source(value, roots):
             raise ValueError('Choose a file inside a configured server source directory')
         info=path.stat()
         if not stat.S_ISREG(info.st_mode) or path.suffix.lower() not in SUPPORTED:
-            raise ValueError('Choose a regular CSV, Excel, JSON or Parquet file')
+            raise ValueError('Choose a regular CSV, DAT/TXT/TSV, Excel, JSON or Parquet file')
         if not 0<info.st_size<=100*1024**3:
             raise ValueError('Choose a nonempty file up to 100 GB')
         with path.open('rb') as stream:stream.read(1)

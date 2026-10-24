@@ -473,7 +473,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .ds-share>i{position:absolute;inset:0 auto 0 0;border-radius:inherit;background:var(--tu-cyan-500);transition:width var(--dur-3) var(--ease-out)}
 .ds-column-row[data-risk=medium] .ds-share>i{background:var(--warning)}
 .ds-column-row[data-risk=high] .ds-share>i{background:var(--danger)}
-.ds-count{display:flex;align-items:baseline;justify-content:flex-end;gap:4px}
+.ds-count{display:flex;align-items:baseline;justify-content:flex-end;gap:4px;white-space:nowrap}
 .ds-count b{font:650 var(--text-md)/1 var(--font-sans);font-variant-numeric:tabular-nums}
 .ds-count small{font-size:var(--text-2xs);color:var(--text-faint)}
 .ds-go{display:grid;place-items:center;color:var(--n-400);transition:transform var(--dur-2) var(--ease-out),color var(--dur-1) ease}
@@ -739,3 +739,37 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
   #headersPanel.ds .list-navigation{flex-wrap:wrap}
   #headersPanel.ds #headerRange{flex-basis:100%}
 }
+
+/* Files & headers: per-file text dialect strip, editor and header-less hint. */
+#headersPanel.ds .ds-dialect{display:flex;align-items:center;gap:var(--space-2);min-width:0;padding:6px var(--space-4) var(--space-2);background:var(--surface-sunken);font-size:var(--text-xs);color:var(--text-muted)}
+#headersPanel.ds .ds-dialect .lucide{width:14px;height:14px;flex:none}
+#headersPanel.ds .ds-dialect-icon{display:inline-flex;color:var(--text-faint)}
+#headersPanel.ds .ds-dialect-summary{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:var(--text-default)}
+#headersPanel.ds .ds-dialect-badge{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 var(--space-2);border-radius:var(--radius-full);background:var(--tu-cyan-50);color:var(--tu-cyan-700);font:600 var(--text-2xs)/1 var(--font-sans);white-space:nowrap}
+#headersPanel.ds .ds-dialect-badge .lucide{width:11px;height:11px}
+#headersPanel.ds .ds-dialect-badge[hidden]{display:none}
+#headersPanel.ds :is(.ds-dialect-change,.ds-dialect-borrow){display:inline-flex;align-items:center;gap:5px;height:26px;margin-left:auto;padding:0 var(--space-2);border:1px solid var(--border-default);border-radius:var(--radius-sm);background:var(--surface-card);color:var(--text-default);font:600 var(--text-2xs)/1 var(--font-sans);white-space:nowrap;cursor:pointer;transition:background var(--dur-1) var(--ease-out),border-color var(--dur-1) var(--ease-out)}
+#headersPanel.ds :is(.ds-dialect-change,.ds-dialect-borrow):hover{background:var(--surface-hover);border-color:var(--border-strong)}
+#headersPanel.ds :is(.ds-dialect-change,.ds-dialect-borrow):focus-visible{outline:none;box-shadow:var(--focus-ring)}
+#headersPanel.ds .ds-dialect-change .lucide{width:12px;height:12px}
+#headersPanel.ds .ds-dialect-change[aria-expanded=true]{background:var(--tu-cyan-50);border-color:var(--tu-cyan-300);color:var(--tu-cyan-700)}
+#headersPanel.ds :is(.ds-dialect-change,.ds-dialect-borrow,.ds-dialect-hint)[hidden]{display:none}
+#headersPanel.ds .ds-dialect-editor{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:var(--space-2) var(--space-3);padding:var(--space-2) var(--space-4) var(--space-3);background:var(--surface-sunken);border-top:1px dashed var(--border-default);animation:ds-dialect-in var(--dur-2) var(--ease-out)}
+#headersPanel.ds .ds-dialect-editor[hidden]{display:none}
+#headersPanel.ds .ds-dialect-editor label{display:grid;gap:4px;min-width:0;font:600 var(--text-2xs)/1.4 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint)}
+#headersPanel.ds .ds-dialect-editor .tu-select-trigger{text-transform:none;letter-spacing:0}
+#headersPanel.ds .ds-dialect-custom{height:32px;padding:0 var(--space-2);border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);font:500 var(--text-sm)/1 var(--font-mono);color:var(--text-strong);text-transform:none}
+#headersPanel.ds .ds-dialect-custom[hidden]{display:none}
+#headersPanel.ds .ds-dialect-actions{grid-column:1/-1;display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2)}
+#headersPanel.ds .ds-dialect-actions button{height:30px;padding:0 var(--space-3);font-size:var(--text-xs)}
+#headersPanel.ds .ds-dialect-status{flex:1;min-width:0;margin:0;font-size:var(--text-xs);color:var(--danger-text)}
+#headersPanel.ds .ds-dialect-status:empty{display:none}
+#headersPanel.ds .ds-dialect-status:not(:empty)+button{margin-left:0}
+#headersPanel.ds .header-editors>section.is-editing-dialect{overflow:visible}
+#headersPanel.ds .header-editors>section>h3{border-radius:var(--radius-lg) var(--radius-lg) 0 0}
+#headersPanel.ds .ds-dialect-hint{display:flex;align-items:center;gap:var(--space-2);padding:0 var(--space-4) var(--space-2);background:var(--surface-sunken);font-size:var(--text-xs);color:var(--attention-text)}
+#headersPanel.ds .ds-dialect-hint>.lucide{width:14px;height:14px;flex:none}
+#headersPanel.ds .ds-dialect-hint-text{min-width:0}
+@keyframes ds-dialect-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+#headersPanel.ds .ds-dialect-editor .tu-select-menu{right:auto;min-width:100%;width:max-content}
+#headersPanel.ds .is-editing-dialect .ds-dialect-hint{display:none}

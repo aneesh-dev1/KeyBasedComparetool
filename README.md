@@ -185,7 +185,10 @@ python3 compare.py left.csv right.csv \
 ```
 
 Replace the example keys with your actual column names. For a single key use
-`--keys customer_id`. The scratch directory must exist; the output directory
+`--keys customer_id`. Delimited `.dat`, `.txt` and `.tsv` files work the same
+way. Use `--delimiter '|'` (and `--right-delimiter` when the second file differs)
+and `--no-header` for files without a header row; their columns are named
+`column1…columnN`. `--engine partitioned --workers N` forces the parallel engine. The scratch directory must exist; the output directory
 must not exist. Inputs are never modified. Progress appears every 100,000 rows.
 
 ## Comparison rules
@@ -216,7 +219,14 @@ scratch files behind. Duplicate detection can occur late during the merge.
 
 ## Large-file design and sizing
 
-The default engine builds exact key lookups from both sources, retaining packed rows within a measured memory budget. Key order and different row counts do not need to match. First/last duplicate handling is preserved. Only key references are ordered for deterministic output; full row payloads avoid sort files when the lookups fit. If the budget is exceeded, the lookups are released and comparison restarts using compressed external sorting. Saved sort checkpoints select that fallback directly. Inputs still must be read; checkpoint fingerprint validation also reads source files.
+Large inputs (64 MiB or more in total, on a machine with at least two CPU cores) use the **partitioned
+engine**. It reads both files in parallel byte ranges, splits the key space into ranges and compares
+those ranges on every core. Its outputs are byte-identical to the engines described below. Two 3.1 GB
+files with 2,000 columns compared in 16.2 s, against 39.8 s before. See
+[docs/ENGINE.md](docs/ENGINE.md) for the design, the exactness argument and sizing for
+10 GB × 2,000 columns × 10 million rows.
+
+For smaller inputs, the default engine builds exact key lookups from both sources, retaining packed rows within a measured memory budget. Key order and different row counts do not need to match. First/last duplicate handling is preserved. Only key references are ordered for deterministic output; full row payloads avoid sort files when the lookups fit. If the budget is exceeded, the lookups are released and comparison restarts using compressed external sorting. Saved sort checkpoints select that fallback directly. Inputs still must be read; checkpoint fingerprint validation also reads source files.
 
 The application measures currently available RAM, CPU capacity and free workspace storage at worker launch. There is **no fixed default memory ceiling**. It keeps 25% of available RAM (at least 2 GB where possible) outside the comparison budget, accounts for configured concurrent workers, and adapts read batches and buffers to column width. Hash objects use at most 80% of that budget, reserving more space for transient decoding and ordering. These are allocation targets, not a hard process RSS limit. A single exceptionally large row can exceed a target. An administrator can optionally impose an explicit deployment ceiling with `MAX_SORT_MB`; its default is `0` (automatic).
 
@@ -231,11 +241,10 @@ representative subset first. Reports need additional space: if nearly every
 cell differs, the long-format report can be much larger than the source files
 (up to roughly 2 billion cell records at 1 million rows × 2,000 columns).
 
-CSV parsing and cell-level comparison can still be CPU-bound. Parallel mode
-accelerates the independent file preparation; matching keys and generating
-reports remain sequential. Larger chunk budgets can reduce merge passes.
-No runtime claim is made for the full 6 GB files without a benchmark on the
-target hardware. For repeated comparisons, upstream sorted data or a reusable
+CSV parsing and cell-level comparison are CPU-bound. The partitioned engine
+parallelises reading, matching keys and writing partial outputs. The sort
+fallback parallelises only file preparation. Benchmark on the target hardware
+before relying on a runtime figure. For repeated comparisons, upstream sorted data or a reusable
 indexed/columnar representation would avoid rebuilding the sort on every run.
 
 ## Validation

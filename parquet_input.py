@@ -85,9 +85,11 @@ def is_parquet(path): return Path(path).suffix.lower()=='.parquet'
 
 class PackedRows(Rows):
     """Assemble row payloads inside Arrow; materialize only keys and packed rows."""
-    def __init__(self,path,indices,key_positions,position=0,batch_rows=100000,memory_mb=64,native_batch_bytes=None):
+    def __init__(self,path,indices,key_positions,position=0,batch_rows=100000,memory_mb=64,native_batch_bytes=None,row_groups=None):
         super().__init__(path,indices,position,batch_rows,memory_mb,native_batch_bytes)
         self.key_positions=key_positions
+        # row_groups: read only these groups (parallel ranges); None reads the whole file.
+        self.row_groups=None if row_groups is None else set(row_groups)
     def __iter__(self):
         import pyarrow as pa
         import pyarrow.compute as pc
@@ -95,6 +97,8 @@ class PackedRows(Rows):
         skipped=0
         for group in range(self.file.num_row_groups):
             meta=self.file.metadata.row_group(group)
+            if self.row_groups is not None and group not in self.row_groups:
+                skipped+=meta.num_rows;continue
             if skipped+meta.num_rows<=self.position:
                 skipped+=meta.num_rows;continue
             offset=max(0,self.position-skipped)

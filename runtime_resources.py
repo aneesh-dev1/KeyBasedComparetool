@@ -107,7 +107,9 @@ def size_worker(job, directory, snapshot=None):
                 sort_workers=1, read_batch_size=read_rows, compare_batch_size=compare_rows,
                 native_batch_bytes=max(MIB, min(64 * MIB, memory_mb * MIB // 64)),
                 io_buffer_bytes=max(64 * 1024, min(4 * MIB, memory_mb * MIB // 256)),
-                cpu_threads=max(1, min(4, int(snapshot['cpu_count']) // parallel_slots)), automatic=True)
+                cpu_threads=max(1, min(4, int(snapshot['cpu_count']) // parallel_slots)),
+                # Partitioned comparisons split the CPUs between concurrently running jobs.
+                parallel_workers=max(1, min(16, int(snapshot['cpu_count']) // parallel_slots)), automatic=True)
 
 
 def prepare_worker(job, directory):
@@ -123,7 +125,7 @@ def prepare_worker(job, directory):
     except ImportError:
         pass
     print(f"Automatic sizing: {settings['memory_mb']} MB comparison budget; {settings['read_batch_size']:,} read/sort rows; "
-          f"{settings['compare_batch_size']:,} comparison keys; {settings['cpu_threads']} native CPU threads; sequential source reads. "
+          f"{settings['compare_batch_size']:,} comparison keys; {settings['cpu_threads']} native CPU threads; up to {settings.get('parallel_workers', 1)} parallel workers for inputs of 64 MB or more. "
           f"Available RAM {settings['available_memory_bytes'] / GIB:.1f} GB; free storage {settings['free_disk_bytes'] / GIB:.1f} GB. "
           "Storage is not reserved; full mismatch output may require substantially more space.", flush=True)
     return settings

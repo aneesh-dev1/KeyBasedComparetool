@@ -19,7 +19,7 @@ class _BudgetExceeded(Exception):
 
 
 @contextlib.contextmanager
-def _packed_source(path, names, canonical, keys, args):
+def _packed_source(path, names, canonical, keys, args, side=None):
     # Local imports keep compare.py free to select this engine at runtime.
     from compare import input_rows, is_parquet, pack_values
 
@@ -35,7 +35,7 @@ def _packed_source(path, names, canonical, keys, args):
             yield iter(source)
     elif not parquet and not getattr(args, 'reference_csv_reader', False):
         from csv_input import PackedRows
-        with PackedRows(path, source_names, order, key_positions, args) as source:
+        with PackedRows(path, source_names, order, key_positions, args, side=side) as source:
             yield iter(source)
     else:
         def packed(reader):
@@ -43,7 +43,7 @@ def _packed_source(path, names, canonical, keys, args):
                 if len(row) != len(source_names):
                     raise ValueError(f'{path}: record {number}: expected {len(source_names)} fields, got {len(row)}')
                 yield tuple(row[i] for i in key_positions), pack_values([row[i] for i in order])
-        with input_rows(path, args, 0, projection) as (_, reader):
+        with input_rows(path, args, 0, projection, side) as (_, reader):
             yield packed(reader)
 
 
@@ -148,7 +148,7 @@ def _build(args, left_names, right_names, canonical, stats, progress):
             count = excluded = 0
             file_started = time.monotonic()
             progress(args, f'Indexing {side} file', stage='index', engine='hash', rows=0, status='ongoing')
-            with _packed_source(path, names, canonical, args.keys, args) as reader:
+            with _packed_source(path, names, canonical, args.keys, args, side) as reader:
                 for key_values, payload in reader:
                     count += 1
                     if count % 1000 == 0:
