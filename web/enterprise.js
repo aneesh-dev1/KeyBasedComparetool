@@ -124,8 +124,11 @@ const requestLoader=document.createElement('div');requestLoader.className='tu-re
 api=async function(...args){activeRequests++;if(activeRequests===1)loaderTimer=setTimeout(()=>{const modal=[...document.querySelectorAll('dialog[open]')].at(-1);(modal||document.body).append(requestLoader);requestLoader.hidden=false;},220);try{return await originalApi(...args);}finally{if(--activeRequests===0){clearTimeout(loaderTimer);requestLoader.hidden=true;if(workspaceTransitionPainted)finishWorkspaceTransition();}}};
 
 // A one-shot countdown follows a newly completed run, never a historical result.
+// The countdown only follows a run this page watched finish, never a revisit of a completed job.
+const watchedRuns=new Set();
 const originalPipeline=renderPipeline;renderPipeline=async function(){await originalPipeline();
-  if(job?.state==='complete'&&!viewingHistoryJob&&$('tourCard')?.hidden!==false&&currentView==='runningPanel'&&completionJob!==job.id){
+  if(['queued','running'].includes(job?.state))watchedRuns.add(job.id);
+  if(job?.state==='complete'&&watchedRuns.has(job.id)&&!viewingHistoryJob&&$('tourCard')?.hidden!==false&&currentView==='runningPanel'&&completionJob!==job.id){
     clearInterval(completionTimer);completionJob=job.id;completionRemaining=5;
     $('viewResults').hidden=false;$('viewResults').textContent=`View results · ${completionRemaining}s`;
     const identity=job.id;completionTimer=setInterval(()=>{if(job?.id!==identity||currentView!=='runningPanel'){clearInterval(completionTimer);return;}completionRemaining--;if(completionRemaining<=0){clearInterval(completionTimer);transitionToResults().catch(showError);}else $('viewResults').textContent=`View results · ${completionRemaining}s`;},1000);
@@ -659,38 +662,86 @@ window.addEventListener('DOMContentLoaded',()=>{
  fab.removeAttribute('title');
 }
 
-// Recompare dialog: macOS-style genie. It pours out of the Recompare button when it opens and
-// funnels back into it when closed with the close button or Escape (same guard as app.js).
+// Recompare dialog: macOS genie minimize/maximize. The dialog is drawn as thin horizontal slices; each slice is
+// squeezed to the width of a funnel that ends at the Recompare button, so the window warps into the button
+// (minimize) and pours back out of it (maximize). Slices are temporary visual copies in a top-layer overlay,
+// hidden from assistive technology, and removed when the animation ends.
 {
- const dialog=$('rerunDialog'),fab=$('recompareFab'),nativeShow=dialog.showModal.bind(dialog);
+ const dialog=$('rerunDialog'),fab=$('recompareFab'),nativeShow=dialog.showModal.bind(dialog),nativeClose=dialog.close.bind(dialog);
  const reduced=()=>document.body.classList.contains('reduce-motion')||matchMedia('(prefers-reduced-motion: reduce)').matches;
- function genieFrames(){
-  const d=dialog.getBoundingClientRect(),f=fab.hidden?null:fab.getBoundingClientRect();
-  const dx=f?f.left+f.width/2-(d.left+d.width/2):0,dy=f?f.top+f.height/2-(d.top+d.height/2):d.height/2;
-  // The far edge narrows toward the button, like a window being drawn into the Dock.
-  return [
-   {transform:`translate(${dx}px,${dy}px) scale(.06,.04)`,clipPath:'polygon(0% 0%,100% 0%,100% 100%,0% 100%)',opacity:0},
-   {offset:.42,transform:`translate(${dx*.42}px,${dy*.5}px) scale(.62,.42)`,clipPath:'polygon(4% 0%,96% 0%,78% 100%,58% 100%)',opacity:1},
-   {transform:'none',clipPath:'polygon(0% 0%,100% 0%,100% 100%,0% 100%)',opacity:1}
-  ];
+ const smooth=u=>u<=0?0:u>=1?1:u*u*(3-2*u);
+ const ease=u=>u<.5?4*u*u*u:1-Math.pow(-2*u+2,3)/2;
+ const SLICES=48;
+ let running=null;
+ function build(){
+  const d=dialog.getBoundingClientRect(),f=!fab.hidden&&fab.getClientRects().length?fab.getBoundingClientRect():null;
+  const g={L:d.left,T:d.top,W:d.width,H:d.height,tx:f?f.left+Math.min(f.width,f.height)/2:innerWidth/2,ty:f?f.top+f.height/2:innerHeight-24,tw:f?Math.min(f.width,f.height)*.8:40};
+  const overlay=document.createElement('div');overlay.className='ds-genie';overlay.setAttribute('aria-hidden','true');overlay.setAttribute('popover','manual');
+  const computed=getComputedStyle(dialog),copy=['backgroundColor','backgroundImage','borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth','borderTopStyle','borderRightStyle','borderBottomStyle','borderLeftStyle','borderTopColor','borderRightColor','borderBottomColor','borderLeftColor','borderTopLeftRadius','borderTopRightRadius','borderBottomLeftRadius','borderBottomRightRadius','paddingTop','paddingRight','paddingBottom','paddingLeft','color','fontFamily','fontSize','lineHeight','display','flexDirection','rowGap','columnGap','overflow'];
+  const template=dialog.cloneNode(true);template.removeAttribute('id');template.querySelector('.tu-request-loader')?.remove();for(const node of template.querySelectorAll('[id]'))node.removeAttribute('id');
+  const slices=[];
+  for(let i=0;i<SLICES;i++){
+   const slice=document.createElement('div');slice.className=dialog.className;slice.setAttribute('open','');
+   for(const name of copy)slice.style[name]=computed[name];
+   Object.assign(slice.style,{position:'fixed',left:g.L+'px',top:g.T+'px',width:g.W+'px',height:g.H+'px',margin:'0',boxSizing:'border-box',transformOrigin:'0 0',clipPath:`inset(${(i*g.H/SLICES).toFixed(2)}px 0 ${(g.H-(i+1)*g.H/SLICES-.6).toFixed(2)}px 0)`,willChange:'transform'});
+   slice.append(...[...template.cloneNode(true).childNodes]);slices.push(slice);
+  }
+  overlay.append(...slices);document.body.append(overlay);
+  try{overlay.showPopover();}catch(error){}
+  return {g,overlay,slices};
  }
- let closing=null;
+ // Funnel half-edges at screen height y once fraction q of the funnel has formed.
+ function edges(g,y,q){
+  const half=g.tw/2;if(y>=g.T+g.H)return [g.tx-half,g.tx+half];
+  const u=smooth((y-g.T)/g.H)*q;return [g.L+(g.tx-half-g.L)*u,g.L+g.W+(g.tx+half-g.L-g.W)*u];
+ }
+ // p: 0 = window fully open, 1 = fully inside the button.
+ function frame(state,p){
+  const {g,slices}=state,split=.4,q=ease(Math.min(1,p/split)),s=ease(Math.max(0,(p-split)/(1-split)));
+  const offset=s*(g.ty-g.T+8),h=g.H/SLICES;
+  slices.forEach((slice,i)=>{
+   const y=g.T+(i+.5)*h+offset;
+   if(y>g.ty){slice.style.opacity='0';return;}
+   const [a,b]=edges(g,y,q),scale=Math.max(.001,(b-a)/g.W);
+   slice.style.opacity='1';
+   slice.style.transform=`translate(${(a-g.L).toFixed(2)}px,${offset.toFixed(2)}px) scaleX(${scale.toFixed(4)})`;
+  });
+ }
+ function play(from,to,duration){
+  if(running)running.cancel();
+  const state=build();let stopped=false,done;
+  const finished=new Promise(resolve=>{done=resolve;});
+  const end=()=>{if(stopped)return;stopped=true;clearTimeout(fallback);try{state.overlay.hidePopover();}catch(error){}state.overlay.remove();running=null;done();};
+  // A hidden tab stops animation frames; never leave the dialog stuck mid-genie.
+  const fallback=setTimeout(end,duration+300),start=performance.now();
+  const tick=now=>{if(stopped)return;const u=Math.min(1,(now-start)/duration);frame(state,from+(to-from)*u);if(u<1)requestAnimationFrame(tick);else end();};
+  frame(state,from);requestAnimationFrame(tick);
+  running={cancel:end,finished,state};
+  return running;
+ }
  dialog.showModal=function(){
   nativeShow();if(reduced())return;
-  dialog.animate(genieFrames(),{duration:560,easing:'cubic-bezier(.22,1,.36,1)'});
-  dialog.animate([{opacity:0},{opacity:1}],{duration:320,easing:'ease-out',pseudoElement:'::backdrop'});
+  dialog.style.visibility='hidden';
+  dialog.animate([{opacity:0},{opacity:1}],{duration:420,easing:'ease-out',pseudoElement:'::backdrop'});
+  play(1,0,600).finished.then(()=>{dialog.style.visibility='';});
  };
+ let closing=false;
  async function genieClose(){
   if(!dialog.open||$('startRerun').disabled||closing)return;
-  if(reduced()){dialog.close();return;}
-  const frames=genieFrames().reverse();
-  closing=dialog.animate(frames,{duration:460,easing:'cubic-bezier(.55,0,.75,.2)',fill:'forwards'});
-  dialog.animate([{opacity:1},{opacity:0}],{duration:360,easing:'ease-in',fill:'forwards',pseudoElement:'::backdrop'});
-  // A stalled animation clock (hidden tab) must never leave the dialog stuck open.
-  try{await Promise.race([closing.finished,new Promise(resolve=>setTimeout(resolve,700))]);}finally{dialog.close();dialog.getAnimations({subtree:false}).forEach(animation=>animation.cancel());closing=null;}
+  if(reduced()){nativeClose();return;}
+  closing=true;
+  const animation=play(0,1,560);dialog.style.visibility='hidden';
+  dialog.animate([{opacity:1},{opacity:0}],{duration:460,easing:'ease-in',fill:'forwards',pseudoElement:'::backdrop'});
+  try{await animation.finished;}finally{nativeClose();dialog.style.visibility='';dialog.getAnimations().forEach(item=>item.cancel());closing=false;}
  }
  $('closeRerun').addEventListener('click',event=>{event.stopImmediatePropagation();genieClose();},{capture:true});
  dialog.addEventListener('cancel',event=>{event.preventDefault();event.stopImmediatePropagation();genieClose();},{capture:true});
+ // Alt/⌥ R (and R when not typing) toggles: it opens Recompare, and pressing it again closes it.
+ document.addEventListener('keydown',event=>{
+  if(!dialog.open||event.repeat||event.ctrlKey||event.metaKey)return;
+  const typing=event.target?.closest?.('input,textarea,select,[contenteditable="true"]');
+  if(event.code==='KeyR'&&(event.altKey||!typing)){event.preventDefault();event.stopImmediatePropagation();genieClose();}
+ },{capture:true});
 }
 
 // Analysis: Reports is a header button beside "Attach to project". The existing download panel
@@ -698,8 +749,22 @@ window.addEventListener('DOMContentLoaded',()=>{
 {
  const panel=$('results').querySelector('.download-panel'),heading=$('results').querySelector('.result-heading');
  const menu=document.createElement('details');menu.id='reportsMenu';menu.className='ds-reports';
- menu.innerHTML=`<summary aria-label="Download reports">${lucide('download')}<span>Reports</span>${lucide('chevron-down','ds-reports-chevron')}</summary><div class="ds-reports-popover" role="group" aria-label="Download reports"></div>`;
+ menu.innerHTML=`<summary aria-label="Export reports">${lucide('download')}<span>Export</span>${lucide('chevron-down','ds-reports-chevron')}</summary><div class="ds-reports-popover" role="group" aria-label="Export reports"></div>`;
  menu.querySelector('.ds-reports-popover').append(panel);
+ // Export options: one row per format with its icon, description and live status. The original buttons,
+ // status lines and cancel controls move into the rows, so app.js keeps updating them as before.
+ panel.querySelector('.report-help')?.remove();panel.querySelector('.fine')?.remove();
+ const popoverHead=document.createElement('div');popoverHead.className='ds-export-head';popoverHead.innerHTML='<strong>Export</strong><span>Reports include the current review and comments.</span>';
+ const options=document.createElement('div');options.className='ds-export-options';
+ for(const [kind,icon,cancel] of [['excel','file-spreadsheet','cancelExcel'],['html','file-code','cancelHtml']]){
+  // The panel is still detached here, so look controls up inside it rather than with $().
+  const find=id=>panel.querySelector('#'+id),button=find(kind),status=find(kind+'Status'),row=document.createElement('div');row.className='ds-export-option';
+  const title=button.querySelector('strong'),subtitle=button.querySelector('small');
+  const copy=document.createElement('span');copy.className='ds-export-copy';copy.append(title,subtitle,status);
+  button.replaceChildren(lucideNode(icon,'ds-export-icon'),copy,lucideNode('download','ds-export-go'));
+  row.append(button,find(cancel));options.append(row);
+ }
+ panel.replaceChildren(popoverHead,options,...[...panel.children].filter(child=>child.matches('#openAnalysis,.csv-links,.eyebrow,h2')&&(child.hidden=true)));
  const place=()=>{const attach=[...heading.querySelectorAll('button')].find(button=>/Attach to project/.test(button.textContent));if(attach)attach.after(menu);else heading.append(menu);};
  place();
  document.addEventListener('pointerdown',event=>{if(menu.open&&!menu.contains(event.target))menu.open=false;});

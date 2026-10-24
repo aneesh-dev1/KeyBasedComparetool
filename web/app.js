@@ -119,7 +119,8 @@ function duplicatePolicyValue(){return $('duplicatePolicy')?.value||'first';}
 function configuration(){return {duplicate_policy:duplicatePolicyValue(),keys:[...selected],ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules.filter(r=>!selected.has(r.column)&&!ignoredColumns.has(r.column))};}
 async function saveDraft(){if(job?.state==='ready')await api(endpoint('/config'),configuration());}
 async function goView(name){
-  if(name==='uploadPanel'&&job?.state==='ready')name='headersPanel';
+  // Once files are loaded, the Files step always shows the header table (read-only after a run starts).
+  if(name==='uploadPanel'&&['ready','queued','running','complete'].includes(job?.state))name='headersPanel';
   if(name==='analysisPanel'&&typeof showAnalysisDrawer==='function'){await showAnalysisDrawer();return;}
   if(uploading&&name!=='uploadPanel'&&!['jsonPanel','containersPanel','historyPanel','docsPanel'].includes(name))return;
   clearError();await saveDraft();

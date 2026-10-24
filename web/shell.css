@@ -395,7 +395,11 @@ body.reduce-motion #pipelineGraph .pg-node.is-active .pg-box{animation:none}
 #recompareFab:active{transform:translateY(0) scale(.98)}
 #recompareFab:focus-visible{outline:none;border-color:var(--tu-cyan-600);box-shadow:var(--focus-ring),var(--shadow-2)}
 /* The genie animation (enterprise.js) replaces the dialog's default rise-in. */
-#rerunDialog[open]{animation:none;transform-origin:center}
+#rerunDialog[open]{animation:none}
+/* Genie overlay: a transparent top-layer layer that holds the dialog slices during the animation. */
+.ds-genie{position:fixed;inset:0;width:auto;height:auto;margin:0;padding:0;border:0;background:transparent;overflow:visible;pointer-events:none}
+.ds-genie::backdrop{background:transparent}
+.ds-genie>*,.ds-genie *{animation:none!important;transition:none!important}
 /* Idle: collapses to the icon tile; hover or focus expands it again (app.js toggles .fab-compact). */
 #recompareFab.fab-compact{max-width:48px;padding:0 7px;gap:0}
 #recompareFab.fab-compact :is(.fab-caption,.fab-key){opacity:0}
@@ -407,15 +411,39 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 
 /* ───────────── Analysis: Reports header button ───────────── */
 #reportsMenu{position:relative;flex:none}
-#reportsMenu>summary{display:flex;align-items:center;gap:var(--space-2);height:40px;padding:0 var(--space-3) 0 14px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);color:var(--text-strong);font:500 var(--text-sm)/1 var(--font-sans);list-style:none;cursor:pointer;white-space:nowrap;transition:background-color var(--dur-1) ease,border-color var(--dur-1) ease}
+#reportsMenu>summary{display:flex;align-items:center;gap:var(--space-2);height:40px;padding:0 var(--space-3) 0 14px;border:1px solid color-mix(in srgb,var(--tu-yellow-500) 70%,var(--tu-navy-900));border-radius:var(--radius-md);background:var(--action-primary);color:var(--action-primary-text);font:600 var(--text-sm)/1 var(--font-sans);list-style:none;cursor:pointer;white-space:nowrap;box-shadow:0 1px 0 rgb(255 255 255/.5) inset,var(--shadow-1);transition:background-color var(--dur-1) ease}
 #reportsMenu>summary::-webkit-details-marker{display:none}
-#reportsMenu>summary:hover,#reportsMenu[open]>summary{background:var(--surface-sunken);border-color:var(--border-strong)}
-#reportsMenu>summary:focus-visible{outline:none;box-shadow:var(--focus-ring)}
-#reportsMenu>summary svg.lucide{font-size:16px;color:var(--tu-cyan-700)}
-#reportsMenu .ds-reports-chevron{font-size:14px!important;color:var(--text-muted)!important;transition:transform var(--dur-2) var(--ease-out)}
+#reportsMenu>summary:hover,#reportsMenu[open]>summary{background:var(--action-primary-hover)}
+#reportsMenu>summary:focus-visible{outline:none;box-shadow:var(--focus-ring),var(--shadow-1)}
+#reportsMenu>summary svg.lucide{font-size:16px;color:var(--action-primary-text)}
+#reportsMenu .ds-reports-chevron{font-size:14px!important;transition:transform var(--dur-2) var(--ease-out)}
 #reportsMenu[open] .ds-reports-chevron{transform:rotate(180deg)}
-#reportsMenu .ds-reports-popover{position:absolute;right:0;top:calc(100% + 8px);z-index:40;width:min(460px,calc(100vw - 32px));animation:ds-pop var(--dur-2) var(--ease-out);transform-origin:top right}
-.enterprise-ui #results.analysis-dashboard #reportsMenu .download-panel{display:grid!important;margin:0;border-radius:var(--radius-lg)!important;box-shadow:var(--shadow-3)}
+#reportsMenu .ds-reports-popover{position:absolute;right:0;top:calc(100% + 8px);z-index:40;width:min(380px,calc(100vw - 32px));animation:ds-pop var(--dur-2) var(--ease-out);transform-origin:top right}
+.enterprise-ui #results.analysis-dashboard #reportsMenu .download-panel{display:flex!important;flex-direction:column;gap:var(--space-3)!important;margin:0;padding:var(--space-4)!important;border:1px solid var(--border-default)!important;border-radius:var(--radius-lg)!important;background:var(--surface-card)!important;box-shadow:var(--shadow-3)!important}
+#reportsMenu .download-panel{align-items:stretch!important;justify-items:stretch!important;text-align:left}
+#reportsMenu .download-panel>*{width:100%;margin:0!important}
+#reportsMenu .analysis-download-icon{display:none!important}
+.ds-export-head{display:flex;flex-direction:column;gap:2px}
+.ds-export-head strong{font-size:var(--text-md);font-weight:650;color:var(--text-strong)}
+.ds-export-head span{font-size:var(--text-xs);color:var(--text-muted)}
+.ds-export-options{display:flex;flex-direction:column;gap:var(--space-2)}
+.ds-export-option{display:flex;flex-direction:column;gap:6px}
+#reportsMenu .ds-export-option>.download-button{display:grid!important;grid-template-columns:36px minmax(0,1fr) 20px!important;align-items:center!important;gap:var(--space-3)!important;width:100%!important;min-height:0!important;height:auto!important;margin:0!important;padding:var(--space-3)!important;border:1px solid var(--border-default)!important;border-radius:var(--radius-md)!important;background:var(--surface-card)!important;box-shadow:none!important;text-align:left;cursor:pointer;transition:border-color var(--dur-1) ease,background-color var(--dur-1) ease}
+#reportsMenu .ds-export-option>.download-button:hover:not(:disabled){border-color:color-mix(in srgb,var(--tu-cyan-600) 45%,#fff)!important;background:var(--surface-hover)!important}
+#reportsMenu .ds-export-option>.download-button:focus-visible{outline:none;box-shadow:var(--focus-ring)!important}
+#reportsMenu .ds-export-icon{width:36px;height:36px;padding:8px;border-radius:9px;background:var(--tu-cyan-50);color:var(--tu-cyan-700)}
+#reportsMenu #excel .ds-export-icon{background:var(--success-50);color:var(--success)}
+#reportsMenu .ds-export-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+#reportsMenu .ds-export-copy strong{font-size:var(--text-sm);font-weight:650;color:var(--text-strong)}
+#reportsMenu .ds-export-copy small{font-size:var(--text-xs);color:var(--text-muted)}
+#reportsMenu .ds-export-copy .export-status{margin:2px 0 0!important;padding:0!important;font-size:var(--text-2xs)!important;color:var(--success)!important;white-space:normal}
+#reportsMenu .ds-export-copy .export-status:empty{display:none}
+#reportsMenu .ds-export-go{font-size:18px;color:var(--text-faint);transition:color var(--dur-1) ease,transform var(--dur-2) var(--ease-out)}
+#reportsMenu .download-button:hover .ds-export-go{color:var(--tu-cyan-700);transform:translateY(2px)}
+#reportsMenu .download-button.export-busy .ds-export-go{animation:ds-spin 1s linear infinite}
+#reportsMenu .ds-export-option>button.subtle{align-self:flex-end;height:28px;padding:0 var(--space-3)}
+#reportsMenu .ds-export-option>button[hidden]{display:none}
+@keyframes ds-spin{to{transform:rotate(360deg)}}
 /* With Reports in the header, the match chart takes the space the Reports card used. */
 .enterprise-ui .review-rail>#results.analysis-dashboard>.result-chart-panel{grid-row:3/5}
 /* The page title starts on the same line as the Analysis content beside the step rail. */
