@@ -1023,14 +1023,18 @@ function analysisContext(){
   const keyLabel=key?job.keys.map((name,i)=>`${name}: ${activeKey[i]}`).join(' · '):'';
   if(analysisPatternFilter&&analysisPatternFilter.column!==column)analysisPatternFilter=null;
   $('analysisSelection').textContent=[column?'Column: '+column:'All mismatching columns',keyLabel||'All keys'].join(' · ')+(analysisPatternFilter?' · Pattern: '+analysisPatternFilter.label:'');
-  $('analysisReset').hidden=!column&&!key;$('analysisReset').textContent=analysisPatternFilter?'Clear pattern filter':mode==='patterns'?'Back to all patterns':mode==='keys'?'Back to all keys':'Back to all columns';
+  $('analysisReset').textContent=analysisPatternFilter?'Clear pattern filter':mode==='patterns'?'Back to all patterns':mode==='keys'?'Back to all keys':'Back to all columns';
+  // The drawer is opened for a column, so it offers no way out to all columns.
+  $('analysisReset').hidden=(!column&&!key)||$('analysisReset').textContent==='Back to all columns';
   const signature=JSON.stringify([column,key]);
   if(commentSelection!==signature){commentSelection=signature;$('noteTarget').value=key?'key':'column';fillCommentEditor();}
   renderCommentScope();
 
 }
+// The column the mismatch drawer was opened for; the Mismatches and Patterns views always return to it.
+let analysisHomeColumn='';
 async function resetAnalysis(mode){
-  const retainedColumn=$('analysisDrawer')?.open?$('analysisColumn').value:'';
+  const drawerOpen=$('analysisDrawer')?.open,retainedColumn=drawerOpen?(mode==='keys'?$('analysisColumn').value:analysisHomeColumn):'';
   analysisPatternFilter=null;
   $('analysisMode').value=mode;$('analysisColumn').value='';$('analysisColumnSearch').value='';selectAnalysisKey(null);analysisOffset=0;analysisColumns();if(retainedColumn)$('analysisColumn').value=retainedColumn;await loadAnalysis();
 }
@@ -1254,7 +1258,7 @@ async function transitionToResults(){
 }
 async function showAnalysisDrawer(column=''){
   if(!reviewUI||job?.state!=='complete')return;
-  analysisReturnTarget=document.activeElement;
+  analysisReturnTarget=document.activeElement;analysisHomeColumn=column;
   currentView='analysisPanel';$('analysisPanel').hidden=false;
   $('analysisDrawer').showModal();
   try{await openAnalysis(column);}catch(error){$('analysisStatus').textContent=error.message;}
