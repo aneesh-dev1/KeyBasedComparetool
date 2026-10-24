@@ -1024,8 +1024,8 @@ function analysisContext(){
   if(analysisPatternFilter&&analysisPatternFilter.column!==column)analysisPatternFilter=null;
   $('analysisSelection').textContent=[column?'Column: '+column:'All mismatching columns',keyLabel||'All keys'].join(' · ')+(analysisPatternFilter?' · Pattern: '+analysisPatternFilter.label:'');
   $('analysisReset').textContent=analysisPatternFilter?'Clear pattern filter':mode==='patterns'?'Back to all patterns':mode==='keys'?'Back to all keys':'Back to all columns';
-  // The drawer is opened for a column, so it offers no way out to all columns.
-  $('analysisReset').hidden=(!column&&!key)||$('analysisReset').textContent==='Back to all columns';
+  // No "Back to all …" buttons: the Mismatches, Keys and Patterns tabs return to each view's start.
+  $('analysisReset').hidden=!analysisPatternFilter;
   const signature=JSON.stringify([column,key]);
   if(commentSelection!==signature){commentSelection=signature;$('noteTarget').value=key?'key':'column';fillCommentEditor();}
   renderCommentScope();
