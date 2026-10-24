@@ -24,16 +24,45 @@ import webbrowser
 import zlib
 
 from workspace_settings import PERFORMANCE, validate_settings, resolved_rules
-from task_control import check_cancel
+from task_control import check_cancel, Cancelled
 from comparison_rules import validate_rules
 from projects import Store as ProjectStore, database as project_database, job_snapshot
-from analysis import build_index, query_index
+from analysis import build_index, query_index, INDEX_VERSION
 from json_compare import compare_json, discover_arrays
 from excel_input import sheets as excel_sheets, convert as convert_excel
 from file_io import atomic_write_text, replace_retry
 from compare import execution_settings, common_headers, align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
 from reports import export_excel, export_html, make_summary_html, REPORT_VERSION
 import text_dialect
+
+
+UPLOAD_FILES = {f'{side}{suffix}' for side in ('left', 'right') for suffix in ('.csv', '.xlsx', '.parquet', '.source.csv', '.fixed-source')}
+
+
+def job_sizes(directory):
+    """Bytes a job uses on disk, by kind: uploads, reports, analysis (rebuildable) and temporary files."""
+    sizes = dict(uploads=0, reports=0, analysis=0, temporary=0)
+    directory = Path(directory)
+    for folder, dirs, files in os.walk(directory, followlinks=False):
+        dirs[:] = [name for name in dirs if not (Path(folder) / name).is_symlink()]
+        for name in files:
+            target = Path(folder) / name
+            if target.is_symlink():
+                continue
+            try:
+                size = target.stat().st_size
+            except FileNotFoundError:
+                continue
+            if name.startswith('analysis'):
+                kind = 'analysis'
+            elif 'report' in target.relative_to(directory).parts or name in ('mismatches.xlsx', 'comparison-report.html'):
+                kind = 'reports'
+            elif name in UPLOAD_FILES:
+                kind = 'uploads'
+            else:
+                kind = 'temporary'
+            sizes[kind] += size
+    return sizes
 
 
 def side_dialect(job, side):
@@ -66,6 +95,7 @@ class UploadOffsetConflict(ValueError):
 def resume_strategy(directory,job):
     checkpoints=Path(directory)/'checkpoints'
     if not (checkpoints/'identity.json').exists():return None
+    if (checkpoints/'partitioned'/'manifest.json').exists():return 'partitioned'
     if job.get('comparison_engine','sort')=='sort' or any((checkpoints/(side+'.json')).exists() for side in ('left','right')):
         return 'sort'
     return 'hash'
@@ -74,6 +104,7 @@ def resume_strategy(directory,job):
 def resume_message(directory,job):
     strategy=resume_strategy(directory,job)
     if strategy=='sort':return 'Resume this job to reuse validated sort batches.'
+    if strategy=='partitioned':return 'Resume this job to continue from the key ranges that already finished; sources will be validated again.'
     if strategy=='hash':return 'Resume this job to rebuild its in-memory key lookup; sources will be validated again.'
     return 'Start a new comparison.'
 
@@ -91,7 +122,12 @@ class Application:
         self.requests = {}
         self.cleanup_lock = threading.Lock()
         self.retention_days = 7
-        self.pool = ThreadPoolExecutor(max_workers=max_jobs)  # Shared, bounded queue across sessions.
+        self.analysis_retention_days = 3
+        # Comparisons share a bounded lane; reports, analysis and imports have their own so they never wait
+        # behind a long comparison. CPUs and memory are split between running comparisons by allocate().
+        self.pool = ThreadPoolExecutor(max_workers=max_jobs)
+        self.light_pool = ThreadPoolExecutor(max_workers=2)
+        self.allocations = {}
         self.json_lock = threading.Lock()
         self.tasks = {}
         self.max_jobs = max_jobs
@@ -132,8 +168,30 @@ class Application:
                     with self.lock:
                         if flag.exists(): self.mark_cancelled(identity,kind)
                         self.tasks.pop((identity,kind),None)
-            future=self.pool.submit(run)
+            future=(self.pool if kind=='comparison' else self.light_pool).submit(run)
             self.tasks[(identity,kind)]={'future':future,'queued_at':time.time()}
+
+    def allocate(self, identity, weight):
+        """Share CPUs and comparison memory between running comparisons in proportion to their input size.
+
+        A comparison keeps what it was given when it started; a new one gets its weighted share of the CPUs,
+        limited to what is free (at least one), and the same weighted share of the memory budget.
+        """
+        from runtime_resources import cpu_capacity
+        with self.lock:
+            cpus = cpu_capacity()
+            running = dict(self.allocations)
+            total_weight = sum(item['weight'] for item in running.values()) + weight
+            share = weight / total_weight if total_weight else 1.0
+            free = cpus - sum(item['cpus'] for item in running.values())
+            given = cpus if not running else max(1, min(max(1, round(cpus * share)), free))
+            allocation = dict(weight=weight, cpus=given, memory_share=round(share, 4) if running else 1.0, concurrent=len(running) + 1)
+            self.allocations[identity] = allocation
+            return allocation
+
+    def release(self, identity):
+        with self.lock:
+            self.allocations.pop(identity, None)
 
     def mark_cancelled(self,identity,kind):
         job=self.load(identity)
@@ -172,7 +230,7 @@ class Application:
             for side in ('left', 'right'):
                 job['files'][side]['in_flight'] = job['state'] == 'uploading' and (identity, side) in self.upload_offsets
             job['upload_compression'] = ['gzip']
-            if job.get('analysis',{}).get('state')=='complete' and job['analysis'].get('version')!=3:
+            if job.get('analysis',{}).get('state')=='complete' and job['analysis'].get('version')!=INDEX_VERSION:
                 job['analysis']=dict(state='not_started',message='Prepare analysis to include mismatch patterns.')
             for export in job.get('exports', {}).values():
                 if export.get('state') == 'complete' and export.get('report_version') != REPORT_VERSION:
@@ -246,6 +304,20 @@ class Application:
         # Rename atomically removes the job from history before reclaiming large files.
         shutil.rmtree(trash)
 
+    def clear_analysis(self, identity, message):
+        """Delete a job's rebuildable analysis index. Returns the bytes freed; busy jobs are left alone."""
+        with self.lock:
+            job = self.load(identity)
+            if self.busy(job):
+                raise ValueError('Wait for the running task on this job to finish')
+            path = self.directory(identity) / 'analysis.sqlite'
+            freed = path.stat().st_size if path.exists() else 0
+            path.unlink(missing_ok=True)
+            if job.get('analysis'):
+                job['analysis'] = dict(state='not_started', message=message, cleared=time.time())
+                self.save(job)
+        return freed
+
     def cleanup(self, now=None):
         with self.cleanup_lock:
             self._cleanup(now)
@@ -270,6 +342,15 @@ class Application:
                     print(f"Cleanup removed expired job {job['id']}", flush=True)
                 except (ValueError, OSError) as error:
                     print(f'Cleanup deferred: {error}', flush=True)
+        if self.analysis_retention_days:
+            for path in list(self.root.glob('*/analysis.sqlite')):
+                if re.fullmatch(r'[a-f0-9]{32}', path.parent.name):
+                    try:
+                        if now - path.stat().st_mtime >= self.analysis_retention_days * 86400:
+                            self.clear_analysis(path.parent.name, 'Analysis data was cleared to save space after '
+                                                f'{self.analysis_retention_days} days; it rebuilds when you open the mismatch drawer.')
+                    except (ValueError, OSError) as error:
+                        print(f'Analysis cleanup deferred: {error}', flush=True)
         # Retry deletions interrupted by a restart or temporary file lock.
         for trash in self.root.glob('.deleting-*'):
             if re.fullmatch(r'.deleting-[a-f0-9]{32}', trash.name) and not trash.is_symlink():
@@ -403,6 +484,65 @@ class Application:
         if job.get('source_paths',{}).get(side) and job['files'][side].get('format')!='excel':return self.input_path(job,side)
         return self.directory(job['id']) / (f'{side}.parquet' if job['files'][side].get('format')=='parquet' else f'{side}.csv')
 
+    def convert_fixed_width(self, identity, side):
+        """Convert one fixed-width file to the standard CSV form. The original is kept so the layout can be changed."""
+        import fixed_width
+        from source_inputs import checked_path
+        job = self.load(identity)
+        directory = self.directory(identity)
+        spec = job['fixed_width_pending'][side]
+        name = job['files'][side]['name']
+        def progress(count):
+            check_cancel(directory/'cancel-import')
+            self.patch(identity, preparation_message=f'Converting {name}: {count:,} records')
+        try:
+            source = job['files'][side].get('fixed_source')
+            if source:
+                original = Path(source)
+            elif side in job.get('source_paths', {}):
+                original = checked_path(job['source_paths'][side])
+            else:
+                original = directory / f'{side}.csv'
+            fields = fixed_width.parse_layout(spec['layout'], spec['format'])
+            temporary = directory / f'{side}.converting'
+            records = fixed_width.convert(original, fields, temporary, spec['encoding'], spec['record_length'], spec['trim'], progress)
+            check_cancel(directory/'cancel-import')
+            with self.lock:
+                job = self.load(identity)
+                if not job['files'][side].get('fixed_source'):
+                    if side in job.get('source_paths', {}):
+                        job['files'][side]['fixed_source'] = str(original)
+                        job['source_paths'].pop(side)
+                    else:
+                        kept = directory / f'{side}.fixed-source'
+                        replace_retry(original, kept)
+                        job['files'][side]['fixed_source'] = str(kept)
+                replace_retry(temporary, directory / f'{side}.csv')
+                names, changes = read_header(directory / f'{side}.csv', ',', 'utf-8', True)
+                job.setdefault('dialects', {})[side] = dict(delimiter=',', encoding='utf-8', header=True, detected=[],
+                                                            fixed=dict(format=spec['format'], fields=len(fields), records=records, encoding=spec['encoding'],
+                                                                       record_length=spec['record_length'], trim=spec['trim'], layout=spec['layout']))
+                source = dict(job.get('source_headers') or {})
+                source[side] = names
+                for other in ('left', 'right'):
+                    source.setdefault(other, header(self.comparison_path(job, other), *side_dialect(job, other)))
+                layout = dict(job.get('column_headers') or source, **{side: names})
+                aligned, layout_changes = align_headers(source, layout)
+                common = common_headers(aligned)
+                draft = job.get('draft', {})
+                for key in ('keys', 'ignore_columns'):
+                    draft[key] = [column for column in (draft.get(key) or []) if column in common]
+                for key in ('value_overrides', 'comparison_rules'):
+                    draft[key] = [rule for rule in (draft.get(key) or []) if rule.get('column') in common]
+                job['header_changes'] = [item for item in job.get('header_changes', []) if item.get('side') != side] + [dict(side=side, **change) for change in changes]
+                job.update(state='ready', source_headers=source, column_headers=layout, columns=common, header_layout_changes=layout_changes,
+                           headers_reviewed=False, draft=draft, preparation_message=f'{name}: {records:,} fixed-width records converted')
+                job.pop('fixed_width_error', None)
+                self.save(job)
+        except Exception as error:
+            (directory / f'{side}.converting').unlink(missing_ok=True)
+            self.patch(identity, state='ready', fixed_width_error=dict(side=side, message=str(error)), preparation_message='')
+
     def prepare_sheets(self, identity):
         job = self.load(identity)
         directory = self.directory(identity)
@@ -448,17 +588,30 @@ class Application:
             notify('Applying rules to retained evidence; no source reads or sorting')
             summary=revise(directory/'baseline',directory/'report',job,job['columns'],notify)
             (directory/'report/summary.html').write_text(make_summary_html(summary),encoding='utf-8')
-            self.patch(identity,summary=summary)
-            for kind in ('html','excel'):self.run_export(identity,kind,pipeline=True)
             check_cancel(directory/'cancel-comparison')
-            self.patch(identity,state='complete',finished=time.time())
+            with self.lock:
+                job=self.load(identity)
+                job.update(state='complete',summary=summary,finished=time.time())
+                job['exports']['html']={'state':'queued','message':'Building in the background'}
+                self.save(job)
+            self.submit(identity,'html',self.run_export,'html')
         except Exception as error:self.patch(identity,state='error',error=str(error),finished=time.time())
 
     def run_comparison(self, identity):
         if self.load(identity).get('execution_mode')=='review':return self.run_review(identity)
-        self.patch(identity, state='running', started=time.time(), memory_cap_mb=getattr(self, 'memory_cap_mb', 0), memory_concurrency=self.max_jobs)
+        job = self.load(identity)
+        weight = max(1, sum(int(item.get('size') or 0) for item in job['files'].values()))
+        allocation = self.allocate(identity, weight)
+        try:
+            self._run_comparison(identity, allocation)
+        finally:
+            self.release(identity)
+
+    def _run_comparison(self, identity, allocation):
+        self.patch(identity, state='running', started=time.time(), memory_cap_mb=getattr(self, 'memory_cap_mb', 0), memory_concurrency=1, allocation=allocation)
         job = self.load(identity)
         directory = self.directory(identity)
+        (directory / 'live.json').unlink(missing_ok=True)
         command = [sys.executable, str(BASE / 'worker.py'), str(directory)]
         try:
             with (directory / 'run.log').open('ab') as log:
@@ -475,14 +628,17 @@ class Application:
             summary['source_types']={side:dict(zip(job.get('source_headers',{}).get(side,[]),job['files'][side].get('parquet',{}).get('types',[]))) if job['files'][side].get('format')=='parquet' else {'values':'stored Excel values converted to text' if job['files'][side].get('format')=='excel' else 'text'} for side in ('left','right')}
             atomic_write_text(directory / 'report/summary.json',json.dumps(summary, indent=2))
             (directory / 'report/summary.html').write_text(make_summary_html(summary), encoding='utf-8')
-            self.patch(identity, summary=summary)
-            for kind in ('html', 'excel'):
-                check_cancel(directory/'cancel-comparison')
-                self.run_export(identity, kind, pipeline=True)
             check_cancel(directory/'cancel-comparison')
             with (directory / 'run.log').open('a') as log:
                 log.write(f'{time.strftime("%H:%M:%S")}  Comparison complete | changed cells={summary["changed_cells"]:,}\n')
-            self.patch(identity, state='complete', summary=summary, finished=time.time())
+            # The comparison is complete once its result files exist. The HTML report builds in the background;
+            # Excel is generated on request from the Analysis page with the options the user chooses.
+            with self.lock:
+                job=self.load(identity)
+                job.update(state='complete', summary=summary, finished=time.time())
+                job['exports']['html']={'state':'queued','message':'Building in the background'}
+                self.save(job)
+            self.submit(identity,'html',self.run_export,'html')
             shutil.rmtree(directory/'checkpoints',ignore_errors=True)
         except Exception as error:
             self.patch(identity, state='error', error=str(error), finished=time.time())
@@ -490,15 +646,20 @@ class Application:
     def run_analysis(self, identity):
         directory=self.directory(identity)
         temporary=directory/'analysis.part.sqlite'
-        def notify(message):
+        total=self.load(identity).get('summary',{}).get('changed_cells')
+        last=[0.0,None]
+        def notify(message,done=None,cells=None):
             check_cancel(directory/'cancel-analysis')
-            self.patch(identity, analysis=dict(state='running',message=message))
+            # Progress is saved at most twice a second; phase changes are saved at once.
+            if done is not None and message.startswith('Indexing mismatches') and time.monotonic()-last[0]<0.5 and last[1]=='indexing':return
+            last[:]=[time.monotonic(),'indexing' if message.startswith('Indexing mismatches') else message]
+            self.patch(identity, analysis=dict(state='running',message=message,done=done,total=cells))
         try:
             temporary.unlink(missing_ok=True)
-            notify('Preparing a disk-backed index for key and column analysis…')
-            build_index(directory/'report',temporary,notify,lambda:(directory/'cancel-analysis').exists())
+            notify('Preparing a disk-backed index for key and column analysis…',0,total)
+            build_index(directory/'report',temporary,lambda message:notify(message),lambda:(directory/'cancel-analysis').exists(),total,progress=notify)
             replace_retry(temporary,directory/'analysis.sqlite')
-            self.patch(identity,analysis=dict(state='complete',version=3,message='Analysis ready',updated=time.time()))
+            self.patch(identity,analysis=dict(state='complete',version=INDEX_VERSION,message='Analysis ready',updated=time.time()))
         except Exception as error:
             temporary.unlink(missing_ok=True)
             self.patch(identity,analysis=dict(state='error',message=str(error),updated=time.time()))
@@ -528,6 +689,13 @@ class Application:
         def status(state, **values):
             with self.lock:
                 job = self.load(identity)
+                # Notes saved while this report was being built are not in it: offer a fresh one instead.
+                previous = job['exports'].get(kind, {})
+                if previous.get('state') == 'running' and previous.get('notes_changed'):
+                    if state == 'complete':
+                        state, values = 'outdated', dict(values, message='Analysis notes changed. Generate a fresh report.')
+                    elif state == 'running':
+                        values = dict(values, notes_changed=True)
                 job['exports'][kind] = dict(state=state, updated=time.time(), **values)
                 self.save(job)
         directory = self.directory(identity)
@@ -544,22 +712,30 @@ class Application:
                     with (directory/'run.log').open('a') as log:log.write(f'{time.strftime("%H:%M:%S")}  {kind.upper()} report | {message}\n')
                 last_update[0] = time.monotonic()
         status('running', message='Preparing report')
+        details=None
         try:
             notify('Preparing report')
             if kind=='ai':
                 from ai_package import export_package
                 options=self.load(identity).get('ai_options',{})
                 export_package(directory/'report',temporary,notify,supporting_reader=lambda keys,columns:self.supporting_values(identity,keys,columns,notify),**options)
-            else:(export_excel if kind == 'excel' else export_html)(directory / 'report', temporary, notify)
+            elif kind=='excel':
+                options=self.load(identity).get('excel_options',{})
+                details=export_excel(directory/'report',temporary,notify,max_rows=options.get('max_rows'),truncate=options.get('truncate',True))
+            else:export_html(directory/'report',temporary,notify)
             if pipeline:check_cancel(directory/'cancel-comparison')
             replace_retry(temporary, target)
             if pipeline:
                 with (directory/'run.log').open('a') as log:log.write(f'{time.strftime("%H:%M:%S")}  {kind.upper()} report complete | {target.stat().st_size:,} bytes\n')
-            status('complete', size=target.stat().st_size, report_version=REPORT_VERSION)
+            status('complete', size=target.stat().st_size, report_version=REPORT_VERSION, **(details if kind=='excel' and details else {}))
         except Exception as error:
             temporary.unlink(missing_ok=True)
             status('error', error=str(error))
-            if pipeline:raise
+            # A report that cannot be built never fails a finished comparison: its export shows the error and
+            # can be retried from Export. Cancelling still stops the run.
+            if pipeline and isinstance(error, Cancelled):raise
+            if pipeline:
+                with (directory/'run.log').open('a') as log:log.write(f'{time.strftime("%H:%M:%S")}  WARNING: {kind.upper()} report not created | {error}\n')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -764,16 +940,7 @@ class Handler(BaseHTTPRequestHandler):
                     try:item=self.app.load(file.parent.name)
                     except (ValueError,OSError):continue
                     if self.server.shared and item.get('owner')!=self.workspace:continue
-                    sizes=dict(uploads=0,reports=0,analysis=0,temporary=0)
-                    for folder,dirs,files in os.walk(file.parent,followlinks=False):
-                        dirs[:]=[d for d in dirs if not (Path(folder)/d).is_symlink()]
-                        for name in files:
-                            target=Path(folder)/name
-                            if target.is_symlink():continue
-                            try:size=target.stat().st_size
-                            except FileNotFoundError:continue
-                            category='analysis' if name.startswith('analysis') else 'reports' if 'report' in target.relative_to(file.parent).parts or name in ('mismatches.xlsx','comparison-report.html') else 'uploads' if name in ('left.csv','right.csv','left.xlsx','right.xlsx','left.source.csv','right.source.csv','left.parquet','right.parquet') else 'temporary'
-                            sizes[category]+=size
+                    sizes=job_sizes(file.parent)
                     with self.app.lock:
                         tasks=[dict(kind=kind,state='running' if entry['future'].running() else 'queued',queued_at=entry['queued_at'],cancelling=(file.parent/('cancel-'+kind)).exists()) for (identity,kind),entry in self.app.tasks.items() if identity==item['id']]
                     jobs.append(dict(id=item['id'],created=item['created'],state=item['state'],files=item['files'],sizes=sizes,tasks=tasks,busy=self.app.busy(item)))
@@ -833,9 +1000,10 @@ class Handler(BaseHTTPRequestHandler):
                     summary = item.get('summary', {})
                     records.append(dict(id=item['id'], created=item['created'], state=item['state'],
                         files=item['files'], busy=self.app.busy(item), can_manage=not self.server.shared or item.get('owner')==self.workspace, keys=item.get('keys', []), changed_cells=summary.get('changed_cells'),
-                        changed_rows=summary.get('changed_rows'), elapsed_seconds=summary.get('elapsed_seconds')))
+                        changed_rows=summary.get('changed_rows'), elapsed_seconds=summary.get('elapsed_seconds'), sizes=job_sizes(entry.parent)))
                 records.sort(key=lambda item: item['created'], reverse=True)
-                return self.json_response(dict(jobs=records[offset:offset+25], total=len(records), offset=offset, retention_days=self.app.retention_days))
+                return self.json_response(dict(jobs=records[offset:offset+25], total=len(records), offset=offset, retention_days=self.app.retention_days,
+                                               analysis_retention_days=self.app.analysis_retention_days))
             match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})(?:/(.*))?', path)
             if not match:
                 return self.json_response({'error': 'Not found'}, 404)
@@ -843,7 +1011,7 @@ class Handler(BaseHTTPRequestHandler):
             job = self.app.load(identity)
             if self.server.shared and job.get('owner') != self.workspace:
                 if job['state']!='complete':return self.json_response({'error':'Comparison is private while it is being prepared or processed'},404)
-                shared_actions={'review-plan','review-copy','validate-rules','annotations','analysis','export/excel','export/html','export/ai','ai-findings'}
+                shared_actions={'review-plan','review-copy','validate-rules','annotations','analysis','live','export/excel','export/html','export/ai','ai-findings'}
                 if self.command not in ('GET','HEAD') and action not in shared_actions:
                     return self.json_response({'error':'Only the creating browser can edit sources, cancel or delete this job. Use Recompare to create your own review.'},403)
             job['can_manage']=not self.server.shared or job.get('owner')==self.workspace
@@ -953,7 +1121,6 @@ class Handler(BaseHTTPRequestHandler):
                     notes=json.loads(target.read_text()) if target.exists() else []
                     if self.command=='POST':
                         current=self.app.load(identity)
-                        if any(e.get('state') in ('queued','running') for e in current.get('exports',{}).values()):raise ValueError('Wait for the active export to finish before editing report notes')
                         config=self.body();column=config.get('column','');key=config.get('key');comment=config.get('comment','');status=config.get('status')
                         if column and column not in job['summary']['changed_cells_by_column']:raise ValueError('Choose a compared column')
                         if key is not None and (not isinstance(key,list) or len(key)!=len(job['keys']) or any(not isinstance(v,str) or len(v)>1000 for v in key)):raise ValueError('Invalid annotation key')
@@ -967,6 +1134,7 @@ class Handler(BaseHTTPRequestHandler):
                         atomic_write_text(target,encoded)
                         for export in current.get('exports',{}).values():
                             if export.get('state')=='complete':export.update(state='outdated',message='Analysis notes changed. Generate a fresh report.')
+                            elif export.get('state') in ('queued','running'):export['notes_changed']=True
                         self.app.save(current)
                 return self.json_response(dict(notes=notes))
             if self.command == 'DELETE' and action is None:
@@ -1026,6 +1194,31 @@ class Handler(BaseHTTPRequestHandler):
                         size+=added;rows.append(values)
                 return self.json_response(dict(headers=names[start:start+20], rows=rows, requested_rows=limit,
                     total_columns=len(names), column_offset=start, limited=len(rows)<limit))
+            if self.command == 'POST' and action == 'fixed-width':
+                import fixed_width
+                config = self.body()
+                side = config.get('side')
+                with self.app.lock:
+                    job = self.app.load(identity)
+                    if job['state'] != 'ready':
+                        raise ValueError('File settings are locked after comparison starts')
+                    if side not in ('left', 'right') or job['files'][side].get('format', 'csv') != 'csv':
+                        raise ValueError('Fixed-width layouts apply to text files only')
+                    kind = config.get('format') if config.get('format') in ('positions', 'copybook') else 'positions'
+                    fixed_width.parse_layout(config.get('layout'), kind)
+                    encoding = config.get('encoding', 'utf-8')
+                    length = config.get('record_length', 0) or 0
+                    if encoding not in fixed_width.ENCODINGS:
+                        raise ValueError('Choose UTF-8, Windows-1252, Latin-1 or EBCDIC (cp037)')
+                    if not isinstance(length, int) or isinstance(length, bool) or not 0 <= length <= 1_000_000:
+                        raise ValueError('Record length must be a whole number of characters, or 0 for one record per line')
+                    job.setdefault('fixed_width_pending', {})[side] = dict(format=kind, layout=config['layout'], encoding=encoding,
+                                                                          record_length=length, trim=bool(config.get('trim', True)))
+                    job.pop('fixed_width_error', None)
+                    job.update(state='preparing', preparation_message=f"Converting {job['files'][side]['name']}")
+                    self.app.save(job)
+                    self.app.submit(identity, 'import', self.app.convert_fixed_width, side)
+                return self.json_response(job, 202)
             if self.command == 'POST' and action == 'dialect':
                 config = self.body()
                 side = config.get('side')
@@ -1210,7 +1403,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response(job, 202)
             if self.command == 'POST' and action in ('export/excel', 'export/html','export/ai'):
                 kind = action.split('/')[1]
-                options=self.body() if kind=='ai' else {}
+                options=self.body() if kind in ('ai','excel') else {}
                 with self.app.lock:
                     job = self.app.load(identity)
                     if job['state'] != 'complete':
@@ -1225,6 +1418,14 @@ class Handler(BaseHTTPRequestHandler):
                             if job['exports'].get(kind,{}).get('state') in ('queued','running'):raise ValueError('Wait for the current AI package to finish')
                             job['exports'].pop(kind,None)
                         job['ai_options']=options
+                    if kind=='excel':
+                        # Rows per column sheet (0 = as many as Excel allows) and whether long values are cut.
+                        rows=options.get('max_rows',0)
+                        if not isinstance(rows,int) or isinstance(rows,bool) or not 0<=rows<=1048574:raise ValueError('Rows per column must be between 1 and 1,048,574')
+                        options=dict(max_rows=rows or None,truncate=bool(options.get('truncate',True)))
+                        if options!=job.get('excel_options',dict(max_rows=None,truncate=True)) and job['exports'].get(kind,{}).get('state')!='running':
+                            job['exports'].pop(kind,None)
+                        job['excel_options']=options
                     if job['exports'].get(kind, {}).get('state') not in ('queued', 'running', 'complete'):
                         job['exports'][kind] = {'state': 'queued'}
                         self.app.save(job)
@@ -1240,6 +1441,16 @@ class Handler(BaseHTTPRequestHandler):
                     self.app.save(job)
                     self.app.submit(identity,'comparison',self.app.run_comparison)
                 return self.json_response(job,202)
+            if action == 'live' and self.command == 'GET':
+                # Live counts and the latest mismatches while the comparison runs; final results come from the report.
+                from live import read as read_live
+                snapshot = read_live(directory / 'live.json') or {}
+                stage = (read_live(directory / 'progress.json') or {}).get('stage')
+                return self.json_response(dict(snapshot, job_state=job['state'], stage=stage,
+                                               results_ready=bool(job.get('summary'))))
+            if action == 'analysis' and self.command == 'DELETE':
+                freed = self.app.clear_analysis(identity, 'Analysis data was cleared to save space; it rebuilds when you open the mismatch drawer.')
+                return self.json_response(dict(freed=freed))
             if action == 'analysis' and self.command in ('GET','POST'):
                 if job['state'] != 'complete':
                     raise ValueError('Complete the comparison before analysis')
@@ -1339,8 +1550,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(root, port=8765, host='127.0.0.1', public_url=None, max_jobs=1, max_sort_mb=0):
-    if not 1 <= max_jobs <= 5:
-        raise ValueError('Concurrent comparisons must be between 1 and 5')
+    if not 1 <= max_jobs <= 8:
+        raise ValueError('Concurrent comparisons must be between 1 and 8')
     if type(max_sort_mb) is not int or max_sort_mb < 0:
         raise ValueError('Invalid server comparison memory limit')
     if public_url:
@@ -1386,11 +1597,12 @@ if __name__ == '__main__':
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--public-url', help='Team URL, such as http://compare.internal:8765; enables separate browser workspaces without login')
-    parser.add_argument('--max-jobs', type=int, default=1, help='Maximum simultaneous comparisons/imports/exports; other jobs queue')
+    parser.add_argument('--max-jobs', type=int, default=max(2, min(4, (os.cpu_count() or 2) // 2)), help='Maximum simultaneous comparisons; CPUs and memory are shared between them by input size. Reports and analysis run in their own lane')
     parser.add_argument('--max-sort-mb', '--max-memory-mb', dest='max_sort_mb', type=int, default=0, help='Optional administrator memory ceiling in MB; 0 sizes automatically from available RAM')
     parser.add_argument('--source-root', action='append', default=[], help='Allow read-only server files below this directory; repeat for multiple roots')
     parser.add_argument('--data-dir', default=str(BASE / 'data'), help='Upload, scratch and report storage; use a fast SSD')
     parser.add_argument('--retention-days', type=int, default=7, help='Delete inactive jobs after this many days; 0 disables automatic cleanup')
+    parser.add_argument('--analysis-retention-days', type=int, default=3, help='Delete the rebuildable mismatch-analysis index after this many days unused; 0 keeps it')
     parser.add_argument('--open', action='store_true', help='Open the UI in your default browser')
     args = parser.parse_args()
     if args.retention_days < 0:
@@ -1400,6 +1612,7 @@ if __name__ == '__main__':
     server.source_roots=[Path(value).resolve(strict=True) for value in args.source_root]
     if any(not p.is_dir() for p in server.source_roots):parser.error('--source-root must be a directory')
     server.app.retention_days = args.retention_days
+    server.app.analysis_retention_days = max(0, args.analysis_retention_days)
     cleanup_stop = threading.Event()
     def cleanup_loop():
         while not cleanup_stop.is_set():

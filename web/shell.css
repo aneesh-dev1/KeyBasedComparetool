@@ -902,7 +902,8 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #analysisDrawer.ds-mismatch .ds-toolbar-btn .lucide{width:14px;height:14px}
 #analysisDrawer.ds-mismatch .ds-back-btn::before{content:"";width:14px;height:14px;background:currentColor;-webkit-mask:var(--ds-arrow) center/contain no-repeat;mask:var(--ds-arrow) center/contain no-repeat;transform:scaleX(-1)}
 /* Filters open below the toolbar only when asked for. */
-#analysisDrawer.ds-mismatch .analysis-filter-disclosure:not([open]){display:none!important}
+/* The column and key filter panel is not shown; its controls stay in the DOM for the code that reads them. */
+#analysisDrawer.ds-mismatch .analysis-filter-disclosure{display:none!important}
 #analysisDrawer.ds-mismatch .analysis-filter-disclosure{border:1px solid var(--border-default)!important;border-radius:var(--radius-lg)!important;background:var(--surface-sunken)!important;animation:ds-dialect-in var(--dur-2) var(--ease-out)}
 #analysisDrawer.ds-mismatch .analysis-filter-disclosure>summary{display:none}
 #analysisDrawer.ds-mismatch .analysis-filter-disclosure .analysis-filter-grid{max-height:min(280px,34dvh)!important;padding:var(--space-3) var(--space-4)!important;border:0!important;background:transparent!important}
@@ -1020,3 +1021,239 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .ds-attach-status[data-tone=success]{color:var(--success)}
 .ds-attach-status[data-tone=error]{color:var(--danger-text)}
 .ds-attach-popover.align-left{right:auto;left:0;transform-origin:top left}
+
+/* Mismatch drawer loader: replaces the table while the index is prepared or a slow page loads. */
+#analysisDrawer.ds-mismatch .ds-analysis-loader{flex:1 1 auto;min-height:220px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--space-2);padding:var(--space-6);border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-sunken);text-align:center;animation:ds-dialect-in var(--dur-2) var(--ease-out)}
+#analysisDrawer.ds-mismatch .ds-analysis-loader[hidden]{display:none}
+#analysisDrawer.ds-mismatch .ds-analysis-loader img{width:64px;height:64px}
+#analysisDrawer.ds-mismatch .ds-analysis-loader-title{font-size:var(--text-md);font-weight:650;color:var(--text-strong)}
+#analysisDrawer.ds-mismatch .ds-analysis-loader-detail{max-width:46ch;font-size:var(--text-sm);color:var(--text-muted);font-variant-numeric:tabular-nums}
+#analysisDrawer.ds-mismatch .ds-analysis-progress{width:min(360px,80%);height:8px;margin-top:var(--space-2);border-radius:var(--radius-full);background:var(--n-200);overflow:hidden}
+#analysisDrawer.ds-mismatch .ds-analysis-progress[hidden]{display:none}
+#analysisDrawer.ds-mismatch .ds-analysis-progress i{display:block;width:0;height:100%;border-radius:inherit;background:var(--tu-cyan-600);transition:width .6s cubic-bezier(.45,0,.2,1)}
+#analysisDrawer.ds-mismatch .ds-analysis-loader-eta{font-size:var(--text-xs);color:var(--text-faint);font-variant-numeric:tabular-nums}
+#analysisDrawer.ds-mismatch .ds-analysis-loader-eta:empty{display:none}
+#analysisDrawer.ds-mismatch .ds-analysis-loader #cancelAnalysis{margin-top:var(--space-2)}
+#analysisDrawer.ds-mismatch .analysis-results.is-loading>:is(.table-scroll,#analysisStatus,.list-navigation){display:none!important}
+
+/* Match Mismatch Overview: records pie with legend, then the column bands. */
+.ds-pie{display:grid;grid-template-columns:132px minmax(0,1fr);align-items:center;gap:var(--space-5);padding-bottom:var(--space-4);border-bottom:1px solid var(--border-subtle)}
+.ds-pie svg{width:132px;height:132px;overflow:visible}
+.ds-pie svg>*{stroke:var(--surface-card);stroke-width:.025;transition:opacity var(--dur-1) var(--ease-out)}
+.ds-pie svg:hover>*{opacity:.6}
+.ds-pie svg>*:hover{opacity:1}
+.ds-pie .is-equal{fill:var(--tu-cyan-600)}
+.ds-pie .is-unequal{fill:var(--attention)}
+.ds-pie .is-left{fill:var(--tu-navy-700)}
+.ds-pie .is-right{fill:var(--tu-cyan-300)}
+.ds-pie-legend{display:grid;gap:var(--space-2);margin:0;padding:0;list-style:none}
+.ds-pie-legend li{display:grid;grid-template-columns:10px minmax(0,1fr) auto 56px;align-items:center;gap:var(--space-2);font-size:var(--text-sm);color:var(--text-default)}
+.ds-pie-legend li.is-empty{color:var(--text-faint)}
+.ds-pie-legend .ds-dot{width:10px;height:10px;border-radius:3px}
+.ds-pie-legend .is-equal .ds-dot{background:var(--tu-cyan-600)}
+.ds-pie-legend .is-unequal .ds-dot{background:var(--attention)}
+.ds-pie-legend .is-left .ds-dot{background:var(--tu-navy-700)}
+.ds-pie-legend .is-right .ds-dot{background:var(--tu-cyan-300)}
+.ds-pie-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ds-pie-legend b{font-weight:650;color:var(--text-strong);font-variant-numeric:tabular-nums}
+.ds-pie-legend small{font-size:var(--text-xs);color:var(--text-muted);text-align:right;font-variant-numeric:tabular-nums}
+.ds-health-sub{margin:0 0 calc(var(--space-2) * -1);font:600 var(--text-2xs)/1.4 var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint)}
+@media (max-width:560px){.ds-pie{grid-template-columns:96px minmax(0,1fr)}.ds-pie svg{width:96px;height:96px}}
+
+/* ───────────── Sidebar: larger labels and icons, more space between items (width unchanged) ───────────── */
+.enterprise-ui .sidebar nav,.enterprise-ui.sidebar-collapsed .sidebar nav{gap:20px!important}
+.enterprise-ui .sidebar .sidebar-group{gap:6px!important}
+.enterprise-ui .sidebar .side-link,.enterprise-ui.sidebar-collapsed .sidebar .side-link{height:46px!important;min-height:46px!important}
+.enterprise-ui .sidebar .side-link:not(:is(.sidebar-collapsed *)){padding:12px 19px!important}
+.enterprise-ui .sidebar .side-icon,.enterprise-ui.sidebar-collapsed .sidebar .side-link .side-icon{width:22px!important;height:22px!important;flex:0 0 22px!important}
+.enterprise-ui .sidebar .side-icon svg{width:22px!important;height:22px!important}
+.enterprise-ui .sidebar .side-copy{left:56px!important}
+.enterprise-ui .sidebar .side-label{font-size:14.5px!important;letter-spacing:-.005em}
+.enterprise-ui .sidebar .side-description{font-size:11px!important}
+
+/* Topbar Refresh: icon button that slides open to show its label, next to Help. */
+/* Same size, border and corners as the Help button beside it. */
+.ds-topbar-refresh{display:inline-flex;align-items:center;align-self:center;height:34px;min-width:34px;margin-right:-6px;padding:0 8px;border:1px solid rgb(217,227,233);border-radius:8px;background:#fff;color:rgb(61,85,102);font:600 var(--text-sm)/1 var(--font-sans);cursor:pointer;transition:background var(--dur-2) var(--ease-out),border-color var(--dur-2) var(--ease-out),color var(--dur-2) var(--ease-out),box-shadow var(--dur-2) var(--ease-out)}
+.ds-topbar-refresh svg.lucide{width:17px;height:17px;flex:none}
+.ds-refresh-label{max-width:0;margin-left:0;opacity:0;overflow:hidden;white-space:nowrap;transform:translateX(-6px);transition:max-width .4s cubic-bezier(.45,0,.2,1),margin .4s cubic-bezier(.45,0,.2,1),opacity .3s ease,transform .4s cubic-bezier(.45,0,.2,1)}
+.ds-topbar-refresh:is(:hover,:focus-visible){background:var(--tu-cyan-50);border-color:color-mix(in srgb,var(--tu-cyan-600) 45%,#fff);color:var(--tu-cyan-700);box-shadow:var(--shadow-1);outline:none}
+.ds-topbar-refresh:is(:hover,:focus-visible) .ds-refresh-label{max-width:90px;margin-left:8px;opacity:1;transform:none}
+.ds-topbar-refresh.is-spinning svg.lucide{animation:ds-refresh-spin .8s linear infinite}
+@keyframes ds-refresh-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.ds-refresh-label,.ds-topbar-refresh{transition:none}.ds-topbar-refresh.is-spinning svg.lucide{animation:none}}
+
+/* ───────────── Toasts ───────────── */
+.ds-toasts{position:fixed;top:72px;right:var(--space-5);z-index:1300;display:flex;flex-direction:column;gap:var(--space-2);width:min(380px,calc(100vw - 32px));pointer-events:none;font-family:var(--font-sans)}
+.ds-toast{display:grid;grid-template-columns:20px minmax(0,1fr) 24px;align-items:start;gap:var(--space-3);padding:var(--space-3) var(--space-3) var(--space-3) var(--space-4);border:1px solid var(--border-default);border-left:4px solid var(--tu-cyan-600);border-radius:var(--radius-lg);background:var(--surface-card);box-shadow:var(--shadow-3);pointer-events:auto;animation:ds-toast-in .42s cubic-bezier(.22,1,.36,1)}
+.ds-toast.is-error{border-left-color:var(--danger)}
+.ds-toast.is-success{border-left-color:var(--success)}
+.ds-toast.is-warning{border-left-color:var(--attention)}
+.ds-toast.is-leaving{animation:ds-toast-out .28s ease forwards}
+.ds-toast-icon{width:20px!important;height:20px!important;margin-top:1px;color:var(--tu-cyan-700)}
+.ds-toast.is-error .ds-toast-icon{color:var(--danger)}
+.ds-toast.is-success .ds-toast-icon{color:var(--success)}
+.ds-toast.is-warning .ds-toast-icon{color:var(--attention-text)}
+.ds-toast-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ds-toast-copy strong{font-size:var(--text-sm);font-weight:650;color:var(--text-strong)}
+.ds-toast-copy span{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;font-size:var(--text-xs);line-height:1.45;color:var(--text-muted);overflow-wrap:anywhere}
+.ds-toast-close{display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--text-faint);cursor:pointer}
+.ds-toast-close:hover{background:var(--surface-sunken);color:var(--text-strong)}
+.ds-toast-close svg.lucide{width:14px;height:14px}
+@keyframes ds-toast-in{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+@keyframes ds-toast-out{to{opacity:0;transform:translateX(24px)}}
+#error{display:none!important}
+
+/* ───────────── Pipeline error card ───────────── */
+.ds-error-card{display:flex;flex-direction:column;gap:var(--space-3);margin:0 0 var(--space-4);padding:var(--space-4) var(--space-5);border:1px solid color-mix(in srgb,var(--danger) 35%,#fff);border-radius:var(--radius-lg);background:var(--danger-50);font-family:var(--font-sans);animation:ds-dialect-in var(--dur-2) var(--ease-out)}
+.ds-error-card[hidden]{display:none}
+.ds-error-card.is-cancelled{border-color:var(--border-default);background:var(--surface-sunken)}
+.ds-error-head{display:grid;grid-template-columns:28px minmax(0,1fr);gap:var(--space-3);align-items:start}
+.ds-error-icon{width:28px!important;height:28px!important;color:var(--danger)}
+.ds-error-card.is-cancelled .ds-error-icon{color:var(--text-muted)}
+.ds-error-head strong{display:block;font-size:var(--text-md);font-weight:650;color:var(--text-strong)}
+.ds-error-head p{margin:4px 0 0;font-size:var(--text-sm);line-height:1.5;color:var(--danger-text);overflow-wrap:anywhere}
+.ds-error-card.is-cancelled .ds-error-head p{color:var(--text-muted)}
+.ds-error-details{margin-left:40px;font-size:var(--text-xs)}
+.ds-error-details summary{cursor:pointer;font-weight:600;color:var(--text-link)}
+.ds-error-details pre{max-height:220px;margin:var(--space-2) 0 0;padding:var(--space-3);overflow:auto;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);font:var(--text-xs)/1.5 var(--font-mono);color:var(--text-default);white-space:pre-wrap}
+.ds-error-actions{display:flex;gap:var(--space-2);margin-left:40px}
+.ds-error-actions button{display:inline-flex!important;align-items:center;gap:6px;height:34px;padding:0 var(--space-3)!important;font-size:var(--text-xs)!important}
+.ds-error-actions svg.lucide{width:14px;height:14px}
+
+/* ───────────── Notifications view and sidebar badge ───────────── */
+.ds-notification-badge{position:absolute;top:7px;left:30px;display:grid;place-items:center;min-width:17px;height:17px;padding:0 4px;border-radius:var(--radius-full);background:var(--danger);color:#fff;font:700 10px/1 var(--font-sans);box-shadow:0 0 0 2px #002b40}
+.ds-notification-badge[hidden]{display:none}
+#notificationsPanel{display:flex;flex-direction:column;gap:var(--space-4);font-family:var(--font-sans)}
+#notificationsPanel[hidden]{display:none}
+.ds-notify-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-4);flex-wrap:wrap}
+.ds-notify-head h2{margin:0;font-size:var(--text-xl);font-weight:650;color:var(--text-strong)}
+.ds-notify-head p{margin:4px 0 0;font-size:var(--text-sm);color:var(--text-muted)}
+.ds-notify-actions{display:flex;gap:var(--space-2)}
+.ds-notify-actions button{display:inline-flex!important;align-items:center;gap:6px;height:34px;padding:0 var(--space-3)!important;font-size:var(--text-xs)!important}
+.ds-notify-actions svg.lucide{width:14px;height:14px}
+.ds-notify-filter{display:inline-flex;align-self:flex-start;gap:2px;padding:3px;border-radius:var(--radius-md);background:var(--surface-sunken)}
+.ds-notify-filter button{height:30px;padding:0 var(--space-3);border:0;border-radius:6px;background:transparent;color:var(--text-muted);font:600 var(--text-xs)/1 var(--font-sans);cursor:pointer}
+.ds-notify-filter button[aria-pressed=true]{background:var(--surface-card);color:var(--text-strong);box-shadow:var(--shadow-1)}
+.ds-notify-list{display:flex;flex-direction:column;gap:var(--space-2)}
+.ds-notify-day{margin:var(--space-3) 0 0;font:600 var(--text-2xs)/1.4 var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint)}
+.ds-notify-item{position:relative;display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:var(--space-3);align-items:start;padding:var(--space-3) var(--space-4);border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-card)}
+.ds-notify-item.is-unread{border-color:color-mix(in srgb,var(--tu-cyan-600) 40%,#fff);background:color-mix(in srgb,var(--tu-cyan-50) 45%,#fff)}
+.ds-notify-item.is-unread::before{content:"";position:absolute;left:-4px;top:50%;width:8px;height:8px;margin-top:-4px;border-radius:50%;background:var(--tu-cyan-600)}
+.ds-notify-icon{width:22px!important;height:22px!important;color:var(--tu-cyan-700)}
+.ds-notify-item.is-error .ds-notify-icon{color:var(--danger)}
+.ds-notify-item.is-success .ds-notify-icon{color:var(--success)}
+.ds-notify-item.is-warning .ds-notify-icon{color:var(--attention-text)}
+.ds-notify-copy{min-width:0}
+.ds-notify-copy strong{font-size:var(--text-sm);font-weight:650;color:var(--text-strong)}
+.ds-notify-copy p{margin:2px 0 0;font-size:var(--text-xs);line-height:1.5;color:var(--text-muted);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.ds-notify-meta{display:flex;flex-direction:column;align-items:flex-end;gap:6px;white-space:nowrap}
+.ds-notify-meta time{font-size:var(--text-xs);color:var(--text-faint);font-variant-numeric:tabular-nums}
+.ds-notify-open{display:inline-flex;align-items:center;gap:2px;padding:0;border:0;background:none;color:var(--text-link);font:600 var(--text-xs)/1 var(--font-sans);cursor:pointer}
+.ds-notify-open svg.lucide{width:14px;height:14px}
+.ds-notify-empty{display:flex;flex-direction:column;align-items:center;gap:var(--space-2);padding:var(--space-10) var(--space-4);border:1.5px dashed var(--border-default);border-radius:var(--radius-lg);color:var(--text-muted);text-align:center}
+.ds-notify-empty svg.lucide{width:32px;height:32px;color:var(--text-faint)}
+.ds-notify-empty strong{font-size:var(--text-md);color:var(--text-strong)}
+@media (prefers-reduced-motion:reduce){.ds-toast,.ds-toast.is-leaving{animation:none}}
+/* The error card replaces the duplicated heading and raw log paragraph while it is shown. */
+#runningPanel:has(#pipelineErrorCard:not([hidden])) :is(#phase,#processed){display:none!important}
+.ds-notify-head h2{display:none}
+
+/* ───────────── Live results (Analysis while a comparison runs) ───────────── */
+#results.is-live>:not(#liveResults){display:none!important}
+.ds-live{display:flex;flex-direction:column;gap:var(--space-4);font-family:var(--font-sans)}
+.ds-live[hidden]{display:none}
+.ds-live-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-4)}
+.ds-live-head h2{margin:6px 0 0;font-size:var(--text-xl);font-weight:650;color:var(--text-strong)}
+.ds-live-phase{margin:4px 0 0;font-size:var(--text-sm);color:var(--text-muted)}
+.ds-live-elapsed{font-size:var(--text-xs);color:var(--text-faint);font-variant-numeric:tabular-nums;white-space:nowrap}
+.ds-live-pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 10px;border-radius:var(--radius-full);background:var(--danger-50);color:var(--danger-text);font:700 var(--text-2xs)/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase}
+.ds-live-pill i,.ds-live-dot{width:8px;height:8px;border-radius:50%;background:var(--danger);animation:ds-live-pulse 1.4s ease-in-out infinite}
+@keyframes ds-live-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
+.ds-live-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--space-3)}
+.ds-live-metric{display:grid;grid-template-columns:20px minmax(0,1fr);grid-template-rows:auto auto;column-gap:var(--space-2);align-items:center;padding:var(--space-3) var(--space-4);border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-card)}
+.ds-live-metric svg.lucide{width:18px;height:18px;color:var(--tu-cyan-700)}
+.ds-live-metric span{font-size:var(--text-xs);color:var(--text-muted)}
+.ds-live-metric strong{grid-column:1/-1;margin-top:6px;font:700 var(--text-2xl)/1 var(--font-sans);color:var(--text-strong);font-variant-numeric:tabular-nums;transition:color .3s}
+.ds-live-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:var(--space-4);align-items:start}
+.ds-live-card{display:flex;flex-direction:column;gap:var(--space-3);min-width:0;padding:var(--space-4);border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-card)}
+.ds-live-card h3{margin:0;font-size:var(--text-md);font-weight:650;color:var(--text-strong)}
+.ds-live-columns{display:flex;flex-direction:column;gap:var(--space-2)}
+.ds-live-column{display:grid;grid-template-columns:minmax(80px,32%) minmax(0,1fr) auto;align-items:center;gap:var(--space-3);font-size:var(--text-sm)}
+.ds-live-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:var(--text-xs);color:var(--text-default)}
+.ds-live-bar{height:8px;border-radius:var(--radius-full);background:var(--n-100);overflow:hidden}
+.ds-live-bar i{display:block;height:100%;border-radius:inherit;background:var(--attention);transition:width .6s cubic-bezier(.45,0,.2,1)}
+.ds-live-column b{font-variant-numeric:tabular-nums;color:var(--text-strong)}
+.ds-live-feed{max-height:min(440px,50dvh);overflow:auto;border:1px solid var(--border-default);border-radius:var(--radius-md)}
+.ds-live-feed table{width:100%;border-collapse:separate;border-spacing:0;font:var(--text-xs)/1.4 var(--font-mono)}
+.ds-live-feed th{position:sticky;top:0;z-index:1;padding:8px 12px;text-align:left;font-family:var(--font-sans);white-space:nowrap}
+.ds-live-feed td{max-width:28ch;padding:6px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-bottom:1px solid var(--border-subtle)}
+.ds-live-feed tbody tr{animation:ds-dialect-in .4s var(--ease-out)}
+.ds-live-empty{margin:0;padding:var(--space-4);font:var(--text-sm)/1.5 var(--font-sans)!important;color:var(--text-muted);text-align:center;white-space:normal!important}
+.ds-live-foot{margin:0;font-size:var(--text-xs);color:var(--text-faint)}
+.ds-live-open{display:inline-flex;align-items:center;gap:var(--space-2);align-self:flex-start;height:36px;margin:0 0 var(--space-3);padding:0 var(--space-4);border:1px solid color-mix(in srgb,var(--danger) 30%,#fff);border-radius:var(--radius-full);background:var(--surface-card);color:var(--text-strong);font:600 var(--text-sm)/1 var(--font-sans);box-shadow:var(--shadow-1);cursor:pointer}
+.ds-live-open[hidden]{display:none}
+.ds-live-open svg.lucide{width:16px;height:16px}
+.ds-live-open:hover{background:var(--surface-hover)}
+@media (max-width:1100px){.ds-live-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.ds-live-grid{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:640px){.ds-live-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (prefers-reduced-motion:reduce){.ds-live-pill i,.ds-live-dot,.ds-live-feed tbody tr{animation:none}}
+
+/* Excel options inside the Export menu. */
+#reportsMenu .ds-excel-options{display:grid;gap:var(--space-2);padding:var(--space-3);border:1px solid var(--border-subtle);border-radius:var(--radius-md);background:var(--surface-sunken)}
+#reportsMenu .ds-excel-options label{display:grid;gap:4px;font-size:var(--text-xs);font-weight:600;color:var(--text-default)}
+#reportsMenu .ds-excel-options .ds-excel-check{display:flex;align-items:flex-start;gap:var(--space-2);font-weight:500;line-height:1.4;cursor:pointer}
+#reportsMenu .ds-excel-options .ds-excel-check input{flex:none;width:16px;height:16px;margin:1px 0 0;accent-color:var(--tu-cyan-600)}
+
+/* Early estimate card in the live view. */
+.ds-live-estimate{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-4);border:1.5px dashed color-mix(in srgb,var(--tu-cyan-600) 55%,#fff);border-radius:var(--radius-lg);background:color-mix(in srgb,var(--tu-cyan-50) 60%,#fff)}
+.ds-live-estimate[hidden]{display:none}
+.ds-live-estimate-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-2) var(--space-3)}
+.ds-live-estimate-tag{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--radius-full);background:var(--tu-cyan-600);color:#fff;font:700 var(--text-2xs)/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase}
+.ds-live-estimate-head strong{font-size:var(--text-lg);font-weight:650;color:var(--text-strong);font-variant-numeric:tabular-nums}
+.ds-live-estimate-note{flex-basis:100%;font-size:var(--text-xs);color:var(--text-muted)}
+.ds-live-estimate-columns{display:flex;flex-wrap:wrap;gap:6px}
+.ds-live-estimate-chip{display:inline-flex;align-items:center;height:24px;padding:0 10px;border:1px solid var(--border-default);border-radius:var(--radius-full);background:var(--surface-card);font:500 var(--text-xs)/1 var(--font-mono);color:var(--text-default)}
+
+/* Compare-as type in the rules drawer. */
+.ds-drawer .ds-rule-type{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--space-2) var(--space-3)}
+.ds-drawer .ds-rule-type label{display:grid;gap:6px;font-size:var(--text-xs);font-weight:600;color:var(--text-default)}
+.ds-drawer .ds-rule-type label[hidden]{display:none}
+.ds-drawer .ds-rule-type input{height:34px;margin:0;font-family:var(--font-mono);font-size:var(--text-xs)}
+.ds-drawer .rule-options label.is-disabled{opacity:.45}
+
+/* Fixed-width layout inside the file settings editor. */
+#headersPanel.ds .ds-dialect-editor label[hidden]{display:none}
+#headersPanel.ds .ds-dialect-editor.is-fixed{grid-template-columns:repeat(3,minmax(0,1fr))}
+#headersPanel.ds .ds-fixed{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-2) var(--space-3)}
+#headersPanel.ds .ds-fixed[hidden]{display:none}
+#headersPanel.ds .ds-fixed label{display:grid;gap:4px;min-width:0;font:600 var(--text-2xs)/1.4 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint)}
+#headersPanel.ds .ds-fixed .ds-fixed-wide{grid-column:1/-1}
+#headersPanel.ds .ds-fixed textarea{min-height:110px;margin:0;padding:var(--space-2);border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);font:var(--text-xs)/1.5 var(--font-mono);color:var(--text-strong);text-transform:none;letter-spacing:0;resize:vertical}
+#headersPanel.ds .ds-fixed input[type=number]{height:32px;margin:0;font-family:var(--font-mono);font-size:var(--text-xs)}
+#headersPanel.ds .ds-fixed .ds-fixed-check{display:flex;align-items:center;gap:var(--space-2);grid-column:1/-1;text-transform:none;letter-spacing:0;font-size:var(--text-xs);font-weight:500;color:var(--text-default);cursor:pointer}
+#headersPanel.ds .ds-fixed .ds-fixed-check input{width:16px;height:16px;margin:0;accent-color:var(--tu-cyan-600)}
+#headersPanel.ds .ds-dialect-status{color:var(--text-muted)}
+#headersPanel.ds .ds-dialect-status.is-error{color:var(--danger-text)}
+/* The card's heading, file settings and hint never shrink; with the taller fixed-width editor open the card scrolls. */
+#headersPanel.ds .header-editors>section>:is(h3,.ds-dialect,.ds-dialect-editor,.ds-dialect-hint,p.muted){flex:none}
+#headersPanel.ds .header-editors>section.is-editing-dialect:has(.ds-dialect-editor.is-fixed){overflow:auto;scrollbar-width:thin}
+#headersPanel.ds .ds-fixed textarea{min-height:88px}
+
+/* Job history storage column. */
+.history-storage{white-space:nowrap;font-variant-numeric:tabular-nums}
+.history-storage .history-free{margin-left:var(--space-2);height:26px;min-height:0;padding:0 8px;font-size:var(--text-2xs)}
+
+/* Shareable links in the mismatch drawer */
+#analysisDrawer.ds-mismatch .ds-share-btn{display:inline-flex;align-items:center;gap:6px;flex:none}
+#analysisDrawer.ds-mismatch .ds-share-btn .lucide{width:15px;height:15px}
+#analysisDrawer.ds-mismatch .ds-row-link .lucide{width:14px;height:14px}
+#analysisDrawer.ds-mismatch tr.ds-row-target td{background:var(--tu-cyan-50)!important;box-shadow:inset 0 1px 0 var(--tu-cyan-300),inset 0 -1px 0 var(--tu-cyan-300);animation:ds-row-target 1.6s ease-out 1}
+#analysisDrawer.ds-mismatch tr.ds-row-target td:first-child{box-shadow:inset 3px 0 0 var(--tu-cyan-500,#00a6ca),inset 0 1px 0 var(--tu-cyan-300),inset 0 -1px 0 var(--tu-cyan-300)}
+@keyframes ds-row-target{0%{background:var(--tu-cyan-100,#c7eef6)}100%{background:var(--tu-cyan-50)}}
+@media (prefers-reduced-motion:reduce){#analysisDrawer.ds-mismatch tr.ds-row-target td{animation:none}}
+
+/* Notifications bell in the top bar, between Refresh and Help; same size and border as both. */
+.ds-topbar-bell{position:relative;display:inline-grid;place-items:center;align-self:center;width:34px;height:34px;margin:0 -6px 0 0;padding:0;border:1px solid rgb(217,227,233);border-radius:8px;background:#fff;color:rgb(61,85,102);cursor:pointer;transition:background var(--dur-2) var(--ease-out),border-color var(--dur-2) var(--ease-out),color var(--dur-2) var(--ease-out),box-shadow var(--dur-2) var(--ease-out)}
+.ds-topbar-bell svg.lucide{width:17px;height:17px}
+.ds-topbar-bell:is(:hover,:focus-visible),.ds-topbar-bell.active{background:var(--tu-cyan-50);border-color:color-mix(in srgb,var(--tu-cyan-600) 45%,#fff);color:var(--tu-cyan-700);box-shadow:var(--shadow-1);outline:none}
+.ds-topbar-bell .ds-notification-badge{top:-6px;left:auto;right:-7px;box-shadow:0 0 0 2px #fff}

@@ -95,7 +95,13 @@ def size_worker(job, directory, snapshot=None):
     cap = max(0, int(job.get('memory_cap_mb') or 0))
     reserve = max(2 * GIB, available // 4)
     parallel_slots = max(1, int(job.get('memory_concurrency') or 1))
-    memory_mb = max(64, (available - reserve) // (MIB * parallel_slots))
+    allocation = job.get('allocation') or {}
+    if allocation:
+        # The server's broker decided this comparison's share of CPUs and of the memory budget.
+        budget = min(available - reserve, int((total - reserve) * float(allocation.get('memory_share', 1.0))))
+        memory_mb = max(64, budget // MIB)
+    else:
+        memory_mb = max(64, (available - reserve) // (MIB * parallel_slots))
     if cap:
         memory_mb = min(memory_mb, cap)
     columns = max(1, len(job.get('columns') or job.get('source_headers', {}).get('left') or ['']))
@@ -107,9 +113,9 @@ def size_worker(job, directory, snapshot=None):
                 sort_workers=1, read_batch_size=read_rows, compare_batch_size=compare_rows,
                 native_batch_bytes=max(MIB, min(64 * MIB, memory_mb * MIB // 64)),
                 io_buffer_bytes=max(64 * 1024, min(4 * MIB, memory_mb * MIB // 256)),
-                cpu_threads=max(1, min(4, int(snapshot['cpu_count']) // parallel_slots)),
-                # Partitioned comparisons split the CPUs between concurrently running jobs.
-                parallel_workers=max(1, min(16, int(snapshot['cpu_count']) // parallel_slots)), automatic=True)
+                cpu_threads=max(1, min(4, int(allocation.get('cpus') or int(snapshot['cpu_count']) // parallel_slots))),
+                # Partitioned comparisons use the CPUs allocated to this run.
+                parallel_workers=max(1, min(16, int(allocation.get('cpus') or int(snapshot['cpu_count']) // parallel_slots))), automatic=True)
 
 
 def prepare_worker(job, directory):

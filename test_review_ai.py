@@ -13,7 +13,10 @@ class ReviewAiTests(FeatureTests):
             self.client.request(url+'/start',config)
             result=self.client.wait(url,lambda j:j['state'] in ('complete','error'))
         self.assertEqual(result['state'],'complete',result)
-        for k in ('html','excel'):self.assertEqual(result['exports'][k]['state'],'complete')
+        # The HTML report is built in the background after completion; Excel only on request.
+        result=self.client.wait(url,lambda j:j['exports'].get('html',{}).get('state') in ('complete','error'))
+        self.assertEqual(result['exports']['html']['state'],'complete')
+        self.assertNotIn('excel',result['exports'])
         return url,result
     def test_review_rules_scope_restore_and_comments(self):
         path=self.upload(b'id,v,x\n1,0,a\n2,-11,b\n3,same,c\n4,only,d\n',b'id,v,x\n1,0.00,a\n2,-11.00,B\n3,same,c\n5,only,e\n')

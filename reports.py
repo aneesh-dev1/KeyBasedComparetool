@@ -224,10 +224,21 @@ def column_letter(number):
     return value
 
 
-def xml_text(value):
+EXCEL_CELL_LIMIT = 32767
+EXCEL_DATA_ROWS = 1048574
+
+
+def xml_text(value, truncated=None):
+    """Escape one cell. With a ``truncated`` counter, over-long text is cut and visibly flagged instead of failing."""
     value = str(value)
-    if len(value.encode('utf-16-le')) // 2 > 32767:
-        raise ValueError('A value exceeds Excel’s 32,767-character cell limit. Download the CSV results to preserve the full value.')
+    length = len(value.encode('utf-16-le')) // 2
+    if length > EXCEL_CELL_LIMIT:
+        if truncated is None:
+            raise ValueError('A value exceeds Excel’s 32,767-character cell limit. Download the CSV results to preserve the full value.')
+        marker = f' … [TRUNCATED: {length:,} characters; full value in the CSV results]'
+        keep = EXCEL_CELL_LIMIT - len(marker) - 1
+        value = value.encode('utf-16-le')[:keep * 2].decode('utf-16-le', errors='ignore') + marker
+        truncated['cells'] = truncated.get('cells', 0) + 1
     # Preserve literal Excel escape sequences, then encode XML-forbidden controls.
     value = re.sub(r'_x[0-9A-Fa-f]{4}_', lambda m: '_x005F_' + m.group()[1:], value)
     value = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]', lambda m: f'_x{ord(m.group()):04X}_', value)
@@ -252,7 +263,7 @@ def sheet_names(columns):
     return result
 
 
-def write_xlsx(path, sheets, options=None, notify=lambda message:None):
+def write_xlsx(path, sheets, options=None, notify=lambda message:None, truncated=None):
     """Write worksheets sequentially; source text is never interpreted as a formula."""
     options = options or {}
     ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
@@ -295,13 +306,13 @@ def write_xlsx(path, sheets, options=None, notify=lambda message:None):
                         if isinstance(value, (int, float)):
                             cells.append(f'<c r="{ref}" s="{style}"><v>{value}</v></c>')
                         else:
-                            cells.append(f'<c r="{ref}" s="{style}" t="inlineStr"><is><t xml:space="preserve">{xml_text(value)}</t></is></c>')
+                            cells.append(f'<c r="{ref}" s="{style}" t="inlineStr"><is><t xml:space="preserve">{xml_text(value, truncated)}</t></is></c>')
                     stream.write((f'<row r="{number}">' + ''.join(cells) + '</row>').encode('utf-8'))
                 stream.write((f'</sheetData><autoFilter ref="A{header_rows}:{column_letter(max_columns)}{max(header_rows, number)}"/>' + ('<hyperlinks>'+''.join(hyperlinks)+'</hyperlinks>' if hyperlinks else '') + '</worksheet>').encode())
 
 
 @contextlib.contextmanager
-def partition_columns(report, columns, parent, notify):
+def partition_columns(report, columns, parent, notify, limit=None):
     # Partition in a single pass. Limit open files even with 2,000 changed columns.
     with tempfile.TemporaryDirectory(dir=parent) as work:
         paths = {column: Path(work) / f'{i}.jsonl' for i, column in enumerate(columns)}
@@ -312,9 +323,20 @@ def partition_columns(report, columns, parent, notify):
         bucket_paths = [Path(work) / f'bucket-{i}.jsonl' for i in range(len(groups))]
         with contextlib.ExitStack() as stack:
             buckets = [stack.enter_context(path.open('w', encoding='utf-8')) for path in bucket_paths]
+            written = {column: 0 for column in columns}
+            full = 0
             with (report / 'differences.csv').open(encoding='utf-8', newline='') as source:
                 for index, row in enumerate(csv.DictReader(source), 1):
                     column = row['column']
+                    # With a row limit, a full column is skipped, and reading stops once every column is full.
+                    if limit is not None and column in written:
+                        if written[column] >= limit:
+                            continue
+                        written[column] += 1
+                        if written[column] == limit:
+                            full += 1
+                            if full == len(columns):
+                                break
                     values = json.loads(row['key_json']) + [row['left_value'], row['right_value']]
                     buckets[group_for[column]].write(json.dumps([column, values], ensure_ascii=False) + '\n')
                     if index % 10000 == 0:
@@ -331,13 +353,16 @@ def partition_columns(report, columns, parent, notify):
         yield paths
 
 
-def export_excel(report, destination, notify=lambda message: None):
+def export_excel(report, destination, notify=lambda message: None, max_rows=None, truncate=False):
+    """Excel workbook. ``max_rows`` caps each column sheet (Excel holds at most 1,048,574 data rows per sheet);
+    ``truncate`` cuts over-long values to fit a cell and flags them instead of failing."""
     summary = report_summary(report)
     row_notes=comment_lookup(summary)
     stats = column_stats(summary)
     columns = [name for name,count,_,_ in stats if count]
-    if any(summary['changed_cells_by_column'][name] > 1048574 for name in columns):
-        raise ValueError('One column has more than 1,048,574 mismatches and cannot fit in one Excel sheet. Download CSV instead.')
+    limit = min(int(max_rows), EXCEL_DATA_ROWS) if max_rows else EXCEL_DATA_ROWS
+    capped = {name: summary['changed_cells_by_column'][name] for name in columns if summary['changed_cells_by_column'][name] > limit}
+    truncated = {} if truncate else None
     has_duplicates = bool(summary.get('left_duplicate_keys') or summary.get('right_duplicate_keys'))
     reserved = ['Comparison Summary', 'TOC'] + (['Duplicate keys'] if has_duplicates else []) + (['Ignored key containers'] if summary.get('ignore_key_containers') else []) + (['Analysis notes'] if summary.get('analysis_notes') else [])
     names = sheet_names(reserved + columns)
@@ -365,6 +390,10 @@ def export_excel(report, destination, notify=lambda message: None):
                 yield [item['name'],item['reason']]
         if has_duplicates:
             yield ['WARNING: duplicate keys',Link('Review skipped rows; kept '+summary.get('duplicate_policy','first')+' source occurrence','Duplicate keys')]
+        if capped:
+            yield ['Rows per column sheet',f'First {limit:,} mismatches of each column; {len(capped):,} column(s) have more. The CSV results hold every mismatch.']
+        if truncate:
+            yield ['Long values','Values over Excel’s 32,767-character cell limit are cut and marked [TRUNCATED]; the CSV results hold the full values.']
         yield ['Contents',Link('Open TOC','TOC')]
         for row in itertools.islice(summary_rows(summary),1,None):
             value=row[1]
@@ -388,7 +417,7 @@ def export_excel(report, destination, notify=lambda message: None):
         options['Ignored key containers']={'header_rows':2,'audit':True}
     for name in mapped.values():
         options[name]['value_columns']=[len(summary['keys'])+1,len(summary['keys'])+2]
-    with partition_columns(report, columns, destination.parent, notify) as paths:
+    with partition_columns(report, columns, destination.parent, notify, limit if capped else None) as paths:
         def rows(column):
             notify(f'Writing sheet for {column}')
             yield summary['keys']+['valueA','valueB','variable']+(['Comments'] if row_notes else [])+[Link('Back to TOC','TOC')]
@@ -399,7 +428,8 @@ def export_excel(report, destination, notify=lambda message: None):
         sheets.extend((mapped[column],rows(column)) for column in columns)
         if not columns:
             sheets.append(('No mismatches',iter([['Comparison result'],['Status','Details'],['No changed cells','Check summary for keys found only in one file.']])))
-        write_xlsx(destination,sheets,options,notify)
+        write_xlsx(destination,sheets,options,notify,truncated)
+    return dict(rows_per_column=limit, capped_columns=len(capped), truncated_cells=(truncated or {}).get('cells', 0))
 
 
 def numeric_difference(left, right):

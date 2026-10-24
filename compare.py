@@ -500,11 +500,12 @@ def merge_pairs(left, right):
             a,b=next(left,None),next(right,None)
 
 
-def compare_pair_stream(pairs, column_count, policies, writers, stats, columns, on_row=None, cancel_file=None):
+def compare_pair_stream(pairs, column_count, policies, writers, stats, columns, on_row=None, cancel_file=None, live=None):
     """Compare aligned (left, right) records and write every output row. Shared by all engines.
 
     ``on_row(count, finished)`` runs before and after each pair; without it the cancel file is
-    checked every 1,024 pairs. Returns the number of pairs processed.
+    checked every 1,024 pairs. ``live`` (a live.LiveSnapshot or a sample collector) sees each changed cell
+    and is offered a snapshot every 256 pairs; it never changes the output. Returns the number of pairs processed.
     """
     from mismatch_scan import differences_for_pairs
     raw_write=writers['raw_differences'].writerows
@@ -516,6 +517,7 @@ def compare_pair_stream(pairs, column_count, policies, writers, stats, columns, 
     for a,b,differences in differences_for_pairs(pairs,column_count):
         if on_row is not None:on_row(processed,False)
         processed+=1
+        if live is not None and processed&255==0:live.tick()
         if b is None:
             left_write(json.loads(a[0]))
             stats['left_only'] += 1
@@ -541,6 +543,7 @@ def compare_pair_stream(pairs, column_count, policies, writers, stats, columns, 
                     columns[name]+=1
                     stats['changed_cells']+=1
                     difference_rows.append((key_text,name,'[NULL]' if av is None else '[NULL] (text)' if av=='[NULL]' else av,'[NULL]' if bv is None else '[NULL] (text)' if bv=='[NULL]' else bv))
+                    if live is not None:live.sample(difference_rows[-1])
                 if len(raw_rows)>=1024 or pending_bytes>=1024*1024:
                     raw_write(raw_rows);difference_write(difference_rows)
                     raw_rows.clear();difference_rows.clear();pending_bytes=0
@@ -628,7 +631,9 @@ def _compare(args):
         # Large inputs use the parallel partitioned engine; a resumed disk sort keeps its saved batches.
         from partitioned import should_use, run as run_partitioned
         resuming_sort=any((temp/(side+'.json')).exists() for side in ('left','right'))
-        if not resuming_sort and should_use(args):
+        # An interrupted parallel run continues with the same engine and reuses its finished key ranges.
+        resuming_partitioned=(temp/'partitioned'/'manifest.json').exists()
+        if not resuming_sort and (resuming_partitioned or should_use(args)):
             stats['execution_engine']='partitioned'
             run_partitioned(args,left_names,right_names,canonical,temp,stats,columns,out,policies,progress)
             if checkpoint_dir:
@@ -685,7 +690,12 @@ def _compare(args):
                             last_update=now
                     if count % batch_size == 0:
                         progress(args, 'Comparison batch complete', stage='compare', batch=(count-1)//batch_size+1, batch_keys=batch_size, rows=count, changed_cells=stats['changed_cells'], status='completed', elapsed_seconds=round(time.monotonic()-batch_start, 3))
-                processed=compare_pair_stream(pairs,len(canonical),policies,writers,stats,columns,on_row)
+                live=None
+                if getattr(args,'live_file',None):
+                    from live import LiveSnapshot
+                    live=LiveSnapshot(args.live_file,stats,columns)
+                processed=compare_pair_stream(pairs,len(canonical),policies,writers,stats,columns,on_row,live=live)
+                if live is not None:live.tick('writing',force=True)
                 if processed%batch_size:
                     progress(args, 'Comparison batch complete', stage='compare', batch=(processed-1)//batch_size+1, batch_keys=processed%batch_size, rows=processed, changed_cells=stats['changed_cells'], status='completed', elapsed_seconds=round(time.monotonic()-batch_start,3))
                 progress(args, 'Comparing keys', stage='compare', rows=processed, completed_batches=(processed+batch_size-1)//batch_size, status='completed')

@@ -25,7 +25,12 @@ class EnterpriseTests(unittest.TestCase):
         path,job=self.sources_job();before={p:p.read_bytes() for p in self.sources.iterdir()};result=self.complete(path)
         self.assertEqual(result['summary']['changed_cells'],3)
         directory=self.server.app.directory(job['id']);self.assertFalse((directory/'left.csv').exists())
-        for kind in ['html','excel']:self.assertEqual(result['exports'][kind]['state'],'complete')
+        # The HTML report builds in the background after completion; Excel is generated only on request.
+        result=self.a.wait(path,lambda j:j['exports'].get('html',{}).get('state') in ('complete','error'))
+        self.assertEqual(result['exports']['html']['state'],'complete');self.assertNotIn('excel',result['exports'])
+        self.a.request(path+'/export/excel',dict(max_rows=2,truncate=True))
+        result=self.a.wait(path,lambda j:j['exports'].get('excel',{}).get('state') in ('complete','error'))
+        self.assertEqual((result['exports']['excel']['state'],result['exports']['excel']['rows_per_column']),('complete',2))
         self.a.request(path,method='DELETE');self.assertFalse(directory.exists())
         self.assertEqual(before,{p:p.read_bytes() for p in self.sources.iterdir()})
     def test_source_roots_and_changed_files_are_rejected(self):

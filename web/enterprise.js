@@ -136,8 +136,8 @@ const originalPipeline=renderPipeline;renderPipeline=async function(){await orig
 };
 $('viewResults').addEventListener('click',()=>clearInterval(completionTimer),{capture:true});
 
-function clearRuleBuilder(){for(const id of ['ruleTrim','ruleCase','ruleNumericFormat'])$(id).checked=false;for(const id of ['ruleTolerance','ruleDateLeft','ruleDateRight'])$(id).value='';$('ruleTolerance').disabled=false;}
-function hasRuleDraft(){return ['ruleTrim','ruleCase','ruleNumericFormat'].some(id=>$(id).checked)||['ruleTolerance','ruleDateLeft','ruleDateRight'].some(id=>$(id).value!=='');}
+function clearRuleBuilder(){for(const id of ['ruleTrim','ruleCase','ruleNumericFormat'])$(id).checked=false;for(const id of ['ruleTolerance','ruleDateLeft','ruleDateRight'])$(id).value='';$('ruleTolerance').disabled=false;if($('ruleType')){$('ruleType').value='';$('ruleType').dispatchEvent(new Event('change'));}}
+function hasRuleDraft(){return ['ruleTrim','ruleCase','ruleNumericFormat'].some(id=>$(id).checked)||['ruleTolerance','ruleDateLeft','ruleDateRight'].some(id=>$(id).value!=='')||!!$('ruleType')?.value;}
 document.body.insertAdjacentHTML('beforeend','<dialog id="ruleDraftDialog" class="small-confirm" aria-labelledby="ruleDraftTitle"><h2 id="ruleDraftTitle">Rules have not been added</h2><p>Your current rule selection is still a draft.</p><div class="stage-actions"><button id="discardRuleDraft" class="subtle">Continue without these edits</button><button id="returnRuleDraft" class="primary">Return to add rules</button></div></dialog>');
 function confirmRuleDraft(){if(!hasRuleDraft())return Promise.resolve(true);if(ruleDraftPrompt)return ruleDraftPrompt;ruleDraftPrompt=new Promise(resolve=>{const dialog=$('ruleDraftDialog');const finish=value=>{dialog.close();$('discardRuleDraft').onclick=$('returnRuleDraft').onclick=null;dialog.oncancel=null;ruleDraftPrompt=null;if(!value)$('addValueRule').focus();resolve(value);};$('discardRuleDraft').onclick=()=>{clearRuleBuilder();finish(true);};$('returnRuleDraft').onclick=()=>finish(false);dialog.oncancel=e=>{e.preventDefault();finish(false);};dialog.showModal();$('returnRuleDraft').focus();});return ruleDraftPrompt;}
 
@@ -678,10 +678,12 @@ window.addEventListener('DOMContentLoaded',()=>{
   const g={L:d.left,T:d.top,W:d.width,H:d.height,tx:f?f.left+Math.min(f.width,f.height)/2:innerWidth/2,ty:f?f.top+f.height/2:innerHeight-24,tw:f?Math.min(f.width,f.height)*.8:40};
   const overlay=document.createElement('div');overlay.className='ds-genie';overlay.setAttribute('aria-hidden','true');overlay.setAttribute('popover','manual');
   const computed=getComputedStyle(dialog),copy=['backgroundColor','backgroundImage','borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth','borderTopStyle','borderRightStyle','borderBottomStyle','borderLeftStyle','borderTopColor','borderRightColor','borderBottomColor','borderLeftColor','borderTopLeftRadius','borderTopRightRadius','borderBottomLeftRadius','borderBottomRightRadius','paddingTop','paddingRight','paddingBottom','paddingLeft','color','fontFamily','fontSize','lineHeight','display','flexDirection','rowGap','columnGap','overflow'];
-  const template=dialog.cloneNode(true);template.removeAttribute('id');template.querySelector('.tu-request-loader')?.remove();for(const node of template.querySelectorAll('[id]'))node.removeAttribute('id');
+  // The copy keeps its ids so every #rerunDialog style applies and it looks exactly like the dialog. It is
+  // added after the dialog, so lookups by id still find the real elements first.
+  const template=dialog.cloneNode(true);template.querySelector('.tu-request-loader')?.remove();
   const slices=[];
   for(let i=0;i<SLICES;i++){
-   const slice=document.createElement('div');slice.className=dialog.className;slice.setAttribute('open','');
+   const slice=document.createElement('div');slice.className=dialog.className;slice.id=dialog.id;slice.setAttribute('open','');
    for(const name of copy)slice.style[name]=computed[name];
    Object.assign(slice.style,{position:'fixed',left:g.L+'px',top:g.T+'px',width:g.W+'px',height:g.H+'px',margin:'0',boxSizing:'border-box',transformOrigin:'0 0',clipPath:`inset(${(i*g.H/SLICES).toFixed(2)}px 0 ${(g.H-(i+1)*g.H/SLICES-.6).toFixed(2)}px 0)`,willChange:'transform'});
    slice.append(...[...template.cloneNode(true).childNodes]);slices.push(slice);
@@ -812,7 +814,32 @@ function redesignAnalysis(){
   li.querySelector('i').style.width=(total?band.count*100/total:0)+'%';list2.append(li);
  }
  health.querySelector('.ds-health-foot').textContent=`${number(summary.changed_cells||0)} mismatched cells · ${number(summary.changed_rows||0)} keys with differences`;
- const title=panel.querySelector('h2');if(title)title.textContent='Column health';
+ const title=panel.querySelector('h2');if(title)title.textContent='Match Mismatch Overview';
+ // Records pie: every key lands in exactly one slice, so the slices add up to all keys in both files.
+ const slices=[['Equal keys','equal',summary.equal_rows],['Unequal keys','unequal',summary.changed_rows],['Only in champion','left',summary.left_only],['Only in challenger','right',summary.right_only]].map(([label,key,count])=>({label,key,count:Math.max(0,Number(count)||0)}));
+ const keys=slices.reduce((sum,slice)=>sum+slice.count,0);
+ const pie=document.createElement('div');pie.className='ds-pie';
+ const svgNS='http://www.w3.org/2000/svg',svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox','-1 -1 2 2');svg.setAttribute('role','img');
+ svg.setAttribute('aria-label',slices.map(slice=>`${slice.label}: ${number(slice.count)}`).join(', '));
+ let angle=-Math.PI/2;
+ for(const slice of slices){
+  if(!slice.count)continue;const share=slice.count/keys;let shape;
+  if(share>=1){shape=document.createElementNS(svgNS,'circle');shape.setAttribute('r','1');}
+  else{const end=angle+share*2*Math.PI,large=share>.5?1:0;shape=document.createElementNS(svgNS,'path');
+   shape.setAttribute('d',`M0 0L${Math.cos(angle)} ${Math.sin(angle)}A1 1 0 ${large} 1 ${Math.cos(end)} ${Math.sin(end)}Z`);angle=end;}
+  shape.setAttribute('class','is-'+slice.key);const tip=document.createElementNS(svgNS,'title');tip.textContent=`${slice.label}: ${number(slice.count)} (${percentText(slice.count,keys)})`;shape.append(tip);svg.append(shape);
+ }
+ const legend=document.createElement('ul');legend.className='ds-pie-legend';
+ for(const slice of slices){
+  const li=document.createElement('li');li.className='is-'+slice.key+(slice.count?'':' is-empty');
+  li.innerHTML='<span class="ds-dot"></span><span class="ds-pie-label"></span><b></b><small></small>';
+  li.querySelector('.ds-pie-label').textContent=slice.label;li.querySelector('b').textContent=number(slice.count);li.querySelector('small').textContent=keys?percentText(slice.count,keys):'—';
+  legend.append(li);
+ }
+ pie.append(svg,legend);
+ health.querySelector('.ds-stack')?.remove();
+ const columnsHead=document.createElement('p');columnsHead.className='ds-health-sub';columnsHead.textContent='Columns';
+ health.prepend(pie,columnsHead);
 }
 {const previousRender=renderSummary;renderSummary=function(){previousRender();redesignAnalysis();};if(job?.state==='complete')redesignAnalysis();}
 
@@ -1083,7 +1110,7 @@ function redesignAnalysis(){
   const form=document.createElement('form');form.className='ds-dialect-editor';form.hidden=true;
   const option=(value,label)=>Object.assign(document.createElement('option'),{value,textContent:label});
   const field=(label,select)=>{const wrap=document.createElement('label');wrap.append(label,select);return wrap;};
-  const delimiter=document.createElement('select');delimiter.append(...Object.entries(delimiterNames).map(([value,label])=>option(value,label)),option('custom','Custom…'));
+  const delimiter=document.createElement('select');delimiter.append(...Object.entries(delimiterNames).map(([value,label])=>option(value,label)),option('custom','Custom…'),option('fixed','Fixed width…'));
   const encoding=document.createElement('select');encoding.append(...Object.entries(encodingNames).map(([value,label])=>option(value,label)));
   const header=document.createElement('select');header.append(option('yes','Header'),option('no','Data'));
   const custom=Object.assign(document.createElement('input'),{maxLength:1,autocomplete:'off',spellcheck:false,placeholder:'^',className:'ds-dialect-custom'});custom.setAttribute('aria-label','Custom delimiter character');
@@ -1093,11 +1120,19 @@ function redesignAnalysis(){
   const status=document.createElement('p');status.className='ds-dialect-status';status.setAttribute('role','status');
   actions.append(status,cancel,apply);
   const delimiterField=field('Delimiter',delimiter);delimiterField.append(custom);
-  form.append(delimiterField,field('Encoding',encoding),field('First row',header),actions);
-  const syncCustom=()=>{custom.hidden=delimiter.value!=='custom';};
+  // Fixed width: a layout from column positions or a COBOL copybook; the file is converted once on Apply.
+  const fixedBox=document.createElement('div');fixedBox.className='ds-fixed';fixedBox.hidden=true;
+  fixedBox.innerHTML='<label><span>Layout</span><select class="ds-fixed-format"><option value="positions">Column positions</option><option value="copybook">COBOL copybook</option></select></label><label><span>Encoding</span><select class="ds-fixed-encoding"><option value="utf-8">UTF-8</option><option value="cp1252">Windows-1252</option><option value="latin-1">Latin-1</option><option value="cp037">EBCDIC (cp037)</option></select></label><label><span>Record length</span><input class="ds-fixed-length" type="number" min="0" value="0" inputmode="numeric" title="0 means one record per line"></label><label class="ds-fixed-wide"><span class="ds-fixed-hint"></span><textarea class="ds-fixed-layout" rows="4" spellcheck="false"></textarea></label><label class="ds-fixed-check"><input type="checkbox" class="ds-fixed-trim" checked><span>Trim padding spaces</span></label>';
+  const fixedFormat=fixedBox.querySelector('.ds-fixed-format'),fixedLayout=fixedBox.querySelector('.ds-fixed-layout');
+  const syncFixedFormat=()=>{const copybook=fixedFormat.value==='copybook';fixedBox.querySelector('.ds-fixed-hint').textContent=copybook?'Paste the copybook (DISPLAY fields; FILLER is skipped)':'One field per line: name,start,length (start at 1)';fixedLayout.placeholder=copybook?'01  ACCOUNT-RECORD.\n    05  ACCT-ID    PIC X(10).\n    05  BALANCE    PIC S9(9)V99.':'account_id,1,10\nname,11,30\nbalance,41,12';};
+  fixedFormat.addEventListener('change',syncFixedFormat);syncFixedFormat();
+  const encodingField=field('Encoding',encoding),headerField=field('First row',header);
+  form.append(delimiterField,encodingField,headerField,fixedBox,actions);
+  const syncCustom=()=>{custom.hidden=delimiter.value!=='custom';const fixed=delimiter.value==='fixed';fixedBox.hidden=!fixed;encodingField.hidden=headerField.hidden=fixed;form.classList.toggle('is-fixed',fixed);};
   delimiter.addEventListener('change',()=>{syncCustom();if(!custom.hidden)custom.focus();});
   form.load=chosen=>{
-   const known=chosen.delimiter in delimiterNames;delimiter.value=known?chosen.delimiter:'custom';custom.value=known?'':chosen.delimiter;
+   const known=chosen.delimiter in delimiterNames;delimiter.value=chosen.fixed?'fixed':known?chosen.delimiter:'custom';custom.value=known?'':chosen.delimiter;
+   if(chosen.fixed){fixedFormat.value=chosen.fixed.format;fixedLayout.value=chosen.fixed.layout||'';fixedBox.querySelector('.ds-fixed-encoding').value=chosen.fixed.encoding;fixedBox.querySelector('.ds-fixed-length').value=chosen.fixed.record_length||0;fixedBox.querySelector('.ds-fixed-trim').checked=chosen.fixed.trim!==false;for(const select of fixedBox.querySelectorAll('select'))select.dispatchEvent(new Event('change'));}
    encoding.value=chosen.encoding in encodingNames?chosen.encoding:'utf-8-sig';header.value=chosen.header===false?'no':'yes';status.textContent='';syncCustom();
    for(const select of [delimiter,encoding,header])select.dispatchEvent(new Event('change'));
   };
@@ -1105,9 +1140,24 @@ function redesignAnalysis(){
   form.addEventListener('keydown',event=>{if(event.key==='Escape'&&!openSelectWidget){event.preventDefault();setDialectEditing(side,false);}});
   form.addEventListener('submit',async event=>{
    event.preventDefault();
+   if(delimiter.value==='fixed'){
+    if(!fixedLayout.value.trim()){status.textContent='Paste the layout first.';fixedLayout.focus();return;}
+    apply.disabled=true;status.textContent='Converting…';status.classList.remove('is-error');
+    try{
+     job=await api(endpoint('/fixed-width'),{side,format:fixedFormat.value,layout:fixedLayout.value,encoding:fixedBox.querySelector('.ds-fixed-encoding').value,record_length:Number(fixedBox.querySelector('.ds-fixed-length').value)||0,trim:fixedBox.querySelector('.ds-fixed-trim').checked});
+     // The conversion runs in the background; follow it here until the file is ready.
+     while(job.state==='preparing'){status.textContent=job.preparation_message||'Converting…';await new Promise(resolve=>setTimeout(resolve,700));job=await api(endpoint());}
+     if(job.fixed_width_error?.side===side)throw Error(job.fixed_width_error.message);
+     headerDraftJob=null;hydratedId=null;$('headerChangesTable').dataset.job='';
+     setDialectEditing(side,false);hydrate();renderHeaders();syncNavigation();
+     if(typeof notify==='function')notify('success','Fixed-width file converted',job.preparation_message||'');
+    }catch(error){status.textContent=error.message;status.classList.add('is-error');}
+    finally{apply.disabled=false;}
+    return;
+   }
    const value=delimiter.value==='custom'?custom.value:delimiter.value;
    if([...value].length!==1||['\r','\n','\0','"'].includes(value)){status.textContent='Enter one delimiter character. Line breaks, null and double quotes are not supported.';custom.focus();return;}
-   apply.disabled=true;status.textContent='Reading column names…';
+   apply.disabled=true;status.textContent='Reading column names…';status.classList.remove('is-error');
    const other=side==='left'?'right':'left',kept=headerDirty&&headerDraftJob===job.id?headerDraft[other]:null;
    try{
     job=await api(endpoint('/dialect'),{side,delimiter:value,encoding:encoding.value,header:header.value==='yes'});
@@ -1116,9 +1166,10 @@ function redesignAnalysis(){
     // Unsaved renames on the other file survive a dialect change on this one.
     if(kept&&kept.length===headerDraft[other].length){headerDraft[other]=kept;headerDirty=true;renderHeaders();}
     syncNavigation();
-   }catch(error){status.textContent=error.message;}
+   }catch(error){status.textContent=error.message;status.classList.add('is-error');}
    finally{apply.disabled=false;}
   });
+  form.openFixed=()=>{delimiter.value='fixed';delimiter.dispatchEvent(new Event('change'));fixedLayout.focus();};
   return form;
  }
  const parts={};
@@ -1133,6 +1184,7 @@ function redesignAnalysis(){
   for(const select of editor.querySelectorAll('select'))enhanceSelect(select);
   strip.querySelector('.ds-dialect-change').addEventListener('click',()=>setDialectEditing(side,editor.hidden));
   hint.querySelector('.ds-dialect-borrow').addEventListener('click',()=>{
+   if(hint.dataset.mode==='fixed'){setDialectEditing(side,true);editor.openFixed();return;}
    const other=side==='left'?'right':'left';headerDraft[side]=[...headerDraft[other]];headerDirty=true;headerPage=0;renderHeaders();
   });
   parts[side]={section,strip,hint,editor};
@@ -1150,16 +1202,20 @@ function redesignAnalysis(){
    const {strip,hint,editor}=parts[side],format=fileFormat(side),chosen=job.dialects?.[side],text=format==='csv'&&chosen;
    const other=side==='left'?'right':'left',otherNumber=side==='left'?2:1;
    strip.querySelector('.ds-dialect-summary').textContent=format==='excel'?`Excel worksheet · ${job.files[side].sheet||''}`:format==='parquet'?'Parquet · typed columns':
+    chosen?.fixed?`Fixed width · ${number(chosen.fixed.fields)} fields · ${number(chosen.fixed.records)} records · ${({'utf-8':'UTF-8',cp1252:'Windows-1252','latin-1':'Latin-1',cp037:'EBCDIC'})[chosen.fixed.encoding]||chosen.fixed.encoding}`:
     chosen?`${delimiterNames[chosen.delimiter]||`Custom (${chosen.delimiter})`} · ${encodingNames[chosen.encoding]||chosen.encoding} · ${chosen.header===false?'No header row':'Header row'}`:'Delimited text';
    strip.querySelector('.ds-dialect-badge').hidden=!(text&&chosen.detected?.length);
    strip.querySelector('.ds-dialect-badge').title=text&&chosen.detected?.length?'Detected from the first 1 MB: '+chosen.detected.join(', '):'';
    strip.querySelector('.ds-dialect-change').hidden=!text||job.state!=='ready';
    if(!text||job.state!=='ready')editor.hidden=true;
-   const headerless=text&&chosen.header===false,sameWidth=headerDraft?.[side]?.length===headerDraft?.[other]?.length;
+   const headerless=text&&chosen.header===false&&!chosen.fixed,sameWidth=headerDraft?.[side]?.length===headerDraft?.[other]?.length;
    const borrowed=headerless&&sameWidth&&headerDraft[side].every((name,index)=>name===headerDraft[other][index]);
-   hint.hidden=!headerless||borrowed;
-   hint.querySelector('.ds-dialect-hint-text').textContent=sameWidth?'No header row, so columns are numbered.':`No header row, so columns are numbered. Rename them to match File ${otherNumber}.`;
-   const borrow=hint.querySelector('.ds-dialect-borrow');borrow.hidden=!sameWidth||job.state!=='ready';borrow.textContent=`Use File ${otherNumber} names`;
+   // A .dat or .txt file read as a single column is probably fixed width.
+   const singleColumn=text&&!chosen.fixed&&/\.(dat|txt)$/i.test(job.files[side].name)&&(job.source_headers?.[side]?.length===1);
+   hint.dataset.mode=singleColumn?'fixed':'borrow';
+   hint.hidden=!(singleColumn||(headerless&&!borrowed));
+   hint.querySelector('.ds-dialect-hint-text').textContent=singleColumn?'Read as a single column. If this is a fixed-width file, define its layout.':sameWidth?'No header row, so columns are numbered.':`No header row, so columns are numbered. Rename them to match File ${otherNumber}.`;
+   const borrow=hint.querySelector('.ds-dialect-borrow');borrow.hidden=job.state!=='ready'||(!singleColumn&&!sameWidth);borrow.textContent=singleColumn?'Define layout':`Use File ${otherNumber} names`;
   }
  }
  const renderHeadersWithoutDialects=renderHeaders;
@@ -1270,6 +1326,47 @@ function redesignAnalysis(){
    }
   }
   new MutationObserver(enhanceTable).observe(table,{childList:true});
+  // Loader: while the disk index is prepared, or a page takes more than a moment, the table area shows
+  // progress (cells indexed, percent and time left) instead of an empty table.
+  const results=panel.querySelector('.analysis-results'),status=$('analysisStatus');
+  const loader=document.createElement('div');loader.className='ds-analysis-loader';loader.hidden=true;loader.setAttribute('role','status');loader.setAttribute('aria-live','polite');
+  loader.innerHTML='<img src="/assets/transunion-loader.svg" alt="" width="64" height="64"><strong class="ds-analysis-loader-title"></strong><span class="ds-analysis-loader-detail"></span><div class="ds-analysis-progress" hidden><i></i></div><span class="ds-analysis-loader-eta"></span>';
+  results.querySelector('.table-scroll').before(loader);loader.append($('cancelAnalysis'));
+  const bar=loader.querySelector('.ds-analysis-progress'),fill=bar.querySelector('i');
+  let progress=null,samples=[],showTimer=0;
+  analysisProgress=result=>{
+   progress=result&&result.state!=='complete'?result:null;
+   if(progress&&Number.isFinite(progress.done)&&progress.total)samples=[...samples.filter(s=>s.done<=progress.done).slice(-6),{done:progress.done,at:performance.now()}];
+   paint();
+  };
+  function paint(){
+   const preparing=!!progress;
+   loader.querySelector('.ds-analysis-loader-title').textContent=preparing?'Preparing mismatch analysis':'Loading mismatches';
+   loader.querySelector('.ds-analysis-loader-detail').textContent=preparing?(progress.message||'Preparing…'):'Fetching this page of results…';
+   const total=progress?.total,done=progress?.done,known=preparing&&total>0&&Number.isFinite(done);
+   bar.hidden=!known;let eta='';
+   if(known){
+    const share=Math.min(1,done/total);fill.style.width=(share*100).toFixed(1)+'%';
+    const first=samples[0],last=samples.at(-1),rate=first&&last&&last.at>first.at?(last.done-first.done)/((last.at-first.at)/1000):0;
+    const left=rate>0?(total-done)/rate:0;
+    eta=`${Math.floor(share*100)}% indexed`+(left>5?` · about ${left<90?Math.round(left)+' s':Math.round(left/60)+' min'} left`:'');
+   }
+   loader.querySelector('.ds-analysis-loader-eta').textContent=eta;
+  }
+  function syncLoader(){
+   const loading=status.classList.contains('loading-status');
+   if(!loading){clearTimeout(showTimer);showTimer=0;progress=null;samples=[];loader.hidden=true;results.classList.remove('is-loading');return;}
+   paint();
+   if(progress){clearTimeout(showTimer);showTimer=0;loader.hidden=false;results.classList.add('is-loading');}
+   else if(loader.hidden&&!showTimer)showTimer=setTimeout(()=>{showTimer=0;if(status.classList.contains('loading-status')){loader.hidden=false;results.classList.add('is-loading');}},250);
+  }
+  new MutationObserver(syncLoader).observe(status,{attributes:true,attributeFilter:['class'],childList:true,characterData:true,subtree:true});
+  // The index starts building as soon as the Analysis page opens, so the drawer is usually ready.
+  const renderSummaryBeforeIndex=renderSummary;
+  renderSummary=function(){
+   renderSummaryBeforeIndex();
+   if(job?.state==='complete'&&job.summary?.changed_cells>0&&(!job.analysis||job.analysis.state==='not_started'))api(endpoint('/analysis'),{}).then(state=>{if(job)job.analysis=state;}).catch(()=>{});
+  };
   // Comments & findings: a collapsible footer that shows how many comments are saved.
   const comments=panel.querySelector('.review-comments'),summary=comments.querySelector('summary');
   const badge=Object.assign(document.createElement('span'),{className:'ds-count-badge'});
@@ -1404,4 +1501,311 @@ function redesignAnalysis(){
  }
  const renderSummaryBeforeAttach=renderSummary;renderSummary=function(){renderSummaryBeforeAttach();syncResultsLabel();};
  syncResultsLabel();
+}
+
+// Refresh beside Help: reloads the page content only; the sidebar stays in place (soft reload). On hover the
+// button widens to the left and its label slides in beside the icon.
+{
+ const help=$('workspaceHelp');
+ if(help){
+  const refresh=document.createElement('button');refresh.type='button';refresh.id='softRefresh';refresh.className='ds-topbar-refresh';refresh.setAttribute('aria-label','Refresh');
+  refresh.append(lucideNode('refresh-cw'),Object.assign(document.createElement('span'),{className:'ds-refresh-label',textContent:'Refresh'}));
+  refresh.addEventListener('click',()=>{refresh.classList.add('is-spinning');softReload();});
+  help.before(refresh);
+ }
+}
+
+// Notifications: every message appears as a toast and is saved in this browser (latest 200), so the
+// Notifications view lists what happened even after a toast has gone. Errors stay until dismissed.
+{
+ const KEY='ds-notifications',LIMIT=200;
+ const icons={error:'circle-alert',success:'circle-check',warning:'triangle-alert',info:'info'};
+ const load=()=>{try{const list=JSON.parse(localStorage.getItem(KEY)||'[]');return Array.isArray(list)?list:[];}catch{return [];}};
+ const save=list=>{try{localStorage.setItem(KEY,JSON.stringify(list.slice(0,LIMIT)));}catch{}};
+ const stack=document.createElement('div');stack.className='ds-toasts';document.body.append(stack);
+ function syncBadge(){const unread=load().filter(item=>!item.read).length,badge=$('notificationBadge');if(!badge)return;badge.textContent=unread>99?'99+':String(unread);badge.hidden=!unread;}
+ function toast(item){
+  const el=document.createElement('div');el.className='ds-toast is-'+item.kind;el.setAttribute('role',item.kind==='error'?'alert':'status');
+  const copy=document.createElement('div');copy.className='ds-toast-copy';
+  copy.append(Object.assign(document.createElement('strong'),{textContent:item.title}));
+  if(item.message)copy.append(Object.assign(document.createElement('span'),{textContent:item.message}));
+  const close=Object.assign(document.createElement('button'),{type:'button',className:'ds-toast-close'});close.setAttribute('aria-label','Dismiss notification');close.append(lucideNode('x'));
+  el.append(lucideNode(icons[item.kind]||'info','ds-toast-icon'),copy,close);stack.append(el);
+  const remove=()=>{if(el.classList.contains('is-leaving'))return;el.classList.add('is-leaving');setTimeout(()=>el.remove(),280);};
+  close.addEventListener('click',remove);if(item.kind!=='error')setTimeout(remove,6000);
+  while(stack.children.length>4)stack.firstElementChild.remove();
+ }
+ notify=function(kind,title,message='',options={}){
+  const list=load(),text=String(message||'').trim();
+  // The same event is saved once: by key when given, otherwise identical messages within a few seconds.
+  if(options.key&&list.some(item=>item.key===options.key))return;
+  if(!options.key&&list[0]&&list[0].title===title&&list[0].message===text&&Date.now()-list[0].at<4000)return;
+  const item={id:Date.now().toString(36)+Math.random().toString(36).slice(2,7),kind,title,message:text,at:Date.now(),read:currentView==='notificationsPanel',job:options.job||null,key:options.key||null};
+  list.unshift(item);save(list);syncBadge();if(currentView==='notificationsPanel')render();toast(item);
+ };
+ // Errors become toasts instead of the banner at the top of the page.
+ showError=function(error){const message=error?.message||String(error);$('error').hidden=true;notify('error','Something went wrong',message);};
+ // A failed run gets one notification and an error card on the pipeline page with the actual reason.
+ const card=document.createElement('section');card.id='pipelineErrorCard';card.className='ds-error-card';card.hidden=true;card.setAttribute('role','alert');
+ $('runningPanel').prepend(card);
+ reportJobError=function(failed){
+  const text=String(failed?.error||'The comparison stopped unexpectedly.'),lines=text.split('\n').map(line=>line.trim()).filter(Boolean);
+  // Show the file's own name instead of the server path it was stored under.
+  const fileName=path=>{const base=path.split(/[\\/]/).pop(),side=/^(left|right)\.[a-z]+$/i.exec(base)?.[1];return side&&failed?.files?.[side]?.name||base;};
+  const reason=(lines.filter(line=>/^ERROR:/i.test(line)).at(-1)||lines.at(-1)||text).replace(/^ERROR:\s*/i,'').replace(/(?:[A-Za-z]:)?[\\/][^:\n]*[\\/][^\\/:\n]+(?=:)/g,fileName);
+  const cancelled=failed?.state==='cancelled';
+  card.replaceChildren();card.classList.toggle('is-cancelled',cancelled);
+  const head=document.createElement('div');head.className='ds-error-head';
+  const copy=document.createElement('div');
+  copy.append(Object.assign(document.createElement('strong'),{textContent:cancelled?'Comparison cancelled':'Comparison failed'}),Object.assign(document.createElement('p'),{textContent:reason}));
+  head.append(lucideNode(cancelled?'circle-x':'circle-alert','ds-error-icon'),copy);
+  const details=document.createElement('details');details.className='ds-error-details';
+  details.append(Object.assign(document.createElement('summary'),{textContent:'Show details'}),Object.assign(document.createElement('pre'),{textContent:text}));
+  const actions=document.createElement('div');actions.className='ds-error-actions';
+  const consoleButton=Object.assign(document.createElement('button'),{type:'button',className:'subtle'});consoleButton.append(lucideNode('terminal'),Object.assign(document.createElement('span'),{textContent:'View console'}));
+  consoleButton.addEventListener('click',()=>{const toggle=$('runningPanel').querySelector('.ds-switch[aria-checked=false]');toggle?.click();});
+  const fresh=Object.assign(document.createElement('button'),{type:'button',className:'primary'});fresh.append(lucideNode('plus'),Object.assign(document.createElement('span'),{textContent:'New comparison'}));
+  fresh.addEventListener('click',()=>$('menuNewComparison')?.click());
+  actions.append(consoleButton,fresh);card.append(head,details,actions);card.hidden=false;
+  if(!cancelled)notify('error','Comparison failed',reason,{job:failed?.id,key:failed?.id?failed.id+':Comparison:error':null});
+ };
+ // The Notifications view.
+ const view=$('notificationsPanel');
+ view.innerHTML='<div class="ds-notify-head"><div><h2>Notifications</h2><p>Completions, alerts and errors from this browser. The latest 200 are kept.</p></div><div class="ds-notify-actions"><button type="button" class="subtle" id="markNotificationsRead"></button><button type="button" class="subtle" id="clearNotifications"></button></div></div><div class="ds-notify-filter" role="group" aria-label="Show"><button type="button" data-filter="all" aria-pressed="true">All</button><button type="button" data-filter="error" aria-pressed="false">Errors</button><button type="button" data-filter="success" aria-pressed="false">Completed</button></div><div id="notificationList" class="ds-notify-list"></div>';
+ $('markNotificationsRead').append(lucideNode('check'),Object.assign(document.createElement('span'),{textContent:'Mark all read'}));
+ $('clearNotifications').append(lucideNode('trash-2'),Object.assign(document.createElement('span'),{textContent:'Clear all'}));
+ let filter='all';
+ for(const button of view.querySelectorAll('[data-filter]'))button.addEventListener('click',()=>{filter=button.dataset.filter;for(const other of view.querySelectorAll('[data-filter]'))other.setAttribute('aria-pressed',String(other===button));render();});
+ $('markNotificationsRead').addEventListener('click',()=>{save(load().map(item=>({...item,read:true})));syncBadge();render();});
+ $('clearNotifications').addEventListener('click',()=>{if(!load().length||confirm('Clear all saved notifications?')){save([]);syncBadge();render();}});
+ const dayLabel=time=>{const d=new Date(time),today=new Date();const start=x=>new Date(x.getFullYear(),x.getMonth(),x.getDate()).getTime();const diff=(start(today)-start(d))/864e5;return diff===0?'Today':diff===1?'Yesterday':d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});};
+ function render(){
+  const list=load().filter(item=>filter==='all'||item.kind===filter),target=$('notificationList');target.replaceChildren();
+  if(!list.length){const empty=document.createElement('div');empty.className='ds-notify-empty';empty.append(lucideNode('bell'),Object.assign(document.createElement('strong'),{textContent:filter==='all'?'No notifications yet':'Nothing here'}),Object.assign(document.createElement('span'),{textContent:'Completions, alerts and errors will appear here.'}));target.append(empty);return;}
+  let day='';
+  for(const item of list){
+   const label=dayLabel(item.at);if(label!==day){day=label;target.append(Object.assign(document.createElement('h3'),{className:'ds-notify-day',textContent:label}));}
+   const row=document.createElement('article');row.className='ds-notify-item is-'+item.kind+(item.read?'':' is-unread');
+   const copy=document.createElement('div');copy.className='ds-notify-copy';
+   copy.append(Object.assign(document.createElement('strong'),{textContent:item.title}));
+   if(item.message)copy.append(Object.assign(document.createElement('p'),{textContent:item.message}));
+   const meta=document.createElement('div');meta.className='ds-notify-meta';
+   meta.append(Object.assign(document.createElement('time'),{textContent:new Date(item.at).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}));
+   if(item.job){const open=Object.assign(document.createElement('button'),{type:'button',className:'ds-notify-open'});open.append(Object.assign(document.createElement('span'),{textContent:'Open comparison'}),lucideNode('chevron-right'));open.addEventListener('click',()=>openJob(item.job).catch(showError));meta.append(open);}
+   row.append(lucideNode(icons[item.kind]||'info','ds-notify-icon'),copy,meta);target.append(row);
+  }
+ }
+ const panelBeforeNotifications=panel;
+ panel=function(name){
+  panelBeforeNotifications(name);
+  if(name==='notificationsPanel'){render();save(load().map(item=>({...item,read:true})));syncBadge();}
+  if(name==='runningPanel'&&!['error','cancelled'].includes(job?.state))card.hidden=true;
+ };
+ // The bell sits in the top bar between Refresh and Help, not in the sidebar.
+ const bell=$('navNotifications'),badge=$('notificationBadge');
+ bell.className='ds-topbar-bell';bell.removeAttribute('data-tip');bell.title='Notifications';bell.type='button';
+ bell.replaceChildren(lucideNode('bell'),badge);
+ $('workspaceHelp').before(bell);
+ bell.addEventListener('click',()=>goView('notificationsPanel').catch(showError));
+ syncBadge();
+}
+
+// Live results: Analysis opens as soon as a comparison starts. Counts, the column ranking and the latest
+// mismatches update about once a second from the engine's live snapshot; the final results replace them when
+// the comparison finishes. Mismatches can only appear once both files have been read.
+{
+ const results=$('results'),view=document.createElement('section');view.id='liveResults';view.className='ds-live';view.hidden=true;results.prepend(view);
+ const isLive=()=>!!job&&['queued','running'].includes(job.state);
+ view.innerHTML=`<div class="ds-live-head"><div><span class="ds-live-pill"><i></i>Live</span><h2>Live results</h2><p class="ds-live-phase"></p></div><span class="ds-live-elapsed"></span></div>
+  <section class="ds-live-estimate" hidden><div class="ds-live-estimate-head"><span class="ds-live-estimate-tag">Estimate</span><strong></strong><span class="ds-live-estimate-note"></span></div><div class="ds-live-estimate-columns"></div></section>
+  <div class="ds-live-metrics"></div>
+  <div class="ds-live-grid"><section class="ds-live-card"><h3>Differences by column</h3><div class="ds-live-columns"></div></section>
+  <section class="ds-live-card"><h3>Latest mismatches</h3><div class="ds-live-feed table-scroll"><table><thead><tr><th>Key</th><th>Column</th><th>File 1 value</th><th>File 2 value</th></tr></thead><tbody></tbody></table></div></section></div>
+  <p class="ds-live-foot">Counts are provisional until the comparison finishes; final results open here automatically.</p>`;
+ const metrics=[['Equal keys','equal_rows','circle-check'],['Unequal keys','changed_rows','triangle-alert'],['Changed cells','changed_cells','table-2'],['Only in champion','left_only','arrow-left'],['Only in challenger','right_only','arrow-right']];
+ const metricBox=view.querySelector('.ds-live-metrics');
+ for(const [label,field,icon] of metrics){const card=document.createElement('div');card.className='ds-live-metric';card.dataset.field=field;card.append(lucideNode(icon),Object.assign(document.createElement('span'),{textContent:label}),Object.assign(document.createElement('strong'),{textContent:'—'}));metricBox.append(card);}
+ let timer=0,polling=false,last=null;
+ const keyText=value=>{try{const parts=JSON.parse(value);return Array.isArray(parts)?parts.join(' · '):String(value);}catch{return String(value);}};
+ function phaseText(snapshot){
+  const progress=job?.progress||{};
+  if(job?.state==='queued')return 'Waiting for a server worker…';
+  if(snapshot?.state==='writing'||snapshot?.stage==='reports'||progress.stage==='reports')return 'All keys compared · writing the result files and reports';
+  if(snapshot?.state==='reading'&&snapshot.ranges_total)return `Reading both files · ${Math.floor(100*snapshot.ranges_read/snapshot.ranges_total)}% read · exact mismatches follow once both files are read`;
+  if(snapshot?.key_ranges)return `Comparing · ${number(snapshot.key_ranges_done)} of ${number(snapshot.key_ranges)} key ranges done`;
+  if(snapshot&&snapshot.matched_keys+snapshot.left_only+snapshot.right_only>0)return `Comparing · ${number(snapshot.matched_keys+snapshot.left_only+snapshot.right_only)} keys compared so far`;
+  return `${progress.phase||'Reading both files'} · mismatches appear once both files have been read`;
+ }
+ function paint(snapshot){
+  last=snapshot;
+  view.querySelector('.ds-live-phase').textContent=phaseText(snapshot);
+  const started=job?.started?Math.max(0,Date.now()/1000-job.started):0;
+  view.querySelector('.ds-live-elapsed').textContent=started?`${Math.floor(started/60)}:${String(Math.floor(started%60)).padStart(2,'0')} elapsed`:'';
+  const exact=snapshot&&snapshot.state!=='reading';
+  for(const card of metricBox.children){const value=snapshot?.[card.dataset.field];card.querySelector('strong').textContent=exact&&Number.isFinite(value)?number(value):'—';}
+  // Early estimate from sampled keys while the files are read, with a 95% margin of error.
+  const estimate=snapshot?.estimate,estimateBox=view.querySelector('.ds-live-estimate');
+  estimateBox.hidden=!(estimate&&snapshot.state==='reading');
+  if(!estimateBox.hidden){
+   const n=estimate.sampled_keys,rate=estimate.changed_rows/n,margin=1.96*Math.sqrt(Math.max(rate*(1-rate),.25/n)/n);
+   estimateBox.querySelector('strong').textContent=`About ${(rate*100).toFixed(1)}% of matched keys differ (± ${(margin*100).toFixed(1)}%)`;
+   estimateBox.querySelector('.ds-live-estimate-note').textContent=`From ${number(n)} sampled keys found in both files · ${Math.floor(100*snapshot.ranges_read/snapshot.ranges_total)}% of the files read. Exact counts replace this estimate.`;
+   const top=Object.entries(estimate.changed_cells_by_column||{}).sort((a,b)=>b[1]-a[1]).slice(0,6),box=view.querySelector('.ds-live-estimate-columns');box.replaceChildren();
+   for(const [name,count] of top){const chip=document.createElement('span');chip.className='ds-live-estimate-chip';chip.textContent=`${name} · ~${(100*count/n).toFixed(1)}%`;chip.title=`Estimated share of matched keys that differ in ${name}`;box.append(chip);}
+  }
+  const columns=Object.entries(snapshot?.changed_cells_by_column||{}).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,12);
+  const max=Math.max(1,...columns.map(([,count])=>count)),box=view.querySelector('.ds-live-columns');box.replaceChildren();
+  if(!columns.length)box.append(Object.assign(document.createElement('p'),{className:'ds-live-empty',textContent:'No column differences yet.'}));
+  for(const [name,count] of columns){
+   const row=document.createElement('div');row.className='ds-live-column';
+   const bar=document.createElement('span');bar.className='ds-live-bar';const fill=document.createElement('i');fill.style.width=Math.max(2,count*100/max)+'%';bar.append(fill);
+   row.append(Object.assign(document.createElement('span'),{className:'ds-live-name',textContent:name,title:name}),bar,Object.assign(document.createElement('b'),{textContent:number(count)}));box.append(row);
+  }
+  const body=view.querySelector('tbody');body.replaceChildren();
+  const samples=(snapshot?.samples||[]).slice(0,50);
+  if(!samples.length){const tr=document.createElement('tr');const td=Object.assign(document.createElement('td'),{colSpan:4,className:'ds-live-empty',textContent:'Mismatches will appear here as keys are compared.'});tr.append(td);body.append(tr);}
+  for(const [key,column,left,right] of samples){
+   const tr=document.createElement('tr');
+   for(const [value,className] of [[keyText(key),''],[column,''],[left,'analysis-before'],[right,'analysis-after']]){const td=Object.assign(document.createElement('td'),{textContent:value===''?'(empty)':value,className});td.title=value;tr.append(td);}
+   body.append(tr);
+  }
+ }
+ async function poll(){
+  clearTimeout(timer);if(polling||view.hidden||!isLive())return;polling=true;
+  try{paint(await api(endpoint('/live')));}catch{}finally{polling=false;if(!view.hidden&&isLive())timer=setTimeout(poll,1000);}
+ }
+ function show(on){
+  view.hidden=!on;results.classList.toggle('is-live',on);
+  if(on){paint(last);poll();}else clearTimeout(timer);
+ }
+ const syncNavigationBeforeLive=syncNavigation;
+ syncNavigation=function(){syncNavigationBeforeLive();if(isLive())$('navResults').disabled=false;};
+ const renderSummaryBeforeLive=renderSummary;
+ renderSummary=function(){if(isLive()){show(true);return;}show(false);renderSummaryBeforeLive();};
+ const renderExportsBeforeLive=renderExports;
+ renderExports=function(){if(isLive())return;renderExportsBeforeLive();};
+ const panelBeforeLive=panel;
+ panel=function(name){panelBeforeLive(name);if(name!=='results')show(false);else if(isLive())show(true);};
+ // A shortcut from the pipeline page.
+ const liveButton=document.createElement('button');liveButton.type='button';liveButton.id='openLiveResults';liveButton.className='ds-live-open';liveButton.hidden=true;
+ liveButton.append(Object.assign(document.createElement('i'),{className:'ds-live-dot'}),Object.assign(document.createElement('span'),{textContent:'View live results'}),lucideNode('arrow-right'));
+ liveButton.addEventListener('click',()=>goView('results').catch(showError));
+ $('runningPanel').querySelector('#pipelineErrorCard')?.after(liveButton);
+ setInterval(()=>{liveButton.hidden=!isLive()||currentView!=='runningPanel';if(!view.hidden&&!isLive()&&job?.state==='complete'&&currentView==='results'){show(false);renderSummary();renderExports();}},1000);
+}
+
+// Excel options in the Export menu: rows per column sheet, and whether values longer than an Excel cell are
+// shortened (and flagged) instead of failing. Excel is generated only when asked for, never in the pipeline.
+{
+ const excelButton=$('excel'),row=excelButton?.closest('.ds-export-option');
+ if(row){
+  const box=document.createElement('div');box.className='ds-excel-options';
+  box.innerHTML='<label><span>Rows per column sheet</span><select id="excelRows"><option value="1000">First 1,000</option><option value="10000" selected>First 10,000</option><option value="100000">First 100,000</option><option value="0">Maximum (1,048,574)</option></select></label><label class="ds-excel-check"><input type="checkbox" id="excelTruncate" checked><span>Shorten values too long for an Excel cell (marked [TRUNCATED])</span></label>';
+  excelButton.before(box);
+  enhanceSelect($('excelRows'));
+  excelOptions=()=>({max_rows:Number($('excelRows').value),truncate:$('excelTruncate').checked});
+  const sync=()=>{const saved=job?.excel_options;if(saved){$('excelRows').value=String(saved.max_rows||0);$('excelTruncate').checked=saved.truncate!==false;$('excelRows').dispatchEvent(new Event('change'));}};
+  const renderExportsBeforeOptions=renderExports;renderExports=function(){renderExportsBeforeOptions();if(!document.activeElement?.closest?.('.ds-excel-options'))sync();};
+ }
+}
+
+
+// Typed comparison in the rules drawer: compare a column as a number, a decimal at a scale, a date, or a
+// timestamp in a time zone. Values stay exact text; the type only decides when two texts are equal.
+{
+ const options=$('comparisonRulesDrawer').querySelector('.rule-options');
+ const typed=document.createElement('div');typed.className='ds-rule-type';
+ typed.innerHTML='<label><span>Compare as</span><select id="ruleType"><option value="">Text, exactly</option><option value="number">Number (1 = 1.0)</option><option value="decimal">Decimal at a scale</option><option value="date">Date</option><option value="timestamp">Timestamp with time zone</option></select></label><label id="ruleScaleField" hidden><span>Decimal places</span><input id="ruleScale" type="number" min="0" max="18" value="2" inputmode="numeric"></label><label id="ruleTimezoneField" hidden><span>Time zone for values without one</span><input id="ruleTimezone" value="UTC" placeholder="UTC or Asia/Kolkata" autocomplete="off" spellcheck="false"></label>';
+ options.before(typed);enhanceSelect($('ruleType'));
+ const numericControls=['ruleNumericFormat','ruleTolerance','ruleDateLeft','ruleDateRight'];
+ $('ruleType').addEventListener('change',()=>{
+  const kind=$('ruleType').value;$('ruleScaleField').hidden=kind!=='decimal';$('ruleTimezoneField').hidden=kind!=='timestamp';
+  // A type replaces tolerance and date formats for that column, so those inputs pause while one is chosen.
+  for(const id of numericControls){const control=$(id);control.disabled=!!kind||(id==='ruleTolerance'&&$('ruleNumericFormat').checked);control.closest('label')?.classList.toggle('is-disabled',!!kind);}
+ });
+}
+
+// Shareable links into the mismatch drawer. A link names the job, the view, the column and the key, so a
+// teammate who opens it lands on that drawer view with the row highlighted. Nothing is shared by the link
+// itself: the teammate still needs access to the job on this server.
+{
+ const drawer=$('analysisDrawer'),table=$('analysisTable');
+ if(drawer&&table){
+  const linkFor=state=>{
+   const params=new URLSearchParams({review:state.job});
+   if(state.column)params.set('column',state.column);
+   if(state.key)params.set('key',JSON.stringify(state.key));
+   if(state.view&&state.view!=='columns')params.set('view',state.view);
+   return location.origin+location.pathname+'#'+params;
+  };
+  const currentKey=()=>{const text=$('analysisKey').value;if(!text)return null;try{return job.keys.length===1?[text]:JSON.parse(text);}catch(error){return null;}};
+  async function copyLink(state,what){
+   const url=linkFor(state);
+   try{await navigator.clipboard.writeText(url);notify('success','Link copied',`Anyone with access to this job lands on ${what}.`);}
+   catch(error){window.prompt('Copy this link',url);}
+  }
+  // Toolbar: a link to what the drawer shows now.
+  const toolbar=drawer.querySelector('.ds-mismatch-toolbar'),share=document.createElement('button');
+  share.type='button';share.className='ds-toolbar-btn ds-share-btn';share.innerHTML=lucide('link')+'<span>Copy link</span>';
+  share.title='Copy a link to this view';
+  share.addEventListener('click',()=>{
+   const column=$('analysisColumn').value,key=currentKey(),view=$('analysisMode').value;
+   copyLink({job:job.id,column,key,view},key?(column?`key ${key.join(' · ')} in ${column}`:`key ${key.join(' · ')}`):column?`the ${column} mismatches`:'this mismatch view');
+  });
+  (toolbar||drawer.querySelector('.drawer-heading')).append(share);
+  // Rows: a link to one mismatch (key and column) or one key.
+  function rowState(row){
+   const head=[...table.rows[0].cells].map(cell=>cell.textContent),count=job.keys.length;
+   if(!job.keys.every((name,i)=>head[i]===name))return null;
+   const key=[...row.cells].slice(0,count).map(cell=>cell.textContent);
+   const columnIndex=head.indexOf('Column');
+   if(columnIndex>=0)return {job:job.id,key,column:row.cells[columnIndex].textContent,view:'columns'};
+   if(head.includes('Status'))return {job:job.id,key,view:'keys'};
+   return null;
+  }
+  let target=null;
+  function decorate(){
+   if(!table.rows.length)return;
+   for(const row of [...table.rows].slice(1)){
+    const actions=row.cells[row.cells.length-1];
+    if(!actions||actions.querySelector('.ds-row-link'))continue;
+    const state=rowState(row);if(!state)continue;
+    const button=document.createElement('button');button.type='button';button.className='ds-row-action ds-row-link';
+    button.title=button.ariaLabel=state.column?'Copy link to this mismatch':'Copy link to this key';button.setAttribute('aria-label',button.title);
+    button.append(lucideNode('link'));
+    button.addEventListener('click',()=>copyLink(state,state.column?`key ${state.key.join(' · ')} in ${state.column}`:`key ${state.key.join(' · ')}`));
+    actions.append(button);
+   }
+   if(!target)return;
+   // Highlight the shared row once it is on the page.
+   const match=[...table.rows].slice(1).find(row=>{const state=rowState(row);return state&&JSON.stringify(state.key)===JSON.stringify(target.key)&&(!target.column||state.column===target.column);});
+   if(match){table.querySelector('.ds-row-target')?.classList.remove('ds-row-target');match.classList.add('ds-row-target');match.scrollIntoView({block:'center'});target=null;}
+  }
+  new MutationObserver(decorate).observe(table,{childList:true});
+  // Landing: open the job, then the drawer at the shared view.
+  async function land(){
+   const params=new URLSearchParams(location.hash.slice(1)),id=params.get('review');
+   if(!id)return;
+   history.replaceState(null,'',location.pathname+location.search);
+   if(!/^[a-f0-9]{32}$/.test(id)){notify('error','This link is not valid','The job id in the link is not recognised.');return;}
+   let key=null;
+   try{key=params.has('key')?JSON.parse(params.get('key')):null;}catch(error){}
+   const column=params.get('column')||'',view=params.get('view')||'columns';
+   try{
+    await openJob(id);
+    if(job?.state!=='complete'){notify('info','Comparison not finished','The link opens its mismatches once the comparison completes.');return;}
+    if(currentView!=='results')await goView('results');
+    target=null;
+    await showAnalysisDrawer(column);
+    if(key&&Array.isArray(key)&&key.length===job.keys.length){
+     $('analysisMode').value=view==='keys'||!column?'keys':'columns';
+     if(!column)$('analysisColumn').value='';
+     // The row is marked on this final load, which shows only the shared key.
+     target={key,column};selectAnalysisKey(key);analysisOffset=0;await loadAnalysis();
+    }else if(view==='keys'||view==='patterns'){$('analysisMode').value=view;$('analysisColumn').value=view==='keys'?'':column;await loadAnalysis();}
+   }catch(error){notify('error','Could not open the shared link',error.message||String(error));}
+  }
+  window.addEventListener('workspace-restored',()=>land().catch(showError),{once:true});
+  window.addEventListener('hashchange',()=>land().catch(showError));
+ }
 }

@@ -28,16 +28,19 @@ class FeatureTests(unittest.TestCase):
         self.client.request(path+'/start',dict(keys=['id'],memory_mb=64,sort_workers=1,**config))
         result=self.client.wait(path,lambda j:j['state'] in ('complete','error','cancelled'))
         self.assertEqual(result['state'],'complete',result);return result
-    def test_reports_ready_when_comparison_completes(self):
+    def test_reports_build_after_the_comparison_completes(self):
+        # The comparison completes as soon as its result files exist; reports never hold it up.
         path=self.upload()
         job=self.complete(path)
-        for kind,filename in [('html','comparison-report.html'),('excel','mismatches.xlsx')]:
-            self.assertEqual(job['exports'][kind]['state'],'complete')
-            target=self.server.app.directory(job['id'])/filename
-            self.assertGreater(target.stat().st_size,0)
-        log=(self.server.app.directory(job['id'])/'run.log').read_text()
-        self.assertLess(log.index('HTML report complete'),log.rindex('Comparison complete'))
-        self.assertLess(log.index('EXCEL report complete'),log.rindex('Comparison complete'))
+        self.assertNotIn('excel',job['exports'])
+        job=self.client.wait(path,lambda j:j['exports'].get('html',{}).get('state') in ('complete','error'))
+        self.assertEqual(job['exports']['html']['state'],'complete')
+        self.assertGreater((self.server.app.directory(job['id'])/'comparison-report.html').stat().st_size,0)
+        # Excel is built on request with the chosen options.
+        self.client.request(path+'/export/excel',dict(max_rows=1,truncate=True))
+        job=self.client.wait(path,lambda j:j['exports'].get('excel',{}).get('state') in ('complete','error'))
+        self.assertEqual(job['exports']['excel']['state'],'complete',job['exports'])
+        self.assertGreater((self.server.app.directory(job['id'])/'mismatches.xlsx').stat().st_size,0)
 
     def test_profile_storage_and_isolation(self):
         path=self.upload();job=self.client.request(path)

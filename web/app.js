@@ -50,7 +50,7 @@ let previewExpanded=false;
 $('analysisPanel').insertAdjacentHTML('afterbegin','<button id="reviewOverrides" class="subtle review-overrides-action">Review value overrides</button>');
 const phaseLabels=['Files & headers','Files & headers','Keys & scope','Pipeline & logs','Analysis'];
 const phaseViews=['uploadPanel','headersPanel','keysPanel','runningPanel','results'];
-const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',projectsPanel:'navProjects'};
+const views={uploadPanel:'navFiles',headersPanel:'navHeaders',keysPanel:'navScope',overridesPanel:'navOverrides',runningPanel:'navPipeline',results:'navResults',analysisPanel:'navAnalysis',historyPanel:'navHistory',containersPanel:'navContainers',jsonPanel:'navJson',docsPanel:'navDocs',storagePanel:'navStorage',profilesPanel:'navProfiles',projectsPanel:'navProjects',notificationsPanel:'navNotifications'};
 const number = value => Number(value).toLocaleString();
 const bytes = value => value >= 1024**3 ? `${(value / 1024**3).toFixed(2)} GB` : value >= 1024**2 ? `${(value / 1024**2).toFixed(1)} MB` : `${(value / 1024).toFixed(1)} KB`;
 function showError(error) { $('error').textContent = error.message || String(error); $('error').hidden = false; }
@@ -93,17 +93,17 @@ function panel(name) {
   $('sheetPanel').hidden=name!=='uploadPanel'||!['selecting_sheets','preparing'].includes(job?.state);
   $('reset').hidden=false;
   const history=currentView==='historyPanel';
-  const library=['projectsPanel','containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel'].includes(currentView);
+  const library=['projectsPanel','containersPanel','jsonPanel','docsPanel','storagePanel','profilesPanel','notificationsPanel'].includes(currentView);
   $('comparisonFlow').hidden=history||library;
   $('navNew').classList.toggle('active',name==='jsonPanel'||(!history&&!library&&!viewingHistoryJob));
   $('navHistory').classList.toggle('active',history||(!library&&viewingHistoryJob));
-  for(const id of ['navProjects','navNew','navJson','navContainers','navHistory','navDocs','navStorage','navProfiles']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
+  for(const id of ['navProjects','navNew','navJson','navContainers','navHistory','navDocs','navStorage','navProfiles','navNotifications']){if($(id).classList.contains('active'))$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
   if(typeof closeSidebarDrawer==='function')closeSidebarDrawer();
   $('flowTitle').textContent=viewingHistoryJob?'Saved comparison':'New comparison';
   const phase=phaseViews.indexOf(name);
   if(!history&&!library)$('phaseLabel').textContent=name==='overridesPanel'?'Review · Value overrides':`Step ${Math.max(1,phase)} of 4 · ${phaseLabels[phase]}`;
   for(const [id,control] of Object.entries(views)){
-    if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'&&id!=='storagePanel'&&id!=='profilesPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
+    if(id!=='historyPanel'&&id!=='containersPanel'&&id!=='jsonPanel'&&id!=='docsPanel'&&id!=='storagePanel'&&id!=='profilesPanel'&&id!=='notificationsPanel'){if(id===name)$(control).setAttribute('aria-current','step');else $(control).removeAttribute('aria-current');}
   }
   syncNavigation();
   if(typeof syncFilesStage==='function')syncFilesStage(name);
@@ -123,7 +123,7 @@ async function goView(name){
   // Once files are loaded, the Files step always shows the header table (read-only after a run starts).
   if(name==='uploadPanel'&&['ready','queued','running','complete'].includes(job?.state))name='headersPanel';
   if(name==='analysisPanel'&&typeof showAnalysisDrawer==='function'){await showAnalysisDrawer();return;}
-  if(uploading&&name!=='uploadPanel'&&!['jsonPanel','containersPanel','historyPanel','docsPanel'].includes(name))return;
+  if(uploading&&name!=='uploadPanel'&&!['jsonPanel','containersPanel','historyPanel','docsPanel','notificationsPanel'].includes(name))return;
   clearError();await saveDraft();
   if(headerDirty&&headerDraftJob===job?.id&&['keysPanel','overridesPanel','sourcePanel'].includes(name))await applyHeaders();
   panel(name);
@@ -364,7 +364,7 @@ function renderExports() {
     button.classList.toggle('export-busy',button.disabled);button.setAttribute('aria-busy',String(button.disabled));
     button.querySelector('strong').textContent=button.disabled?(value?.state==='queued'?'Queued — waiting for a worker':'Generating '+(kind==='excel'?'Excel workbook':'HTML report')):(kind==='excel'?'Excel workbook':'HTML report');
     if(!value)status.textContent='';
-    else if(value.state==='complete')status.textContent=`Ready to download · ${bytes(value.size)}`;
+    else if(value.state==='complete')status.textContent=`Ready to download · ${bytes(value.size)}`+(kind==='excel'&&value.rows_per_column?` · up to ${number(value.rows_per_column)} rows per column`+(value.truncated_cells?` · ${number(value.truncated_cells)} long values shortened`:''):'');
     else if(value.state==='error')status.textContent=`Export failed: ${value.error}`;
     else status.textContent=(value.message||'Queued for export…')+' Large reports may take time. You can continue reviewing results.';
   }
@@ -372,10 +372,13 @@ function renderExports() {
 async function generateAndDownload(kind){
   clearError();const identity=job.id,key=identity+':'+kind,name=kind==='excel'?'mismatches.xlsx':'comparison-report.html';
   if(pendingExports.has(key))return;
-  if(job.exports[kind]?.state==='complete')return download(name,identity);
+  // Excel uses the options chosen in the Export menu; a changed option builds a new workbook.
+  const options=kind==='excel'&&typeof excelOptions==='function'?excelOptions():{};
+  const sameOptions=kind!=='excel'||JSON.stringify({max_rows:options.max_rows||null,truncate:options.truncate})===JSON.stringify({max_rows:job.excel_options?.max_rows??null,truncate:job.excel_options?.truncate??true});
+  if(job.exports[kind]?.state==='complete'&&sameOptions)return download(name,identity);
   pendingExports.add(key);renderExports();
   try{
-    await api(`/api/jobs/${identity}/export/${kind}`,{});
+    job=await api(`/api/jobs/${identity}/export/${kind}`,options);
     for(;;){
       const latest=await api(`/api/jobs/${identity}`),state=latest.exports[kind];
       if(job?.id===identity){job.exports=latest.exports;renderExports();}
@@ -489,8 +492,8 @@ async function refresh() {
     } else if(currentView==='runningPanel')await renderPipeline();
     if(Object.values(job.exports).some(value=>['queued','running'].includes(value.state)))pollTimer=setTimeout(()=>refresh().catch(pollError),1500);
   } else if(['error','cancelled'].includes(job.state)){
-    if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();showError(job.error);await loadDiagnostics();}
-  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel'].includes(currentView)){
+    if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel','notificationsPanel'].includes(currentView)){panel('runningPanel');await renderPipeline();if(typeof reportJobError==='function')reportJobError(job);else showError(job.error);await loadDiagnostics();}
+  } else if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel','notificationsPanel'].includes(currentView)){
     panel('uploadPanel');$('delimiter').disabled=$('encoding').disabled=$('headerRow').disabled=true;
     const named={'\t':'tab','\x01':'ctrl-a'}[job.delimiter];
     if(named||['auto',',',';','|'].includes(job.delimiter))$('delimiter').value=named||job.delimiter;
@@ -513,7 +516,7 @@ async function restoreCurrentComparison(){
 }
 
 function restorableView(saved,currentJob){
-  const libraries=['projectsPanel','historyPanel','containersPanel','profilesPanel','docsPanel'];
+  const libraries=['projectsPanel','historyPanel','containersPanel','profilesPanel','docsPanel','notificationsPanel'];
   if(libraries.includes(saved))return saved;
   if(!currentJob)return 'uploadPanel';
   if(['uploading','selecting_sheets','preparing'].includes(currentJob.state))return 'uploadPanel';
@@ -527,7 +530,7 @@ function restorableView(saved,currentJob){
 }
 async function restoreWorkspaceOnReload(){
   const saved=localStorage.getItem(workspaceViewKey)||'uploadPanel';
-  const libraries=['projectsPanel','historyPanel','containersPanel','profilesPanel','docsPanel'];
+  const libraries=['projectsPanel','historyPanel','containersPanel','profilesPanel','docsPanel','notificationsPanel'];
   if(libraries.includes(saved)){
     panel(saved);
     if(saved==='projectsPanel')await loadProjects();
@@ -640,12 +643,19 @@ async function renderPipeline(){
   if(log.text.length>=60000)pollTimer=setTimeout(()=>refresh().catch(pollError),300);
 }
 async function loadHistory(){
-  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel'].includes(currentView))return;
-  $('cleanupPolicy').textContent=result.retention_days?`Inactive jobs and all uploaded files, scratch data and reports are automatically deleted after ${result.retention_days} days. Download reports before expiry. Active jobs are protected.`:'Automatic cleanup is disabled. Delete unneeded jobs to reclaim disk space.';
+  const result=await api('/api/jobs?offset='+historyOffset);if(!['historyPanel','containersPanel','jsonPanel','docsPanel','storagePanel','analysisPanel','profilesPanel','notificationsPanel'].includes(currentView))return;
+  $('cleanupPolicy').textContent=(result.retention_days?`Inactive jobs and all uploaded files, scratch data and reports are automatically deleted after ${result.retention_days} days. Download reports before expiry. Active jobs are protected.`:'Automatic cleanup is disabled. Delete unneeded jobs to reclaim disk space.')+(result.analysis_retention_days?` Mismatch-analysis data is cleared after ${result.analysis_retention_days} days unused and rebuilds when needed.`:'');
   const table=$('historyTable');table.replaceChildren();
-  const header=document.createElement('tr');for(const label of ['Created','Files','Status','Changed cells','Action']){const th=document.createElement('th');th.textContent=label;header.append(th);}const head=document.createElement('thead');head.append(header);table.append(head);
+  const header=document.createElement('tr');for(const label of ['Created','Files','Status','Changed cells','Storage','Action']){const th=document.createElement('th');th.textContent=label;header.append(th);}const head=document.createElement('thead');head.append(header);table.append(head);
   const body=document.createElement('tbody');
-  for(const item of result.jobs){const row=document.createElement('tr');for(const text of [new Date(item.created*1000).toLocaleString(),`${item.files.left.name}${item.files.left.sheet?' ['+item.files.left.sheet+']':''} ↔ ${item.files.right.name}${item.files.right.sheet?' ['+item.files.right.sheet+']':''}`,item.state,item.changed_cells==null?'—':number(item.changed_cells)]){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}const cell=document.createElement('td');const button=document.createElement('button');button.className='subtle';button.textContent='Open';button.disabled=uploading;button.setAttribute('aria-label',`Open comparison ${item.id}`);button.addEventListener('click',()=>openJob(item.id).catch(showError));cell.append(button);const remove=document.createElement('button');remove.className='subtle';remove.textContent='Delete';remove.disabled=item.can_manage===false||item.busy||uploading;remove.hidden=item.can_manage===false;remove.setAttribute('aria-label',`Delete comparison ${item.id}`);remove.addEventListener('click',async()=>{if(!confirm('Permanently delete this job, uploaded copies, logs and all reports? Original files on your computer are unaffected.'))return;remove.disabled=true;try{await api('/api/jobs/'+item.id,undefined,'DELETE');if(localStorage.getItem('keywise-job')===item.id)localStorage.removeItem('keywise-job');if(job?.id===item.id){clearTimeout(pollTimer);job=null;hydratedId=null;renderedId=null;viewingHistoryJob=false;syncNavigation();}await loadHistory();}catch(error){showError(error);remove.disabled=false;}});cell.append(remove);row.append(cell);body.append(row);}table.append(body);
+  for(const item of result.jobs){const row=document.createElement('tr');for(const text of [new Date(item.created*1000).toLocaleString(),`${item.files.left.name}${item.files.left.sheet?' ['+item.files.left.sheet+']':''} ↔ ${item.files.right.name}${item.files.right.sheet?' ['+item.files.right.sheet+']':''}`,item.state,item.changed_cells==null?'—':number(item.changed_cells)]){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}
+    // Storage: total on disk, with the breakdown on hover. Analysis data can be freed; it rebuilds on demand.
+    {const sizes=item.sizes||{},total=Object.values(sizes).reduce((sum,value)=>sum+value,0),storage=document.createElement('td');storage.className='history-storage';
+     storage.textContent=bytes(total);storage.title=`Uploads ${bytes(sizes.uploads||0)} · Reports ${bytes(sizes.reports||0)} · Analysis ${bytes(sizes.analysis||0)} (rebuildable) · Temporary ${bytes(sizes.temporary||0)}`;
+     if(sizes.analysis&&item.can_manage!==false&&!item.busy){const free=document.createElement('button');free.className='subtle history-free';free.textContent=`Free ${bytes(sizes.analysis)}`;free.title='Delete this job’s mismatch-analysis data. It rebuilds automatically when you open the mismatch drawer.';
+      free.addEventListener('click',async()=>{free.disabled=true;try{const result=await api(`/api/jobs/${item.id}/analysis`,undefined,'DELETE');if(typeof notify==='function')notify('success','Analysis space freed',`${bytes(result.freed)} reclaimed. It rebuilds when you open the mismatch drawer.`);await loadHistory();}catch(error){showError(error);free.disabled=false;}});storage.append(free);}
+     row.append(storage);}
+    const cell=document.createElement('td');const button=document.createElement('button');button.className='subtle';button.textContent='Open';button.disabled=uploading;button.setAttribute('aria-label',`Open comparison ${item.id}`);button.addEventListener('click',()=>openJob(item.id).catch(showError));cell.append(button);const remove=document.createElement('button');remove.className='subtle';remove.textContent='Delete';remove.disabled=item.can_manage===false||item.busy||uploading;remove.hidden=item.can_manage===false;remove.setAttribute('aria-label',`Delete comparison ${item.id}`);remove.addEventListener('click',async()=>{if(!confirm('Permanently delete this job, uploaded copies, logs and all reports? Original files on your computer are unaffected.'))return;remove.disabled=true;try{await api('/api/jobs/'+item.id,undefined,'DELETE');if(localStorage.getItem('keywise-job')===item.id)localStorage.removeItem('keywise-job');if(job?.id===item.id){clearTimeout(pollTimer);job=null;hydratedId=null;renderedId=null;viewingHistoryJob=false;syncNavigation();}await loadHistory();}catch(error){showError(error);remove.disabled=false;}});cell.append(remove);row.append(cell);body.append(row);}table.append(body);
   $('historyRange').textContent=result.total?`${historyOffset+1}–${Math.min(historyOffset+25,result.total)} of ${result.total} saved jobs`:'No comparisons yet.';$('historyPrev').disabled=historyOffset===0;$('historyNext').disabled=historyOffset+25>=result.total;
 }
 async function openJob(id){
@@ -994,6 +1004,12 @@ filterDocs();
 
 let analysisPatternFilter=null;
 let analysisOffset=0, analysisTimer=null, analysisGeneration=0, columnChoicesPage=0;
+// Set by the drawer to show index preparation progress.
+let analysisProgress=null;
+// Set by enterprise.js: saved notifications and the pipeline error card.
+let notify=null,reportJobError=null;
+// Set by enterprise.js: the Excel options chosen in the Export menu.
+let excelOptions=null;
 let analysisNotesCache=[],commentSelection="";
 $('openAnalysis').addEventListener('click',()=>goView('analysisPanel').catch(showError));
 function analysisKeyValues(){return job.keys.map((_,i)=>$('analysisKeyPart'+i).value);}
@@ -1077,6 +1093,7 @@ async function loadAnalysis(){
       if(result.state!=='complete'){$('cancelAnalysis').hidden=false;
         if(['error','cancelled'].includes(result.state)){$('analysisRetry').hidden=false;throw Error(result.message);}
         if(result.state==='not_started')await api(`/api/jobs/${id}/analysis`,{});
+        if(typeof analysisProgress==='function')analysisProgress(result);
         $('analysisStatus').textContent=result.message||'Preparing analysis…';$('analysisStatus').classList.add('loading-status');
         analysisTimer=setTimeout(()=>{if(currentView==='analysisPanel'&&job?.id===id)loadAnalysis();},1500);return;
       }
@@ -1173,8 +1190,9 @@ let notificationSnapshot=null,notificationPolling=false,notificationSince=Date.n
 $('enableNotifications').addEventListener('click',async()=>{if(!('Notification' in window)){showError('This browser does not support desktop notifications.');return;}try{const permission=await Notification.requestPermission();localStorage.setItem('comparison-notifications',permission==='granted'?'on':'off');$('notificationStatus').textContent=permission==='granted'?'Enabled while this page remains open.':'Notifications were not enabled. Check your browser permissions.';notificationSnapshot=null;notificationSince=Date.now()/1000;pollNotifications();}catch(e){showError(e);}});
 $('disableNotifications').addEventListener('click',()=>{localStorage.setItem('comparison-notifications','off');notificationSnapshot=null;$('notificationStatus').textContent='Notifications disabled.';});
 async function pollNotifications(){
- if(notificationPolling||localStorage.getItem('comparison-notifications')!=='on')return;notificationPolling=true;
- try{const result=await api('/api/activity'),next=new Map();for(const item of result.activities){const id=item.id+':'+item.kind;next.set(id,item.state);const old=notificationSnapshot?.get(id);if(notificationSnapshot&&old!==item.state&&(old||item.changed_at>=notificationSince)&&['complete','error','cancelled'].includes(item.state)){const message=`${item.kind}: ${item.state==='complete'?'Completed':item.state==='error'?'Failed':'Cancelled'}`;$('completionNotice').textContent=message;if('Notification' in window&&Notification.permission==='granted')new Notification('Comparison tool',{body:message,tag:id});}}notificationSnapshot=next;}catch(e){/* Transient network failure; retry on the next interval. */}finally{notificationPolling=false;}
+ // In-app notifications are always on; desktop notifications are an opt-in extra.
+ if(notificationPolling)return;notificationPolling=true;const desktop=localStorage.getItem('comparison-notifications')==='on';
+ try{const result=await api('/api/activity'),next=new Map();for(const item of result.activities){const id=item.id+':'+item.kind;next.set(id,item.state);const old=notificationSnapshot?.get(id);if(notificationSnapshot&&old!==item.state&&(old||item.changed_at>=notificationSince)&&['complete','error','cancelled'].includes(item.state)){const message=`${item.kind}: ${item.state==='complete'?'Completed':item.state==='error'?'Failed':'Cancelled'}`;$('completionNotice').textContent=message;if(typeof notify==='function')notify(item.state==='complete'?'success':item.state==='error'?'error':'warning',`${item.kind[0].toUpperCase()+item.kind.slice(1)} ${item.state==='complete'?'complete':item.state==='error'?'failed':'cancelled'}`,'',{job:item.id,key:id+':'+item.state});if(desktop&&'Notification' in window&&Notification.permission==='granted')new Notification('Comparison tool',{body:message,tag:id});}}notificationSnapshot=next;}catch(e){/* Transient network failure; retry on the next interval. */}finally{notificationPolling=false;}
 }
 setInterval(pollNotifications,10000);pollNotifications();
 
@@ -1379,7 +1397,7 @@ function animateWorkspacePane(element){
 function updateEnterpriseShell(name){
   const heading=document.querySelector('.heading h1');
   if(!$('workspaceContext'))return;
-  const titles={projectsPanel:'Projects',uploadPanel:'Files & headers',headersPanel:'Files & headers',keysPanel:'Keys & scope',runningPanel:'Pipeline & logs',results:'Analysis',jsonPanel:'JSON comparison',historyPanel:'Job history',containersPanel:'Ignore key containers',profilesPanel:'Profile templates',docsPanel:'Docs & FAQ',storagePanel:'Storage & queue',overridesPanel:'Value overrides'};
+  const titles={projectsPanel:'Projects',uploadPanel:'Files & headers',headersPanel:'Files & headers',keysPanel:'Keys & scope',runningPanel:'Pipeline & logs',results:'Analysis',jsonPanel:'JSON comparison',historyPanel:'Job history',containersPanel:'Ignore key containers',profilesPanel:'Profile templates',notificationsPanel:'Notifications',docsPanel:'Docs & FAQ',storagePanel:'Storage & queue',overridesPanel:'Value overrides'};
   heading.textContent=titles[name]||'Comparison workspace';
   $('workspaceContext').textContent=phaseViews.includes(name)?'Compare files':titles[name]||'Workspace';
   const changed=document.body.dataset.workspaceView!==name;
@@ -1522,14 +1540,19 @@ initEnterpriseShell();
 
 // A rule selection expands to explicit per-column settings for auditable profiles/reports.
 let ruleEditorDraft=[],ruleEditorMode='setup',ruleEditorReturn=null;
-function ruleChips(rule){return [rule.trim&&'Trim',rule.ignore_case&&'Ignore case',rule.tolerance!==undefined&&(Number(rule.tolerance)===0?'Same number':'± '+rule.tolerance),rule.left_date_format&&`Date ${rule.left_date_format} → ${rule.right_date_format}`].filter(Boolean);}
-function ruleDescription(rule){return [rule.trim?'Trim whitespace':'',rule.ignore_case?'Ignore case':'',rule.tolerance!==undefined?(Number(rule.tolerance)===0?'Same numeric value':'Tolerance '+rule.tolerance):'',rule.left_date_format?'Date formats: '+rule.left_date_format+' → '+rule.right_date_format:''].filter(Boolean).join(' · ')||'Exact text';}
+function ruleChips(rule){return [rule.type&&({number:'Number',decimal:`Decimal · ${rule.scale} dp`,date:'Date',timestamp:`Timestamp · ${rule.timezone||'UTC'}`}[rule.type]),rule.trim&&'Trim',rule.ignore_case&&'Ignore case',rule.tolerance!==undefined&&(Number(rule.tolerance)===0?'Same number':'± '+rule.tolerance),rule.left_date_format&&`Date ${rule.left_date_format} → ${rule.right_date_format}`].filter(Boolean);}
+function ruleDescription(rule){return [rule.type?'Compare as '+({decimal:`decimal at ${rule.scale} places`,timestamp:`timestamp (${rule.timezone||'UTC'})`}[rule.type]||rule.type):'',rule.trim?'Trim whitespace':'',rule.ignore_case?'Ignore case':'',rule.tolerance!==undefined?(Number(rule.tolerance)===0?'Same numeric value':'Tolerance '+rule.tolerance):'',rule.left_date_format?'Date formats: '+rule.left_date_format+' → '+rule.right_date_format:''].filter(Boolean).join(' · ')||'Exact text';}
 function ruleStatus(text,tone='error'){const status=$('ruleEditorError');status.textContent=text;status.dataset.tone=tone;}
 function ruleScope(){return ruleEditorMode==='rerun'?rerunDraft:{keys:[...selected],ignore_columns:[...ignoredColumns]};}
 function eligibleRuleColumns(){const scope=ruleScope();return (job?.columns||[]).filter(c=>!scope.keys.includes(c)&&!scope.ignore_columns.includes(c));}
 function mergeColumnRules(existing,columns,patch){
   const merged=existing.map(r=>({...r}));
-  for(const column of columns){let rule=merged.find(r=>r.column===column);if(!rule){rule={column};merged.push(rule);}Object.assign(rule,patch);
+  for(const column of columns){let rule=merged.find(r=>r.column===column);if(!rule){rule={column};merged.push(rule);}
+    // A compare-as type replaces a column's tolerance and date formats, and the other way round.
+    if(patch.type){for(const field of ['tolerance','left_date_format','right_date_format'])delete rule[field];}
+    if('tolerance' in patch||patch.left_date_format){for(const field of ['type','scale','timezone'])delete rule[field];}
+    if(patch.type&&patch.type!=='decimal')delete rule.scale;if(patch.type&&patch.type!=='timestamp')delete rule.timezone;
+    Object.assign(rule,patch);
     if(rule.left_date_format&&rule.tolerance!==undefined)throw Error('Numeric and date rules cannot be combined for '+column+'. Remove its existing rule first.');
   }return merged;
 }
@@ -1582,6 +1605,8 @@ function initComparisonRulesDrawer(){
     const patch={};if($('ruleTrim').checked)patch.trim=true;if($('ruleCase').checked)patch.ignore_case=true;
     if($('ruleNumericFormat').checked)patch.tolerance='0';else if($('ruleTolerance').value!=='')patch.tolerance=$('ruleTolerance').value;
     if($('ruleDateLeft').value||$('ruleDateRight').value){patch.left_date_format=$('ruleDateLeft').value;patch.right_date_format=$('ruleDateRight').value;}
+    const kind=$('ruleType')?.value;
+    if(kind){patch.type=kind;if(kind==='decimal')patch.scale=Number($('ruleScale').value);if(kind==='timestamp')patch.timezone=$('ruleTimezone').value.trim()||'UTC';}
     if(!Object.keys(patch).length)throw Error('Choose at least one rule.');
     const proposed=mergeColumnRules(ruleEditorDraft,columns,patch),scope=ruleScope();const result=await api(endpoint('/validate-rules'),{comparison_rules:proposed,keys:scope.keys,ignore_columns:scope.ignore_columns});ruleEditorDraft=result.rules;clearRuleBuilder();renderRuleEditor();ruleStatus(`Rules added to ${columns.length} column${columns.length===1?'':'s'}. Apply to save this configuration.`,'success');
   }catch(error){ruleStatus(error.message);}});

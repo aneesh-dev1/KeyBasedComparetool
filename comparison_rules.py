@@ -1,6 +1,60 @@
 """Explicit opt-in, non-key value normalization; never alters source values."""
-from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from datetime import date, datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from functools import lru_cache
+
+# Typed comparison: values are still read as exact text; a type only decides when two texts are equal.
+TYPES = ('number', 'decimal', 'date', 'timestamp')
+
+
+@lru_cache(maxsize=64)
+def _zone(name):
+    if name in ('', 'UTC'):
+        return timezone.utc
+    from zoneinfo import ZoneInfo
+    return ZoneInfo(name)
+
+
+def _decimal(text):
+    if len(text) > 1000:
+        raise InvalidOperation()
+    # Plain numbers only: thousands separators are ambiguous across locales, so they stay mismatches.
+    value = Decimal(text.strip())
+    if not value.is_finite() or abs(value.adjusted()) > 1000:
+        raise InvalidOperation()
+    return value
+
+
+def _date(text):
+    text = text.strip()
+    if len(text) == 8 and text.isdigit():
+        return date(int(text[:4]), int(text[4:6]), int(text[6:]))
+    return datetime.fromisoformat(text.replace('Z', '+00:00').replace('z', '+00:00')[:32]).date() if len(text) > 10 else date.fromisoformat(text)
+
+
+def _instant(text, zone):
+    moment = datetime.fromisoformat(text.strip().replace('Z', '+00:00').replace('z', '+00:00'))
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=_zone(zone))
+    return moment.astimezone(timezone.utc)
+
+
+def typed_equal(left, right, rule):
+    """True when both texts parse as the rule's type and are equal as that type; False otherwise."""
+    kind = rule['type']
+    try:
+        if kind == 'number':
+            return _decimal(left) == _decimal(right)
+        if kind == 'decimal':
+            step = Decimal(1).scaleb(-rule['scale'])
+            return _decimal(left).quantize(step, ROUND_HALF_UP) == _decimal(right).quantize(step, ROUND_HALF_UP)
+        if kind == 'date':
+            return _date(left) == _date(right)
+        if kind == 'timestamp':
+            return _instant(left, rule.get('timezone', 'UTC')) == _instant(right, rule.get('timezone', 'UTC'))
+    except (InvalidOperation, ValueError, OverflowError):
+        return False
+    return False
 
 
 def validate_rules(rules, columns, keys, ignored):
@@ -31,6 +85,22 @@ def validate_rules(rules, columns, keys, ignored):
             clean[side+'_date_format']=fmt
         if bool(clean['left_date_format'])!=bool(clean['right_date_format']): raise ValueError('Specify a date format for each file')
         if clean['left_date_format'] and 'tolerance' in clean: raise ValueError('Choose numeric tolerance or dates for a column, not both')
+        kind=rule.get('type','') or ''
+        if kind:
+            if kind not in TYPES: raise ValueError('Compare as must be number, decimal, date or timestamp')
+            if 'tolerance' in clean or clean['left_date_format']: raise ValueError('Choose a compare-as type or a tolerance/date format for a column, not both')
+            clean['type']=kind
+            if kind=='decimal':
+                scale=rule.get('scale')
+                if not isinstance(scale,int) or isinstance(scale,bool) or not 0<=scale<=18: raise ValueError('Decimal scale must be a whole number from 0 to 18')
+                clean['scale']=scale
+            if kind=='timestamp':
+                zone=rule.get('timezone','UTC') or 'UTC'
+                try:
+                    if not isinstance(zone,str) or len(zone)>64: raise ValueError()
+                    _zone(zone)
+                except Exception: raise ValueError('Use a time zone name such as UTC or Asia/Kolkata')
+                clean['timezone']=zone
         result.append(clean)
     return result
 
@@ -40,6 +110,7 @@ def equivalent(left,right,rule):
     if rule.get('trim'): left,right=left.strip(),right.strip()
     if rule.get('ignore_case'): left,right=left.casefold(),right.casefold()
     if left==right:return True
+    if rule.get('type'):return typed_equal(left,right,rule)
     if rule.get('left_date_format'):
         try:return datetime.strptime(left,rule['left_date_format'])==datetime.strptime(right,rule['right_date_format'])
         except ValueError:return False

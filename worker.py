@@ -32,7 +32,7 @@ if __name__ == '__main__':
                            value_overrides=job.get('value_overrides', []),
                            column_headers=job.get('column_headers'),
                            ignore_key_containers=job.get('ignore_key_containers', []),
-                           progress_file=directory / 'progress.json')
+                           progress_file=directory / 'progress.json', live_file=directory / 'live.json')
     try:
         compare(args)
     except Exception as error:

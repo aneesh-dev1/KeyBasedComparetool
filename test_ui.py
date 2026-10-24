@@ -61,6 +61,10 @@ class ReportTests(unittest.TestCase):
         with zipfile.ZipFile(target) as book:self.assertIn('No mismatches',book.read('xl/workbook.xml').decode())
     def test_long_value_not_truncated(self):
         with self.assertRaisesRegex(ValueError,'32,767'):write_xlsx(self.root/'long.xlsx',[('test',iter([['header'],['a'*32768]]))])
+        # With truncation on, the long value is cut to fit, flagged, and counted instead of failing.
+        counter={};write_xlsx(self.root/'cut.xlsx',[('test',iter([['header'],['a'*40000]]))],truncated=counter)
+        with zipfile.ZipFile(self.root/'cut.xlsx') as book:cell=book.read('xl/worksheets/sheet1.xml').decode()
+        self.assertEqual(counter['cells'],1);self.assertIn('[TRUNCATED: 40,000 characters',cell)
 
 class ServerTests(unittest.TestCase):
     @classmethod

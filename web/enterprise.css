@@ -62,7 +62,7 @@
 @media(max-width:650px){.enterprise-ui #rerunDialog{width:calc(100vw - 16px)}.enterprise-ui #rerunDialog .rerun-body{min-height:220px;max-height:60dvh}}
 
 /* Reference-video shell: compact dark navigation with stable icon positions. */
-.enterprise-ui .sidebar{background:#182a3a;padding:16px 0;width:204px}
+.enterprise-ui .sidebar{background:#002b40;padding:16px 0;width:204px}
 .enterprise-ui.sidebar-collapsed .sidebar{width:60px;padding:16px 8px}
 .enterprise-ui main{margin-left:204px}.enterprise-ui.sidebar-collapsed main{margin-left:60px}
 .enterprise-ui.sidebar-hover-open main{margin-left:60px}
@@ -91,7 +91,7 @@
 .enterprise-ui #runningPanel #pipelineStages>li{min-height:116px;min-width:80px;max-width:190px;padding:0 4px;gap:7px;background:transparent;border:0;box-shadow:none;animation:none;justify-content:flex-start}
 .enterprise-ui #runningPanel #pipelineStages>li .pipeline-icon{width:78px;height:54px;border-radius:13px;border:1px solid #cddbe2;background:#f9fbfc;position:relative;color:#8ba0ac;box-shadow:0 2px 4px #193e5606}
 .enterprise-ui #runningPanel #pipelineStages>li .pipeline-icon svg{width:30px;height:30px;border-radius:50%;padding:6px;box-sizing:content-box}
-.enterprise-ui #runningPanel #pipelineStages>li.done .pipeline-icon svg,.enterprise-ui #runningPanel #pipelineStages>li.active .pipeline-icon svg{background:#182a3a;color:white}
+.enterprise-ui #runningPanel #pipelineStages>li.done .pipeline-icon svg,.enterprise-ui #runningPanel #pipelineStages>li.active .pipeline-icon svg{background:#002b40;color:white}
 .enterprise-ui #runningPanel #pipelineStages>li.done .pipeline-icon:after{content:'✓';position:absolute;right:-5px;top:-6px;width:16px;height:16px;display:grid;place-items:center;border-radius:50%;background:#ebcc54;color:#203e4b;font-size:11px;font-weight:700}
 .enterprise-ui #runningPanel #pipelineStages>li.active .pipeline-icon{outline:2px solid #55a9ba;outline-offset:6px;animation:pipeline-breathe 2s ease-in-out infinite}
 .enterprise-ui #runningPanel #pipelineStages>li.failed .pipeline-icon{border-color:#c45b4c;color:#a82c22}
