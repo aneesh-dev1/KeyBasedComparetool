@@ -36,6 +36,12 @@ from reports import export_excel, export_html, make_summary_html, REPORT_VERSION
 
 BASE = Path(__file__).resolve().parent
 CHUNK = 8 * 1024 * 1024
+# Fonts are served verbatim; every other static file may carry page placeholders.
+FONT_FILES = ('/assets/fonts/inter-latin-wght.woff2', '/assets/fonts/jetbrains-mono-latin-wght.woff2')
+STATIC_FILES = ('/', '/app.js', '/upload-transport.js', '/style.css', '/enterprise.js', '/enterprise.css',
+                '/tokens.css', '/components.css', '/shell.css',
+                '/assets/transunion-logo.svg', '/assets/transunion-loader.svg', '/assets/tu-favicon.svg',
+                '/assets/lucide-sprite.svg') + FONT_FILES
 
 
 class UploadOffsetConflict(ValueError):
@@ -625,11 +631,16 @@ class Handler(BaseHTTPRequestHandler):
             path, query = self.check_request()
             if self.command == 'GET' and path == '/health':
                 return self.json_response(dict(service='key-based-compare', status='ready', pid=os.getpid()))
-            if self.command == 'GET' and path in ('/', '/app.js', '/upload-transport.js', '/style.css', '/assets/transunion-logo.svg', '/assets/transunion-loader.svg', '/assets/tu-favicon.svg', '/enterprise.js', '/enterprise.css'):
+            if self.command == 'GET' and path in STATIC_FILES:
                 target = BASE / 'web' / ('index.html' if path == '/' else path[1:])
-                data = target.read_bytes().replace(b'__APP_TOKEN__', self.app.token.encode()).replace(b'__WORKSPACE_MODE__', b'team' if self.server.shared else b'local').replace(b'__MAX_SORT_MB__', str(self.server.max_sort_mb).encode())
+                data = target.read_bytes()
+                if path in FONT_FILES:
+                    content_type = 'font/woff2'
+                else:
+                    data = data.replace(b'__APP_TOKEN__', self.app.token.encode()).replace(b'__WORKSPACE_MODE__', b'team' if self.server.shared else b'local').replace(b'__MAX_SORT_MB__', str(self.server.max_sort_mb).encode())
+                    content_type = mimetypes.guess_type(target)[0] + '; charset=utf-8'
                 self.send_response(200)
-                self.send_header('Content-Type', mimetypes.guess_type(target)[0] + '; charset=utf-8')
+                self.send_header('Content-Type', content_type)
                 self.send_header('Content-Length', str(len(data)))
                 self.send_header('Cache-Control', 'no-store')
                 self.send_header('X-Content-Type-Options', 'nosniff')

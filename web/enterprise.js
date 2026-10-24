@@ -293,28 +293,21 @@ const comparisonChevron=document.createElement('span');comparisonChevron.classNa
 $('navNew').querySelector('.comparison-chevron').innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
 $('sidebarToggle').addEventListener('click',closeComparisonMenu);
 
-// Lucide-style line icons are embedded so the on-prem application stays offline.
-const lucidePaths={
+// Lucide icons come from a local sprite so the on-prem application stays offline.
+// Older call sites use short names; map them onto Lucide's own icon ids.
+const lucideNames={compare:'file-diff',projects:'folder-kanban',history:'history',package:'package-x',profiles:'layout-template',docs:'book-open',files:'files',scope:'key-round',pipeline:'workflow',results:'chart-column',upload:'file-up',shield:'shield-check',sliders:'sliders-horizontal',chevron:'chevron-right',check:'check',option:'circle'};
+function lucide(name,className=''){return `<svg class="lucide ${className}" aria-hidden="true" focusable="false"><use href="/assets/lucide-sprite.svg#${lucideNames[name]||name}"/></svg>`;}
+// The sidebar keeps its original icon artwork.
+const sidebarIconPaths={
  compare:'<rect width="8" height="14" x="3" y="5" rx="2"/><path d="M7 8v2M7 14v2M14 8h7M14 12h7M14 16h7"/>',
  projects:'<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M8 17v-3m4 3v-6m4 6V9"/>',
  history:'<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
  package:'<path d="m7.5 4.27 9 5.15M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/>',
  profiles:'<path d="M9 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3"/><rect width="6" height="4" x="9" y="3" rx="1"/><path d="M9 12h6M9 16h6"/>',
- docs:'<path d="M12 7v14M3 5h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5v14h-5a4 4 0 0 0-4 2 4 4 0 0 0-4-2H3Z"/>',
- files:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/>',
- scope:'<path d="M3 6h18M7 12h10M10 18h4"/>',
- pipeline:'<rect width="6" height="6" x="3" y="3" rx="1"/><rect width="6" height="6" x="15" y="15" rx="1"/><path d="M9 6h3a3 3 0 0 1 3 3v6M15 18h-3a3 3 0 0 1-3-3V9"/>',
- results:'<path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/>',
- upload:'<path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M20 15v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4"/>',
- shield:'<path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3Z"/><path d="m9 12 2 2 4-4"/>',
- sliders:'<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/>',
- chevron:'<path d="m9 18 6-6-6-6"/>',
- check:'<path d="m9 12 2 2 4-4"/><circle cx="12" cy="12" r="9"/>',
- option:'<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r=".5"/><circle cx="3.5" cy="12" r=".5"/><circle cx="3.5" cy="18" r=".5"/>'
+ docs:'<path d="M12 7v14M3 5h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5v14h-5a4 4 0 0 0-4 2 4 4 0 0 0-4-2H3Z"/>'
 };
-function lucide(name,className=''){return `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${lucidePaths[name]}</svg>`;}
 for(const [id,name] of Object.entries({navNew:'compare',navProjects:'projects',navHistory:'history',navContainers:'package',navProfiles:'profiles',navDocs:'docs'})){
- const icon=$(id)?.querySelector('.side-icon');if(icon)icon.innerHTML=lucide(name);
+ const icon=$(id)?.querySelector('.side-icon');if(icon)icon.innerHTML=`<svg class="" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${sidebarIconPaths[name]}</svg>`;
 }
 for(const [id,name] of Object.entries({navFiles:'files',navScope:'scope',navPipeline:'pipeline',navResults:'results'})){
  const button=$(id);if(!button)continue;const marker=button.querySelector('.step-number-value')||button.querySelector('span');if(marker){marker.innerHTML=lucide(name,'workflow-lucide');marker.classList.add('workflow-icon');}
@@ -484,8 +477,8 @@ const analysisIcons={
 };
 const analysisSvg=name=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${analysisIcons[name]}</svg>`;
 const analysisMetricMap={
- 'Equal rows':['equal','Matched records'],
- 'Changed rows':['rows','Records with differences'],
+ 'Equal keys':['equal','Matched keys with identical values'],
+ 'Unequal keys':['rows','Matched keys with at least one difference'],
  'Changed cells':['cells','Individual value changes'],
  'Champion-only keys':['left','Only in champion dataset'],
  'Challenger-only keys':['right','Only in challenger dataset']
@@ -518,3 +511,404 @@ function enhanceAnalysisDashboard(){
 const analysisSummaryRender=renderSummary;
 renderSummary=function(){analysisSummaryRender();enhanceAnalysisDashboard();};
 if(job?.state==='complete')enhanceAnalysisDashboard();
+
+// Design system, phase 1: the app shell and Files & headers adopt tokens/components/shell.css.
+// Presentation only; every control keeps its id, listeners and controller.
+for(const element of [document.querySelector('.workspace-topbar'),document.querySelector('#mainWorkspace>.heading'),$('comparisonFlow'),$('uploadPanel'),$('headersPanel'),$('sheetPanel')])element?.classList.add('ds');
+function setLucide(target,name){if(target)target.innerHTML=lucide(name);}
+function lucideNode(name,className){const holder=document.createElement('span');holder.innerHTML=lucide(name,className);return holder.firstElementChild;}
+setLucide($('navNew').querySelector('.comparison-chevron'),'chevron-down');
+// Compare files menu: one inner wrapper lets the menu animate the space it takes, so the items below
+// move with it. Closing plays the same motion in reverse before hiding (expanded sidebar only).
+{
+ const menu=$('comparisonMenu'),inner=document.createElement('div');inner.className='ds-menu-inner';inner.append(...menu.childNodes);menu.append(inner);
+ let closingTimer=null;
+ const finishClose=()=>{clearTimeout(closingTimer);menu.classList.remove('is-closing');menu.hidden=true;};
+ menu.addEventListener('animationend',event=>{if(event.target===menu&&menu.classList.contains('is-closing'))finishClose();});
+ // Clicking "Compare files" while the menu is still closing reopens it from where it is.
+ $('navNew').addEventListener('click',event=>{if(!menu.classList.contains('is-closing'))return;event.stopImmediatePropagation();clearTimeout(closingTimer);menu.classList.remove('is-closing');$('navNew').setAttribute('aria-expanded','true');},{capture:true});
+ closeComparisonMenu=function(){
+  $('navNew').setAttribute('aria-expanded','false');
+  if(menu.classList.contains('is-closing'))return;
+  if(menu.hidden)return;
+  const animate=!document.body.classList.contains('sidebar-collapsed')&&!document.body.classList.contains('reduce-motion')&&!matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(!animate){menu.hidden=true;return;}
+  menu.classList.add('is-closing');closingTimer=setTimeout(finishClose,650);
+ };
+}
+// Top bar: Lucide help icons.
+{
+ const summary=$('workspaceHelp').querySelector('summary');
+ summary.querySelector('svg:not(.help-chevron)')?.replaceWith(lucideNode('circle-help'));
+ summary.querySelector('.help-chevron')?.replaceWith(lucideNode('chevron-down','help-chevron'));
+ $('takeTour').prepend(lucideNode('compass'));$('keyboardHelp').prepend(lucideNode('keyboard'));
+}
+// Stepper: numbered captions, completed steps and a progress line.
+for(const [index,id] of navStages.entries())$(id).querySelector('.step-name')?.setAttribute('data-step',index+1);
+function syncStepProgress(){
+ const items=navStages.map(id=>$(id).closest('li'));const active=items.findIndex(li=>li.querySelector('.phase-button.active'));
+ items.forEach((li,index)=>li.classList.toggle('is-complete',active>index&&!li.querySelector('.phase-button').disabled));
+ $('comparisonFlow').style.setProperty('--ds-progress',active<0?0:(active+1)/items.length);
+}
+new MutationObserver(syncStepProgress).observe($('comparisonFlow'),{subtree:true,attributes:true,attributeFilter:['class','disabled']});syncStepProgress();
+// Sources collapse: one inner wrapper lets the body animate its grid row to the content's real height.
+{const inner=document.createElement('div');inner.className='uploaded-sources-inner';inner.append(...uploadedSourcesBody.childNodes);uploadedSourcesBody.append(inner);}
+// Files: format note icon, source toggle, "vs" marker, format chips and Lucide icons.
+{
+ const status=$('detectedFileStatus');
+ if(status){
+  // app.js rewrites this text; keep the icon in front of it, and show the note only for a mismatched
+  // pair or the JSON size limit (the idle default and detected-format echo add nothing).
+  const decorate=()=>{status.classList.toggle('is-default',/^File format is detected automatically\.$|column headers are read after upload\.$/.test(status.textContent));if(status.firstElementChild?.matches('svg.lucide'))return;const message=status.textContent;status.replaceChildren(lucideNode('info'),Object.assign(document.createElement('span'),{textContent:message}));};
+  decorate();new MutationObserver(decorate).observe(status,{childList:true});
+ }
+ const mode=$('uploadPanel').querySelector('.source-mode');mode.classList.add('ds-segmented');
+ $('computerSource').prepend(lucideNode('upload'));$('serverSource').prepend(lucideNode('server'));
+ for(const button of [$('computerSource'),$('serverSource')])button.classList.remove('subtle');
+ // Both source modes share the same two-card layout with a ⇄ marker between the cards.
+ for(const first of [$('leftCard'),$('leftServerPath').closest('.server-path-card')]){const vs=document.createElement('span');vs.className='ds-vs';vs.setAttribute('aria-hidden','true');vs.innerHTML=lucide('arrow-left-right');first.after(vs);}
+ for(const line of $('uploadPanel').querySelectorAll('.file-type-line'))line.replaceChildren(...line.textContent.split('·').map(type=>Object.assign(document.createElement('span'),{textContent:type.trim()})));
+ for(const icon of $('uploadPanel').querySelectorAll('.server-path-icon'))setLucide(icon,'hard-drive');
+ $('uploadPanel').querySelector('.server-source-note>svg')?.replaceWith(lucideNode('lock'));
+ $('uploadPanel').querySelector('.upload-profile>summary>svg')?.replaceWith(lucideNode('layout-template'));
+ setLucide($('uploadPanel').querySelector('.profile-menu-icon'),'layout-template');
+ // Manage templates is an icon button beside the template picker; its click handler is unchanged.
+ const manage=$('manageProfiles'),picker=$('quickProfile').closest('.tu-select')||$('quickProfile'),pickerRow=document.createElement('div');
+ pickerRow.className='ds-profile-row';picker.before(pickerRow);pickerRow.append(picker,manage);
+ manage.className='ds-icon-btn';manage.type='button';manage.setAttribute('aria-label','Manage templates');manage.title='Manage templates';manage.innerHTML=lucide('settings');
+ // The profile note only appears once a template is chosen or applied.
+ const profileStatus=$('quickProfileStatus'),syncProfileStatus=()=>profileStatus.classList.toggle('is-idle',/^(Applied after both files|No template selected)/.test(profileStatus.textContent));
+ new MutationObserver(syncProfileStatus).observe(profileStatus,{childList:true,characterData:true,subtree:true});syncProfileStatus();
+ for(const [summary,label] of [[$('uploadFormatSettings').querySelector('summary'),'CSV settings'],[$('uploadPanel').querySelector('.upload-profile>summary'),'Profile templates']]){
+  summary.removeAttribute('title');summary.prepend(Object.assign(document.createElement('span'),{className:'ds-action-label',textContent:label}));
+ }
+ setLucide($('headerSearchToggle'),'search');
+ // Reset edits: icon action that slides open to show its label (same motion as the upload toolbar).
+ const reset=$('headerReset');reset.classList.remove('subtle');reset.classList.add('ds-expand-action');reset.type='button';reset.setAttribute('aria-label','Reset edits');
+ reset.replaceChildren(Object.assign(document.createElement('span'),{className:'ds-action-label',textContent:'Reset edits'}),lucideNode('rotate-ccw'));
+ // Server cards match the drop-zone height; the access note appears only once it has a result.
+ new ResizeObserver(([entry])=>{const height=entry.borderBoxSize?.[0]?.blockSize||entry.target.offsetHeight;if(height)$('uploadPanel').style.setProperty('--ds-source-card-height',height+'px');}).observe($('leftCard'));
+ const serverNote=$('serverSourceHelp'),serverActions=serverNote.closest('.server-source-actions');
+ const syncServerNote=()=>serverActions.classList.toggle('is-prompt',/^Enter both/.test(serverNote.textContent));
+ new MutationObserver(syncServerNote).observe(serverNote,{childList:true,characterData:true,subtree:true});syncServerNote();
+}
+
+// Pipeline & logs: "Console view" switch, off by default. On shows the stage rail beside the live console;
+// off shows the stage graph across the full panel. The choice is remembered in this browser.
+window.addEventListener('DOMContentLoaded',()=>{
+ const pipelinePanel=$('runningPanel'),actions=pipelinePanel.querySelector('.pipeline-actions');if(!actions)return;
+ const key='compare-console-view';let stored=null;try{stored=localStorage.getItem(key);}catch(error){}
+ const toggle=document.createElement('button');toggle.type='button';toggle.id='consoleViewToggle';toggle.className='ds-switch';toggle.setAttribute('role','switch');
+ toggle.innerHTML='<span class="ds-switch-label">Console view</span><span class="ds-switch-track" aria-hidden="true"><span class="ds-switch-thumb"></span></span>';
+ const apply=on=>{pipelinePanel.dataset.liveTab=on?'console':'graph';toggle.setAttribute('aria-checked',String(on));};
+ toggle.addEventListener('click',()=>{const on=toggle.getAttribute('aria-checked')!=='true';apply(on);try{localStorage.setItem(key,on?'on':'off');}catch(error){}});
+ actions.prepend(toggle);apply(stored==='on');
+});
+
+// Pipeline graph (Console view off): start → stages → end on one line, with the Re-evaluate branch
+// below Write results and Analysis. Built from #pipelineStages after every refresh, so it always
+// shows the same stages and states as the console rail; that list stays available to screen readers.
+{
+ const graph=document.createElement('div');graph.id='pipelineGraph';graph.setAttribute('aria-hidden','true');
+ $('pipelineStages').after(graph);
+ const reusedNote='Reused from original run';
+ function describe(li){
+  const kind=li.dataset.kind,label=li.querySelector('.pipeline-label')?.textContent||li.textContent;
+  const read=/file 1/i.test(label)?['Read file 1','Champion file']:/file 2/i.test(label)?['Read file 2','Challenger file']:/both/i.test(label)?['Read & sort','Both files']:['Read & index','Keys of both files'];
+  const text={validate:['Validate','Check configuration'],read,compare:['Compare','Match keys, find changes'],write:['Write results','Results & HTML report'],complete:['Analysis','View results'],review:['Re-evaluate Differences','Apply rules to retained evidence']}[kind]||[label,''];
+  const state=['done','active','failed'].find(name=>li.classList.contains(name))||'pending';
+  return {kind,title:text[0],subtitle:text[1],state};
+ }
+ const icons={validate:'shield-check',read:'arrow-down-narrow-wide',compare:'arrow-left-right',write:'file-text',complete:'flag',review:'refresh-cw'};
+ function node(stage,column,extra=''){
+  const live=stage.kind==='compare'&&stage.state==='active'&&job?.progress?.rows!==undefined?`<b>${number(job.progress.rows)} keys</b>`:'';
+  return `<div class="pg-node is-${stage.state} ${extra}" data-col="${column}"><span class="pg-box"><span class="pg-port pg-port-in"></span>${lucide(icons[stage.kind]||'circle','pg-icon')}<span class="pg-port pg-port-out"></span></span><strong>${stage.title}</strong><small>${stage.subtitle}</small>${live}</div>`;
+ }
+ function render(){
+  const items=[...$('pipelineStages').children].map(describe);
+  const review=items.find(stage=>stage.kind==='review');
+  let main=items.filter(stage=>stage.kind!=='review');
+  // A review re-run reuses the original read and compare work; show those stages as reused.
+  if(review)main=[{kind:'validate',title:'Validate',subtitle:reusedNote,state:'reused'},{kind:'read',title:'Read & index',subtitle:reusedNote,state:'reused'},{kind:'compare',title:'Compare',subtitle:reusedNote,state:'reused'},...main];
+  const branch=review||{kind:'review',title:'Re-evaluate Differences',subtitle:'Skipped for this run',state:'skipped'};
+  const reached=state=>['done','active','failed','reused'].includes(state);
+  const endState=job?.state==='complete'?'done':job?.state==='error'?'failed':'pending';
+  let html=`<div class="pg-terminal pg-start${main.some(stage=>reached(stage.state))||job?.state!=='queued'?' is-on':''}" data-col="1">${lucide('play')}</div>`;
+  main.forEach((stage,i)=>{const column=2+i*2;html+=`<span class="pg-link${reached(stage.state)?' is-on':''}" data-col="${column}"></span>`+node(stage,column+1);});
+  const endColumn=2+main.length*2;
+  html+=`<span class="pg-link${endState!=='pending'?' is-on':''}" data-col="${endColumn}"></span><div class="pg-terminal pg-end is-${endState}" data-col="${endColumn+1}">${lucide(endState==='done'?'check':endState==='failed'?'x':'square')}</div>`;
+  // The branch leaves after Compare and rejoins after Analysis, as in the reference design.
+  const write=main.findIndex(stage=>stage.kind==='write'),analysis=main.findIndex(stage=>stage.kind==='complete');
+  if(write>=0&&analysis>=0){const from=3+write*2,to=4+analysis*2;html+=`<div class="pg-branch is-${branch.state}" data-from="${from}" data-to="${to}">${node(branch,0,'pg-branch-node')}</div>`;}
+  // Columns: start, then connector + node pairs, then connector + end.
+  graph.style.gridTemplateColumns=['var(--pg-terminal)',...main.flatMap(()=>['minmax(28px,1fr)','var(--pg-node-col)']),'minmax(28px,1fr)','var(--pg-terminal)'].join(' ');
+  graph.innerHTML=html;
+  // Grid placement goes through CSSOM: the page's Content-Security-Policy blocks inline style attributes.
+  for(const element of graph.querySelectorAll('[data-col]'))if(element.dataset.col!=='0')element.style.gridColumn=element.dataset.col;
+  for(const element of graph.querySelectorAll('[data-from]'))element.style.gridColumn=`${element.dataset.from} / ${element.dataset.to}`;
+ }
+ const previous=renderPipeline;renderPipeline=async function(){await previous();render();};
+}
+
+// Recompare button: Lucide list-restart icon on a cyan tile, title and hint, and the keyboard shortcut.
+// Classes, listeners and the idle collapse in app.js are unchanged.
+{
+ const fab=$('recompareFab'),mac=/Mac|iPhone|iPad/.test(navigator.platform);
+ fab.innerHTML=`<span class="fab-icon" aria-hidden="true">${lucide('list-restart')}</span><span class="fab-caption"><strong>Recompare</strong><small>Adjust rules · originals kept</small></span><kbd class="fab-key" aria-hidden="true">${mac?'⌥':'Alt'} R</kbd>`;
+ fab.removeAttribute('title');
+}
+
+// Recompare dialog: macOS-style genie. It pours out of the Recompare button when it opens and
+// funnels back into it when closed with the close button or Escape (same guard as app.js).
+{
+ const dialog=$('rerunDialog'),fab=$('recompareFab'),nativeShow=dialog.showModal.bind(dialog);
+ const reduced=()=>document.body.classList.contains('reduce-motion')||matchMedia('(prefers-reduced-motion: reduce)').matches;
+ function genieFrames(){
+  const d=dialog.getBoundingClientRect(),f=fab.hidden?null:fab.getBoundingClientRect();
+  const dx=f?f.left+f.width/2-(d.left+d.width/2):0,dy=f?f.top+f.height/2-(d.top+d.height/2):d.height/2;
+  // The far edge narrows toward the button, like a window being drawn into the Dock.
+  return [
+   {transform:`translate(${dx}px,${dy}px) scale(.06,.04)`,clipPath:'polygon(0% 0%,100% 0%,100% 100%,0% 100%)',opacity:0},
+   {offset:.42,transform:`translate(${dx*.42}px,${dy*.5}px) scale(.62,.42)`,clipPath:'polygon(4% 0%,96% 0%,78% 100%,58% 100%)',opacity:1},
+   {transform:'none',clipPath:'polygon(0% 0%,100% 0%,100% 100%,0% 100%)',opacity:1}
+  ];
+ }
+ let closing=null;
+ dialog.showModal=function(){
+  nativeShow();if(reduced())return;
+  dialog.animate(genieFrames(),{duration:560,easing:'cubic-bezier(.22,1,.36,1)'});
+  dialog.animate([{opacity:0},{opacity:1}],{duration:320,easing:'ease-out',pseudoElement:'::backdrop'});
+ };
+ async function genieClose(){
+  if(!dialog.open||$('startRerun').disabled||closing)return;
+  if(reduced()){dialog.close();return;}
+  const frames=genieFrames().reverse();
+  closing=dialog.animate(frames,{duration:460,easing:'cubic-bezier(.55,0,.75,.2)',fill:'forwards'});
+  dialog.animate([{opacity:1},{opacity:0}],{duration:360,easing:'ease-in',fill:'forwards',pseudoElement:'::backdrop'});
+  // A stalled animation clock (hidden tab) must never leave the dialog stuck open.
+  try{await Promise.race([closing.finished,new Promise(resolve=>setTimeout(resolve,700))]);}finally{dialog.close();dialog.getAnimations({subtree:false}).forEach(animation=>animation.cancel());closing=null;}
+ }
+ $('closeRerun').addEventListener('click',event=>{event.stopImmediatePropagation();genieClose();},{capture:true});
+ dialog.addEventListener('cancel',event=>{event.preventDefault();event.stopImmediatePropagation();genieClose();},{capture:true});
+}
+
+// Analysis: Reports is a header button beside "Attach to project". The existing download panel
+// (Excel/HTML buttons, statuses, cancel controls and handlers) moves into its popover unchanged.
+{
+ const panel=$('results').querySelector('.download-panel'),heading=$('results').querySelector('.result-heading');
+ const menu=document.createElement('details');menu.id='reportsMenu';menu.className='ds-reports';
+ menu.innerHTML=`<summary aria-label="Download reports">${lucide('download')}<span>Reports</span>${lucide('chevron-down','ds-reports-chevron')}</summary><div class="ds-reports-popover" role="group" aria-label="Download reports"></div>`;
+ menu.querySelector('.ds-reports-popover').append(panel);
+ const place=()=>{const attach=[...heading.querySelectorAll('button')].find(button=>/Attach to project/.test(button.textContent));if(attach)attach.after(menu);else heading.append(menu);};
+ place();
+ document.addEventListener('pointerdown',event=>{if(menu.open&&!menu.contains(event.target))menu.open=false;});
+ menu.addEventListener('keydown',event=>{if(event.key==='Escape'&&menu.open){event.stopPropagation();menu.open=false;menu.querySelector('summary').focus();}});
+}
+
+// Analysis redesign: ranked column table (rank · column · match · share of mismatches · count) and a
+// "Column health" summary. Rows keep their buttons and click handlers; bar widths go through CSSOM
+// because the Content-Security-Policy blocks inline style attributes.
+function redesignAnalysis(){
+ const results=$('results'),summary=job?.summary;if(!results||!summary)return;
+ const list=$('columnSummary'),rows=[...list.querySelectorAll('.column-row')];
+ const matched=Math.max(0,Number(summary.matched_keys||0)),counts=rows.map(row=>Number((row.querySelector('strong')?.textContent||'0').replace(/[^0-9.-]/g,''))||0),maxCount=Math.max(1,...counts);
+ list.classList.add('ds-column-table');
+ if(!list.previousElementSibling?.classList.contains('ds-column-head')&&rows.length){const head=document.createElement('div');head.className='ds-column-head';head.setAttribute('aria-hidden','true');head.innerHTML='<span>#</span><span>Column</span><span>Match</span><span>Share of mismatches</span><span>Changes</span>';list.before(head);}
+ rows.forEach((row,index)=>{
+  if(row.dataset.dsDone)return;row.dataset.dsDone='1';
+  const name=row.firstElementChild?.textContent||'',count=counts[index],rate=matched?Math.max(0,100-count*100/matched):0;
+  const risk=rate<95?'high':rate<99?'medium':'low';
+  row.dataset.risk=risk;row.classList.add('ds-column-row');
+  const rank=Object.assign(document.createElement('span'),{className:'ds-rank',textContent:String(index+1)});
+  const label=Object.assign(document.createElement('span'),{className:'ds-col-name',textContent:name});label.title=name;
+  const pill=Object.assign(document.createElement('span'),{className:'ds-rate is-'+risk,textContent:matched?`${rate.toFixed(rate>99&&rate<100?2:1)}%`:'—'});
+  const bar=document.createElement('span');bar.className='ds-share';const fill=document.createElement('i');fill.style.width=Math.max(2,count*100/maxCount)+'%';bar.append(fill);
+  const value=document.createElement('span');value.className='ds-count';value.innerHTML=`<b></b><small>changes</small>`;value.querySelector('b').textContent=number(count);
+  const go=document.createElement('span');go.className='ds-go';go.innerHTML=lucide('chevron-right');
+  row.replaceChildren(rank,label,pill,bar,value,go);
+ });
+ // Column health replaces the donut with a stacked bar and per-band rows.
+ const panel=results.querySelector('.result-chart-panel');if(!panel)return;
+ const all=Object.values(summary.changed_cells_by_column||{}),total=all.length;
+ const bands=[['100% match','perfect'],['99% to <100%','low'],['95% to <99%','medium'],['Below 95%','high']].map(([label,key])=>({label,key,count:0}));
+ if(matched)for(const count of all)bands[count===0?0:count*100<=matched?1:count*20<=matched?2:3].count++;
+ let health=panel.querySelector('.ds-health');
+ if(!health){health=document.createElement('div');health.className='ds-health';panel.append(health);}
+ const perfect=bands[0].count,pct=total?Math.round(perfect*100/total):0;
+ health.innerHTML=`<div class="ds-health-hero"><strong>${number(perfect)}<span> / ${number(total)}</span></strong><p>value columns match 100%</p><em>${pct}% fully matching</em></div><div class="ds-stack" role="img"></div><ul class="ds-bands"></ul><p class="ds-health-foot"></p>`;
+ const stack=health.querySelector('.ds-stack'),list2=health.querySelector('.ds-bands');
+ stack.setAttribute('aria-label',bands.map(b=>`${b.label}: ${b.count}`).join(', '));
+ for(const band of bands){
+  if(band.count){const seg=document.createElement('span');seg.className='is-'+band.key;seg.style.flexGrow=String(band.count);seg.title=`${band.label}: ${band.count}`;stack.append(seg);}
+  const li=document.createElement('li');li.className='is-'+band.key+(band.count?'':' is-empty');
+  li.innerHTML='<span class="ds-dot"></span><span class="ds-band-label"></span><span class="ds-band-bar"><i></i></span><b></b>';
+  li.querySelector('.ds-band-label').textContent=band.label;li.querySelector('b').textContent=number(band.count);
+  li.querySelector('i').style.width=(total?band.count*100/total:0)+'%';list2.append(li);
+ }
+ health.querySelector('.ds-health-foot').textContent=`${number(summary.changed_cells||0)} mismatched cells · ${number(summary.changed_rows||0)} keys with differences`;
+ const title=panel.querySelector('h2');if(title)title.textContent='Column health';
+}
+{const previousRender=renderSummary;renderSummary=function(){previousRender();redesignAnalysis();};if(job?.state==='complete')redesignAnalysis();}
+
+// Keyboard: page and step travel. Physical key codes keep these working with Option on macOS and Alt on
+// Windows/Linux. Same guards as the existing shortcuts: never while typing, in a dialog, or when disabled.
+{
+ const mac=/Mac|iPhone|iPad/.test(navigator.platform),mod=mac?'⌥':'Alt';
+ const pages={KeyC:'navNew',KeyP:'navProjects',KeyH:'navHistory',KeyK:'navContainers',KeyT:'navProfiles',KeyD:'navDocs'};
+ const steps=['navFiles','navScope','navPipeline','navResults'];
+ const usable=el=>el&&!el.disabled&&!el.closest('[hidden],[inert]')&&el.getClientRects().length>0;
+ document.addEventListener('keydown',event=>{
+  if(!event.altKey||event.ctrlKey||event.metaKey||event.repeat||event.isComposing||event.defaultPrevented)return;
+  if(event.target?.closest?.('input,textarea,select,[contenteditable="true"],[role="textbox"]')||document.querySelector('dialog[open]'))return;
+  try{if(localStorage.getItem('compare-shortcuts')==='off')return;}catch(error){}
+  let target=null;
+  if(event.shiftKey&&pages[event.code])target=$(pages[event.code]);
+  else if(!event.shiftKey&&(event.code==='BracketLeft'||event.code==='BracketRight')){
+   const current=steps.findIndex(id=>$(id).classList.contains('active'));if(current<0)return;
+   const direction=event.code==='BracketRight'?1:-1;
+   for(let i=current+direction;i>=0&&i<steps.length;i+=direction)if(usable($(steps[i]))){target=$(steps[i]);break;}
+  }
+  if(!target||!usable(target))return;
+  event.preventDefault();
+  if(target.id==='navNew'){$('menuContinueComparison')?.click();return;}
+  target.click();
+ });
+ for(const [code,id] of Object.entries(pages))$(id)?.setAttribute('aria-keyshortcuts',`Alt+Shift+${code.slice(3)}`);
+ // Shortcut guide: platform key names as key chips, plus the new rows.
+ const list=$('shortcutsDialog').querySelector('dl');
+ const add=(after,label,keys)=>{const dt=document.createElement('dt');dt.textContent=label;const dd=document.createElement('dd');dd.textContent=keys;const anchor=[...list.querySelectorAll('dt')].find(node=>node.textContent===after)?.nextElementSibling;if(anchor){anchor.after(dt,dd);}else list.append(dt,dd);};
+ add('Comparison steps','Previous / next step','Alt + [ / Alt + ]');
+ add('Previous / next step','Compare files · Projects · Job history','Alt + Shift + C / P / H');
+ add('Compare files · Projects · Job history','Key containers · Templates · Docs','Alt + Shift + K / T / D');
+ for(const dd of list.querySelectorAll('dd')){
+  const groups=dd.textContent.split(' / ').map(part=>part.trim());
+  if(!/Alt|Tab|Enter|Escape|Arrow/.test(dd.textContent))continue;
+  dd.replaceChildren();
+  groups.forEach((group,index)=>{
+   if(index)dd.append(Object.assign(document.createElement('span'),{className:'ds-key-sep',textContent:'/'}));
+   const keys=group.split(/\s*\+\s*/);
+   keys.forEach((key,i)=>{if(i)dd.append(Object.assign(document.createElement('span'),{className:'ds-key-plus',textContent:'+'}));dd.append(Object.assign(document.createElement('kbd'),{textContent:key==='Alt'?mod:key==='Shift'&&mac?'⇧':key}));});
+  });
+ }
+ const note=[...$('shortcutsDialog').querySelectorAll('p')].find(p=>/Windows: Alt/.test(p.textContent));
+ if(note)note.textContent=`${mac?'You are on a Mac: use ⌥ Option':'You are on Windows/Linux: use Alt'}. The same shortcuts work on both platforms. App shortcuts are inactive while typing.`;
+ if($('keyboardHelp')){const k=$('keyboardHelp').querySelector('kbd');if(k)k.textContent=`${mod} /`;}
+}
+
+// Sidebar: Projects gets a dropdown listing every project (loaded when opened). Choosing one opens it
+// in Projects; with no projects the list says so. The Projects row itself still navigates as before.
+{
+ const row=document.createElement('div');row.className='ds-side-row';$('navProjects').before(row);row.append($('navProjects'));
+ const toggle=document.createElement('button');toggle.type='button';toggle.className='ds-side-expander';toggle.setAttribute('aria-label','Show projects');toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-controls','projectsSideMenu');toggle.innerHTML=lucide('chevron-down');
+ row.append(toggle);
+ const menu=document.createElement('div');menu.id='projectsSideMenu';menu.className='ds-side-submenu';menu.setAttribute('role','menu');menu.setAttribute('aria-label','Projects');menu.hidden=true;row.after(menu);
+ const inner=document.createElement('div');inner.className='ds-menu-inner';menu.append(inner);
+ async function fill(){
+  inner.replaceChildren(Object.assign(document.createElement('p'),{className:'ds-side-empty',textContent:'Loading projects…'}));
+  let projects=[];try{projects=(await api('/api/projects')).projects||[];}catch(error){inner.replaceChildren(Object.assign(document.createElement('p'),{className:'ds-side-empty',textContent:'Projects could not be loaded.'}));return;}
+  if(!projects.length){inner.replaceChildren(Object.assign(document.createElement('p'),{className:'ds-side-empty',textContent:'No projects yet'}));return;}
+  inner.replaceChildren(...projects.map(project=>{
+   const item=document.createElement('button');item.type='button';item.setAttribute('role','menuitem');item.className='ds-side-subitem';
+   const name=Object.assign(document.createElement('span'),{textContent:project.name}),count=Object.assign(document.createElement('small'),{textContent:String(project.comparisons??0)});
+   item.title=`${project.name} · ${project.comparisons??0} comparisons`;item.append(name,count);
+   item.onclick=async()=>{close();try{await goView('projectsPanel');await selectProject(project.id);}catch(error){showError(error);}};
+   return item;
+  }));
+ }
+ function close(){menu.hidden=true;toggle.setAttribute('aria-expanded','false');row.classList.remove('is-open');}
+ toggle.addEventListener('click',event=>{
+  event.stopPropagation();
+  if(document.body.classList.contains('sidebar-collapsed')){$('navProjects').click();return;}
+  if(!menu.hidden){close();return;}
+  menu.hidden=false;toggle.setAttribute('aria-expanded','true');row.classList.add('is-open');fill();
+ });
+ menu.addEventListener('keydown',event=>{if(event.key==='Escape'){close();toggle.focus();}});
+ new MutationObserver(()=>{if(document.body.classList.contains('sidebar-collapsed'))close();}).observe(document.body,{attributes:true,attributeFilter:['class']});
+}
+
+// Library pages: Ignore key containers and Profile templates. A creation card sits beside a searchable
+// library of cards. The original inputs and buttons stay the source of truth; cards drive them.
+{
+ const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;};
+ const libraryHeader=(title,subtitle,searchLabel)=>{const head=el('div','ds-lib-head');const copy=el('div');copy.append(el('h3','',title),el('p','',subtitle));const search=el('label','ds-lib-search');search.innerHTML=lucide('search');const input=el('input');input.type='search';input.placeholder=searchLabel;input.setAttribute('aria-label',searchLabel);search.append(input);const count=el('span','ds-badge');head.append(copy,search,count);return {head,input,count};};
+ const empty=(icon,title,text)=>{const box=el('div','ds-lib-empty');box.innerHTML=lucide(icon);box.append(el('strong','',title),el('span','',text));return box;};
+
+ // ── Ignore key containers ──
+ const cPanel=$('containersPanel');cPanel.classList.add('ds','ds-library');
+ cPanel.querySelector(':scope>.eyebrow')?.remove();cPanel.querySelector(':scope>h2')?.remove();
+ const grid=cPanel.querySelector('.enterprise-container-grid'),[form,library]=grid.children;
+ form.classList.add('ds-lib-form');library.classList.add('ds-lib-list');
+ const formHead=el('div','ds-lib-form-head');formHead.innerHTML=`<span class="ds-lib-form-icon">${lucide('package-x')}</span>`;const fh=el('div');fh.append(el('h3','','New container'),el('p','','Group keys to exclude, with a reason that appears in reports.'));formHead.append(fh);form.prepend(formHead);
+ const addHint=(id,text)=>{const field=$(id);const hint=el('small','ds-field-hint',text);(field.closest('label')||field).after(hint);return hint;};
+ addHint('containerReason','Shown in the HTML and Excel reports next to the excluded keys.');
+ const valuesHint=addHint('containerValues','Comma-separated values. For composite keys use JSON tuples, e.g. [["001","A"]].');
+ const parsed=el('span','ds-parse-count');valuesHint.append(parsed);
+ const countKeys=()=>{const text=$('containerValues').value.trim();let n=0;if(text){if(text.startsWith('[')){try{n=JSON.parse(text).length;}catch(e){n=-1;}}else n=text.split(',').map(v=>v.trim()).filter(Boolean).length;}parsed.textContent=n<0?' · Check the JSON format':n?` · ${n} key${n===1?'':'s'} detected`:'';parsed.classList.toggle('is-error',n<0);};
+ $('containerValues').addEventListener('input',countKeys);
+ $('saveContainer').prepend(lucideNode('plus'));
+ const guidance=cPanel.querySelector('.enterprise-guidance');if(guidance){guidance.classList.add('ds-lib-guidance');form.append(guidance);}
+ library.querySelector('h3')?.remove();
+ const cHead=libraryHeader('Saved containers','Select these in Keys & scope to exclude their keys from a comparison.','Find a container');library.prepend(cHead.head);
+ function paintContainers(){
+  const list=$('containerLibrary'),q=cHead.input.value.trim().toLowerCase();
+  const cards=[...list.querySelectorAll('.container-card')];cHead.count.textContent=`${cards.length} saved`;
+  list.querySelector('.ds-lib-empty')?.remove();
+  if(!cards.length){list.replaceChildren(empty('package-x','No containers yet','Create one on the left. It will be available to every comparison in this workspace.'));return;}
+  let shown=0;
+  for(const card of cards){
+   if(!card.dataset.ds){card.dataset.ds='1';const item=keyContainers.find(c=>c.name===card.querySelector('h4')?.textContent);
+    const top=el('div','ds-card-top');top.innerHTML=`<span class="ds-card-icon">${lucide('package-x')}</span>`;top.append(card.querySelector('h4'));
+    if(item){const n=String(item.values||'').trim().startsWith('[')?(()=>{try{return JSON.parse(item.values).length;}catch(e){return null;}})():String(item.values||'').split(',').filter(v=>v.trim()).length;const meta=el('div','ds-card-meta');meta.append(el('span','ds-badge',n===null?'Keys':`${n} key${n===1?'':'s'}`),el('span','ds-badge',`${item.key_width} key column${item.key_width===1?'':'s'}`));top.append(meta);}
+    card.prepend(top);const summary=card.querySelector('summary');if(summary)summary.textContent='View keys';}
+   const match=!q||card.textContent.toLowerCase().includes(q);card.hidden=!match;if(match)shown++;
+  }
+  if(!shown)list.append(empty('search','No matching containers','Try a shorter search.'));
+ }
+ // Repaint when app.js rebuilds the list; the observer pauses while painting so it never re-triggers itself.
+ const libraryObserver=new MutationObserver(()=>paintContainersSafely());
+ function paintContainersSafely(){libraryObserver.disconnect();try{paintContainers();}finally{libraryObserver.observe($('containerLibrary'),{childList:true});}}
+ cHead.input.addEventListener('input',paintContainersSafely);paintContainersSafely();
+
+ // ── Profile templates ──
+ const pPanel=$('profilesPanel');pPanel.classList.add('ds','ds-library');
+ pPanel.querySelector(':scope>h2')?.remove();pPanel.querySelector(':scope>p')?.remove();
+ const controls=$('profileControls'),legacy=controls.querySelector('.feature-box');legacy.hidden=true;
+ const layout=el('div','enterprise-container-grid ds-lib-grid');controls.append(layout);
+ const saveCard=el('section','ds-lib-form');
+ const sHead=el('div','ds-lib-form-head');sHead.innerHTML=`<span class="ds-lib-form-icon">${lucide('layout-template')}</span>`;const sh=el('div');sh.append(el('h3','','Save as template'),el('p','','Store the current comparison’s headers, keys, scope and rules for reuse.'));sHead.append(sh);
+ // Hold references: $() only finds elements attached to the document, and these move before the layout is attached.
+ const nameInput=$('profileName'),saveButton=$('saveProfile'),statusLine=$('profileStatus');
+ const nameLabel=el('label','','Template name');nameLabel.append(nameInput);nameInput.placeholder='e.g. Monthly bureau refresh';
+ const saveNote=el('small','ds-field-hint');
+ saveCard.append(sHead,nameLabel,saveNote,saveButton,statusLine);
+ saveButton.className='primary';saveButton.textContent='Save template';saveButton.prepend(lucideNode('plus'));
+ const libraryCard=el('section','ds-lib-list');const pHead=libraryHeader('Template library','Apply a template to the comparison you are configuring, or pick one on the Files & headers step.','Find a template');
+ const cards=el('div','ds-template-grid');libraryCard.append(pHead.head,cards);layout.append(saveCard,libraryCard);
+ let profiles=[];
+ const syncSaveNote=()=>{const can=!!job&&['ready','complete'].includes(job.state);saveNote.textContent=can?`From: ${job.files?.left?.name||'current comparison'}`:'Load files and configure a comparison first, then save it here.';};
+ function paintProfiles(){
+  syncSaveNote();const q=pHead.input.value.trim().toLowerCase(),canApply=job?.state==='ready';
+  pHead.count.textContent=`${profiles.length} saved`;cards.replaceChildren();
+  if(!profiles.length){cards.append(empty('layout-template','No templates yet','Configure a comparison, then save it here to reuse its setup.'));return;}
+  const shown=profiles.filter(p=>!q||p.name.toLowerCase().includes(q));
+  if(!shown.length){cards.append(empty('search','No matching templates','Try a shorter search.'));return;}
+  for(const profile of shown){
+   const c=profile.config||{},card=el('article','ds-template-card');
+   const top=el('div','ds-card-top');top.innerHTML=`<span class="ds-card-icon">${lucide('layout-template')}</span>`;top.append(el('h4','',profile.name));
+   const facts=el('dl','ds-template-facts');
+   const fact=(label,value)=>{facts.append(el('dt','',label),el('dd','',value));};
+   fact('Keys',(c.keys||[]).join(', ')||'—');
+   fact('Ignored columns',String((c.ignore_columns||[]).length));
+   fact('Rules · overrides',`${(c.comparison_rules||[]).length} · ${(c.value_overrides||[]).length}`);
+   const actions=el('div','ds-template-actions');
+   const apply=el('button','primary','Apply');apply.type='button';apply.disabled=!canApply;apply.title=canApply?'Apply to the current comparison':'Load files first, then apply';
+   apply.onclick=()=>{$('profileSelect').value=profile.id;$('profileSelect').dispatchEvent(new Event('change',{bubbles:true}));$('applyProfile').disabled=false;$('applyProfile').click();};
+   const del=el('button','subtle');del.type='button';del.setAttribute('aria-label',`Delete ${profile.name}`);del.title='Delete template';del.append(lucideNode('trash-2'));
+   del.onclick=()=>{$('profileSelect').value=profile.id;$('deleteProfile').click();};
+   actions.append(apply,del);card.append(top,facts,actions);cards.append(card);
+  }
+ }
+ pHead.input.addEventListener('input',paintProfiles);
+ const previousLoad=loadProfiles;loadProfiles=async function(){await previousLoad();try{profiles=(await api('/api/profiles')).profiles||[];}catch(error){profiles=[];}paintProfiles();};
+ api('/api/profiles').then(result=>{profiles=result.profiles||[];paintProfiles();}).catch(()=>paintProfiles());
+}

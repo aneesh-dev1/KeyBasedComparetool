@@ -328,7 +328,7 @@ function renderSummary() {
   if(s.review_revision){const r=s.review_revision;$('scopeSummary').textContent+=` Review revision: ${number(r.original_mismatches)} original mismatches · ${number(r.accepted_by_rules)} accepted · ${number(r.excluded_from_scope)} excluded · ${number(r.remaining_mismatches)} remaining.`;}
   $('duration').textContent=`${s.elapsed_seconds.toFixed(s.elapsed_seconds<1?3:1)} seconds`;
   $('metrics').replaceChildren();
-  for(const [label,value,style] of [['Equal rows',s.equal_rows,'accent'],['Changed rows',s.changed_rows,'amber'],['Changed cells',s.changed_cells,'amber'],['Champion-only keys',s.left_only,''],['Challenger-only keys',s.right_only,'']]) {
+  for(const [label,value,style] of [['Equal keys',s.equal_rows,'accent'],['Unequal keys',s.changed_rows,'amber'],['Changed cells',s.changed_cells,'amber'],['Champion-only keys',s.left_only,''],['Challenger-only keys',s.right_only,'']]) {
     const card=document.createElement('div');card.className=`metric ${style}`;
     const title=document.createElement('small');title.textContent=label;
     const count=document.createElement('strong');count.textContent=number(value);card.append(title,count);$('metrics').append(card);

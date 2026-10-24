@@ -1,0 +1,138 @@
+/* Design tokens: the single source for colour, type, spacing, radius, elevation and motion.
+   Colours are the existing TransUnion palette only; tints and shades derive from the same hues. */
+@font-face{font-family:"Inter Variable";font-style:normal;font-weight:100 900;font-display:swap;src:url(/assets/fonts/inter-latin-wght.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono Variable";font-style:normal;font-weight:100 800;font-display:swap;src:url(/assets/fonts/jetbrains-mono-latin-wght.woff2) format("woff2")}
+
+:root{
+  /* Brand */
+  --tu-navy-950:#182a3a;
+  --tu-navy-900:#193a50;
+  --tu-navy-800:#1b425b;
+  --tu-navy-700:#004364;
+  --tu-cyan-700:#007b99;
+  --tu-cyan-600:#007f9e;
+  --tu-cyan-500:#00a6ca;
+  --tu-cyan-400:#51abc4;
+  --tu-cyan-300:#69cbd8;
+  --tu-cyan-100:#d9f0f5;
+  --tu-cyan-50:#eaf6f8;
+  --tu-yellow-500:#fcd800;
+  --tu-yellow-400:#f8df46;
+  --tu-yellow-50:color-mix(in srgb,var(--tu-yellow-500) 10%,#fff);
+
+  /* Neutrals */
+  --n-0:#fff;
+  --n-25:#f8fafb;
+  --n-50:#f4f7f9;
+  --n-100:#eef2f4;
+  --n-200:#d9e3e9;
+  --n-300:#c8d7df;
+  --n-400:#9fb2bd;
+  --n-500:#66808c;
+  --n-600:#596c78;
+  --n-700:#3d5566;
+
+  /* Status (existing match-band colours) */
+  --success:#2b8b65;
+  --success-50:color-mix(in srgb,var(--success) 9%,#fff);
+  --warning:#e9ba37;
+  --warning-text:color-mix(in srgb,var(--warning) 45%,var(--tu-navy-900));
+  --warning-50:color-mix(in srgb,var(--warning) 12%,#fff);
+  --attention:color-mix(in srgb,var(--warning) 50%,var(--danger));
+  --attention-text:color-mix(in srgb,var(--attention) 70%,var(--tu-navy-900));
+  --attention-50:color-mix(in srgb,var(--attention) 9%,#fff);
+  --danger:#ce6256;
+  --danger-text:color-mix(in srgb,var(--danger) 75%,var(--tu-navy-900));
+  --danger-50:color-mix(in srgb,var(--danger) 8%,#fff);
+
+  /* Semantic roles */
+  --surface-canvas:var(--n-50);
+  --surface-card:var(--n-0);
+  --surface-sunken:var(--n-25);
+  --surface-hover:color-mix(in srgb,var(--tu-cyan-50) 60%,#fff);
+  --border-subtle:var(--n-100);
+  --border-default:var(--n-200);
+  --border-strong:var(--n-300);
+  --text-strong:var(--tu-navy-900);
+  --text-default:var(--n-700);
+  --text-muted:var(--n-600);
+  --text-faint:var(--n-500);
+  --text-link:var(--tu-cyan-700);
+  --action-primary:var(--tu-yellow-500);
+  --action-primary-hover:var(--tu-yellow-400);
+  --action-primary-text:var(--tu-navy-900);
+  --focus-ring:0 0 0 3px color-mix(in srgb,var(--tu-cyan-500) 35%,transparent);
+
+  /* Type */
+  --font-sans:"Inter Variable",Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+  --font-mono:"JetBrains Mono Variable",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --text-2xs:11px;
+  --text-xs:12px;
+  --text-sm:13px;
+  --text-md:14px;
+  --text-lg:16px;
+  --text-xl:20px;
+  --text-2xl:24px;
+  --text-3xl:32px;
+  --leading-tight:1.25;
+  --leading-normal:1.5;
+  --tracking-caps:.08em;
+
+  /* Space (4px grid) */
+  --space-1:4px;
+  --space-2:8px;
+  --space-3:12px;
+  --space-4:16px;
+  --space-5:20px;
+  --space-6:24px;
+  --space-8:32px;
+  --space-10:40px;
+
+  /* Radius */
+  --radius-sm:4px;
+  --radius-md:8px;
+  --radius-lg:12px;
+  --radius-full:999px;
+
+  /* Elevation */
+  --shadow-1:0 1px 2px rgb(24 42 58/.06),0 1px 1px rgb(24 42 58/.03);
+  --shadow-2:0 10px 28px -8px rgb(24 42 58/.16),0 2px 6px rgb(24 42 58/.06);
+  --shadow-3:0 24px 56px -12px rgb(24 42 58/.28),0 4px 12px rgb(24 42 58/.08);
+
+  /* Motion */
+  --ease-out:cubic-bezier(.22,1,.36,1);
+  --ease-spring:cubic-bezier(.34,1.4,.64,1);
+  --dur-1:120ms;
+  --dur-2:200ms;
+  --dur-3:320ms;
+
+  /* Layout */
+  --rail-width:64px;
+  --sidebar-width:232px;
+  --topbar-height:56px;
+
+  /* Legacy names used by style.css/enterprise.css, mapped onto the tokens above. */
+  --accent:var(--tu-cyan-600);
+  --ink:var(--tu-navy-800);
+  --muted:var(--n-600);
+  --line:var(--n-200);
+  --paper:var(--n-0);
+  --bg:var(--n-50);
+  --brand-navy:var(--tu-navy-800);
+  --brand-cyan:var(--tu-cyan-400);
+  --brand-yellow:var(--tu-yellow-400);
+  --tu-cyan:#009bbd;
+  --tu-ink:#193e56;
+  --ui-gap:var(--space-4);
+  --ui-radius:10px;
+}
+
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{font-family:var(--font-sans);font-feature-settings:"cv11","ss01";-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;background:var(--surface-canvas);color:var(--text-strong)}
+code,kbd,samp,pre{font-family:var(--font-mono)}
+
+/* Lucide sprite icons: <svg class="lucide"><use href="/assets/lucide-sprite.svg#name"/></svg> */
+svg.lucide{width:1em;height:1em;flex:none;fill:none;stroke:currentColor;stroke-width:var(--icon-stroke,1.75);stroke-linecap:round;stroke-linejoin:round;vertical-align:-.125em}
+
+@media (prefers-reduced-motion:reduce){:root{--dur-1:0ms;--dur-2:0ms;--dur-3:0ms}}
+body.reduce-motion{--dur-1:0ms;--dur-2:0ms;--dur-3:0ms}
