@@ -1,4 +1,6 @@
 'use strict';
+// In-app restarts reload softly: boot.js shows the loader over the content only, never the sidebar.
+function softReload(){try{sessionStorage.setItem('ds-soft-reload','1');}catch(error){}location.reload();}
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="app-token"]').content;
 const files = {left:null,right:null};
@@ -496,7 +498,7 @@ async function refresh() {
 function pollError(error){showError(error);pollTimer=setTimeout(()=>refresh().catch(pollError),5000);}
 $('reset').addEventListener('click',async()=>{
   if(uploading)return;
-  try{await saveDraft();localStorage.removeItem('keywise-job');localStorage.removeItem(workspaceViewKey);location.reload();}catch(error){showError(error);}
+  try{await saveDraft();localStorage.removeItem('keywise-job');localStorage.removeItem(workspaceViewKey);softReload();}catch(error){showError(error);}
 });
 async function restoreCurrentComparison(){
   const id=localStorage.getItem('keywise-job');
@@ -758,7 +760,7 @@ $('navNew').addEventListener('click',()=>{
   const rect=$('navNew').getBoundingClientRect();menu.style.left=Math.min(rect.right+10,window.innerWidth-290)+'px';menu.style.top=Math.min(rect.top,window.innerHeight-115)+'px';menu.hidden=false;$('navNew').setAttribute('aria-expanded','true');
   (uploading?$('menuContinueComparison'):$('menuNewComparison')).focus();
 });
-$('menuNewComparison').addEventListener('click',async()=>{if(uploading)return;try{await saveDraft();closeComparisonMenu();localStorage.removeItem('keywise-job');localStorage.removeItem(workspaceViewKey);location.reload();}catch(error){showError(error);}});
+$('menuNewComparison').addEventListener('click',async()=>{if(uploading)return;try{await saveDraft();closeComparisonMenu();localStorage.removeItem('keywise-job');localStorage.removeItem(workspaceViewKey);softReload();}catch(error){showError(error);}});
 $('menuContinueComparison').addEventListener('click',async()=>{
   closeComparisonMenu();clearError();
   try{if(!job&&!files.left&&!files.right){await restoreCurrentComparison();return;}viewingHistoryJob=false;await goView(uploading?'uploadPanel':lastComparisonView);}catch(error){showError(error);}
@@ -1138,7 +1140,7 @@ async function loadStorage(){
   $('storageStatus').textContent='Measuring your workspace files…';$('storageStatus').classList.add('loading-status');
   try{const data=await api('/api/storage');$('storageStatus').textContent=`${bytes(data.free)} free of ${bytes(data.total)} server disk · ${data.max_jobs} heavy jobs can run at once · ${data.retention_days?data.retention_days+' days retention':'Automatic cleanup disabled'}`;
     const table=$('storageTable');table.replaceChildren();const head=document.createElement('tr');['Job','State','Uploads','Reports','Analysis','Temporary / metadata','Work queue','Cleanup'].forEach(t=>{const th=document.createElement('th');th.textContent=t;head.append(th);});table.append(head);
-    for(const item of data.jobs){const row=document.createElement('tr');[item.files.left.name+' ↔ '+item.files.right.name,item.state,...['uploads','reports','analysis','temporary'].map(k=>bytes(item.sizes[k]))].forEach(v=>{const td=document.createElement('td');td.textContent=v;row.append(td);});const tasks=document.createElement('td');for(const task of item.tasks){const line=document.createElement('p'),button=document.createElement('button');line.textContent=`${task.kind}: ${task.cancelling?'Cancelling':task.state} `;button.textContent='Cancel';button.disabled=task.cancelling;button.addEventListener('click',async()=>{await cancelTask(item.id,task.kind);await loadStorage();});line.append(button);tasks.append(line);}row.append(tasks);const td=document.createElement('td'),button=document.createElement('button');button.textContent='Delete job';button.disabled=item.busy;button.addEventListener('click',async()=>{if(!confirm('Permanently delete this job, uploads and all reports?'))return;try{await api(`/api/jobs/${item.id}`,undefined,'DELETE');if(job?.id===item.id){localStorage.removeItem('keywise-job');location.reload();return;}await loadStorage();}catch(e){showError(e);}});td.append(button);row.append(td);table.append(row);}
+    for(const item of data.jobs){const row=document.createElement('tr');[item.files.left.name+' ↔ '+item.files.right.name,item.state,...['uploads','reports','analysis','temporary'].map(k=>bytes(item.sizes[k]))].forEach(v=>{const td=document.createElement('td');td.textContent=v;row.append(td);});const tasks=document.createElement('td');for(const task of item.tasks){const line=document.createElement('p'),button=document.createElement('button');line.textContent=`${task.kind}: ${task.cancelling?'Cancelling':task.state} `;button.textContent='Cancel';button.disabled=task.cancelling;button.addEventListener('click',async()=>{await cancelTask(item.id,task.kind);await loadStorage();});line.append(button);tasks.append(line);}row.append(tasks);const td=document.createElement('td'),button=document.createElement('button');button.textContent='Delete job';button.disabled=item.busy;button.addEventListener('click',async()=>{if(!confirm('Permanently delete this job, uploads and all reports?'))return;try{await api(`/api/jobs/${item.id}`,undefined,'DELETE');if(job?.id===item.id){localStorage.removeItem('keywise-job');softReload();return;}await loadStorage();}catch(e){showError(e);}});td.append(button);row.append(td);table.append(row);}
   }catch(e){showError(e);$('storageStatus').textContent='Unable to measure storage.';}finally{$('storageStatus').classList.remove('loading-status');}
 }
 $('storageRefresh').addEventListener('click',loadStorage);

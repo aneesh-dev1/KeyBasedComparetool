@@ -217,7 +217,8 @@ function revealPreparedWorkspace(){
 }
 window.addEventListener('workspace-restored',()=>{workspaceRestored=true;revealPreparedWorkspace();},{once:true});
 function finishAppLoading(){
- const minimum=9000,remaining=Math.max(0,minimum-(performance.now()-appPreloaderStarted));
+ // A soft in-app restart only waits for real restoration work; a fresh visit keeps the branded minimum.
+ const minimum=document.documentElement.classList.contains('soft-reload')?300:9000,remaining=Math.max(0,minimum-(performance.now()-appPreloaderStarted));
  setTimeout(()=>{preloaderMinimumReached=true;revealPreparedWorkspace();},remaining);
 }
 if(document.readyState==='complete')finishAppLoading();else window.addEventListener('load',finishAppLoading,{once:true});
@@ -750,49 +751,58 @@ function redesignAnalysis(){
 }
 {const previousRender=renderSummary;renderSummary=function(){previousRender();redesignAnalysis();};if(job?.state==='complete')redesignAnalysis();}
 
-// Keyboard: page and step travel. Physical key codes keep these working with Option on macOS and Alt on
-// Windows/Linux. Same guards as the existing shortcuts: never while typing, in a dialog, or when disabled.
+// Keyboard: single keys, no modifiers, so navigation is one press. They work identically on Mac and Windows
+// and are ignored while typing, in a dialog, or when shortcuts are switched off. The existing Alt/⌥
+// shortcuts in app.js keep working for people who already use them.
 {
- const mac=/Mac|iPhone|iPad/.test(navigator.platform),mod=mac?'⌥':'Alt';
- const pages={KeyC:'navNew',KeyP:'navProjects',KeyH:'navHistory',KeyK:'navContainers',KeyT:'navProfiles',KeyD:'navDocs'};
+ const pages={c:'navNew',p:'projectsPanel',h:'historyPanel',k:'containersPanel',t:'profilesPanel',d:'docsPanel'};
  const steps=['navFiles','navScope','navPipeline','navResults'];
  const usable=el=>el&&!el.disabled&&!el.closest('[hidden],[inert]')&&el.getClientRects().length>0;
+ const typing=target=>target?.closest?.('input,textarea,select,[contenteditable="true"],[role="textbox"]');
  document.addEventListener('keydown',event=>{
-  if(!event.altKey||event.ctrlKey||event.metaKey||event.repeat||event.isComposing||event.defaultPrevented)return;
-  if(event.target?.closest?.('input,textarea,select,[contenteditable="true"],[role="textbox"]')||document.querySelector('dialog[open]'))return;
+  if(event.altKey||event.ctrlKey||event.metaKey||event.repeat||event.isComposing||event.defaultPrevented)return;
+  if(typing(event.target)||document.querySelector('dialog[open]')||$('tourCard')?.hidden===false)return;
   try{if(localStorage.getItem('compare-shortcuts')==='off')return;}catch(error){}
+  const key=event.key.length===1?event.key.toLowerCase():event.key;
   let target=null;
-  if(event.shiftKey&&pages[event.code])target=$(pages[event.code]);
-  else if(!event.shiftKey&&(event.code==='BracketLeft'||event.code==='BracketRight')){
+  if(/^[1-4]$/.test(key))target=$(steps[Number(key)-1]);
+  else if(key==='['||key===']'){
    const current=steps.findIndex(id=>$(id).classList.contains('active'));if(current<0)return;
-   const direction=event.code==='BracketRight'?1:-1;
+   const direction=key===']'?1:-1;
    for(let i=current+direction;i>=0&&i<steps.length;i+=direction)if(usable($(steps[i]))){target=$(steps[i]);break;}
   }
+  else if(key==='c'){event.preventDefault();$('menuContinueComparison')?.click();return;}
+  else if(pages[key]){event.preventDefault();goView(pages[key]).catch(showError);return;}
+  else if(key==='r')target=$('recompareFab');
+  else if(key==='b')target=$('sidebarToggle');
+  else if(key==='?')target=$('keyboardHelp');
+  else if(key==='/'){
+   const view=document.querySelector('#mainWorkspace>section:not([hidden])')||document;
+   const search=[...view.querySelectorAll('input[type="search"],input.search')].find(usable);
+   if(search){event.preventDefault();search.focus();}
+   else if(currentView==='headersPanel'||!$('headersPanel').hidden){event.preventDefault();$('headerSearchToggle').click();$('headerSearch').focus();}
+   return;
+  }
   if(!target||!usable(target))return;
-  event.preventDefault();
-  if(target.id==='navNew'){$('menuContinueComparison')?.click();return;}
-  target.click();
+  event.preventDefault();target.click();
  });
- for(const [code,id] of Object.entries(pages))$(id)?.setAttribute('aria-keyshortcuts',`Alt+Shift+${code.slice(3)}`);
- // Shortcut guide: platform key names as key chips, plus the new rows.
- const list=$('shortcutsDialog').querySelector('dl');
- const add=(after,label,keys)=>{const dt=document.createElement('dt');dt.textContent=label;const dd=document.createElement('dd');dd.textContent=keys;const anchor=[...list.querySelectorAll('dt')].find(node=>node.textContent===after)?.nextElementSibling;if(anchor){anchor.after(dt,dd);}else list.append(dt,dd);};
- add('Comparison steps','Previous / next step','Alt + [ / Alt + ]');
- add('Previous / next step','Compare files · Projects · Job history','Alt + Shift + C / P / H');
- add('Compare files · Projects · Job history','Key containers · Templates · Docs','Alt + Shift + K / T / D');
- for(const dd of list.querySelectorAll('dd')){
-  const groups=dd.textContent.split(' / ').map(part=>part.trim());
-  if(!/Alt|Tab|Enter|Escape|Arrow/.test(dd.textContent))continue;
-  dd.replaceChildren();
-  groups.forEach((group,index)=>{
-   if(index)dd.append(Object.assign(document.createElement('span'),{className:'ds-key-sep',textContent:'/'}));
-   const keys=group.split(/\s*\+\s*/);
-   keys.forEach((key,i)=>{if(i)dd.append(Object.assign(document.createElement('span'),{className:'ds-key-plus',textContent:'+'}));dd.append(Object.assign(document.createElement('kbd'),{textContent:key==='Alt'?mod:key==='Shift'&&mac?'⇧':key}));});
-  });
+ // The guide lists the single keys, grouped by what they do.
+ const dialog=$('shortcutsDialog'),list=dialog.querySelector('dl');
+ const rows=[
+  ['Navigate',[['Files & headers · Keys & scope · Pipeline · Analysis',['1','2','3','4']],['Previous / next step',['[',']']],['Continue current comparison',['C']],['Projects',['P']],['Job history',['H']],['Ignore key containers',['K']],['Profile templates',['T']],['Docs & FAQ',['D']]]],
+  ['Actions',[['Search on this page',['/']],['Recompare (Analysis)',['R']],['Toggle sidebar',['B']],['This guide',['?']],['Close drawer or menu',['Esc']]]],
+  ['Everywhere',[['Move between controls',['Tab','⇧ Tab']],['Activate',['Enter','Space']],['Move within tabs or steps',['← →']]]]
+ ];
+ list.replaceChildren();list.classList.add('ds-shortcut-list');
+ for(const [group,items] of rows){
+  const heading=document.createElement('dt');heading.className='ds-shortcut-group';heading.textContent=group;list.append(heading,document.createElement('dd'));
+  for(const [label,keys] of items){const dt=document.createElement('dt');dt.textContent=label;const dd=document.createElement('dd');keys.forEach((k,i)=>{if(i)dd.append(Object.assign(document.createElement('span'),{className:'ds-key-sep',textContent:k.length===1&&keys[0].length===1?'':'/'}));dd.append(Object.assign(document.createElement('kbd'),{textContent:k}));});list.append(dt,dd);}
  }
- const note=[...$('shortcutsDialog').querySelectorAll('p')].find(p=>/Windows: Alt/.test(p.textContent));
- if(note)note.textContent=`${mac?'You are on a Mac: use ⌥ Option':'You are on Windows/Linux: use Alt'}. The same shortcuts work on both platforms. App shortcuts are inactive while typing.`;
- if($('keyboardHelp')){const k=$('keyboardHelp').querySelector('kbd');if(k)k.textContent=`${mod} /`;}
+ const note=[...dialog.querySelectorAll('p')].find(p=>/Windows|Mac|while typing/.test(p.textContent));
+ if(note)note.textContent='Single keys, the same on Mac and Windows. They pause while you type in a field.';
+ $('keyboardHelp')?.querySelector('kbd')&&($('keyboardHelp').querySelector('kbd').textContent='?');
+ for(const [key,id] of [['1','navFiles'],['2','navScope'],['3','navPipeline'],['4','navResults'],['P','navProjects'],['H','navHistory'],['K','navContainers'],['T','navProfiles'],['D','navDocs'],['R','recompareFab'],['B','sidebarToggle']])$(id)?.setAttribute('aria-keyshortcuts',key);
+ const fabKey=$('recompareFab')?.querySelector('.fab-key');if(fabKey)fabKey.textContent='R';
 }
 
 // Sidebar: Projects gets a dropdown listing every project (loaded when opened). Choosing one opens it
@@ -815,10 +825,19 @@ function redesignAnalysis(){
    return item;
   }));
  }
- function close(){menu.hidden=true;toggle.setAttribute('aria-expanded','false');row.classList.remove('is-open');}
+ let closeTimer=null;
+ function close(){
+  toggle.setAttribute('aria-expanded','false');row.classList.remove('is-open');
+  if(menu.hidden||menu.classList.contains('is-closing'))return;
+  if(document.body.classList.contains('sidebar-collapsed')||document.body.classList.contains('reduce-motion')||matchMedia('(prefers-reduced-motion: reduce)').matches){menu.hidden=true;return;}
+  menu.classList.add('is-closing');
+  const finish=()=>{clearTimeout(closeTimer);if(menu.classList.contains('is-closing')){menu.classList.remove('is-closing');menu.hidden=true;}};
+  menu.addEventListener('animationend',event=>{if(event.target===menu)finish();},{once:true});closeTimer=setTimeout(finish,650);
+ }
  toggle.addEventListener('click',event=>{
   event.stopPropagation();
   if(document.body.classList.contains('sidebar-collapsed')){$('navProjects').click();return;}
+  if(menu.classList.contains('is-closing')){clearTimeout(closeTimer);menu.classList.remove('is-closing');toggle.setAttribute('aria-expanded','true');row.classList.add('is-open');return;}
   if(!menu.hidden){close();return;}
   menu.hidden=false;toggle.setAttribute('aria-expanded','true');row.classList.add('is-open');fill();
  });
@@ -846,7 +865,10 @@ function redesignAnalysis(){
  const countKeys=()=>{const text=$('containerValues').value.trim();let n=0;if(text){if(text.startsWith('[')){try{n=JSON.parse(text).length;}catch(e){n=-1;}}else n=text.split(',').map(v=>v.trim()).filter(Boolean).length;}parsed.textContent=n<0?' · Check the JSON format':n?` · ${n} key${n===1?'':'s'} detected`:'';parsed.classList.toggle('is-error',n<0);};
  $('containerValues').addEventListener('input',countKeys);
  $('saveContainer').prepend(lucideNode('plus'));
- const guidance=cPanel.querySelector('.enterprise-guidance');if(guidance){guidance.classList.add('ds-lib-guidance');form.append(guidance);}
+ cPanel.querySelector('.enterprise-guidance')?.remove();
+ // The key-column count follows the values: JSON tuples give their length, plain values mean one key column.
+ $('containerWidth').closest('label').hidden=true;
+ $('saveContainer').addEventListener('click',()=>{const text=$('containerValues').value.trim();let width=1;if(text.startsWith('[')){try{const first=JSON.parse(text)[0];if(Array.isArray(first))width=first.length;}catch(error){}}$('containerWidth').value=String(width);},{capture:true});
  library.querySelector('h3')?.remove();
  const cHead=libraryHeader('Saved containers','Select these in Keys & scope to exclude their keys from a comparison.','Find a container');library.prepend(cHead.head);
  function paintContainers(){
@@ -858,7 +880,7 @@ function redesignAnalysis(){
   for(const card of cards){
    if(!card.dataset.ds){card.dataset.ds='1';const item=keyContainers.find(c=>c.name===card.querySelector('h4')?.textContent);
     const top=el('div','ds-card-top');top.innerHTML=`<span class="ds-card-icon">${lucide('package-x')}</span>`;top.append(card.querySelector('h4'));
-    if(item){const n=String(item.values||'').trim().startsWith('[')?(()=>{try{return JSON.parse(item.values).length;}catch(e){return null;}})():String(item.values||'').split(',').filter(v=>v.trim()).length;const meta=el('div','ds-card-meta');meta.append(el('span','ds-badge',n===null?'Keys':`${n} key${n===1?'':'s'}`),el('span','ds-badge',`${item.key_width} key column${item.key_width===1?'':'s'}`));top.append(meta);}
+    if(item){const n=String(item.values||'').trim().startsWith('[')?(()=>{try{return JSON.parse(item.values).length;}catch(e){return null;}})():String(item.values||'').split(',').filter(v=>v.trim()).length;const meta=el('div','ds-card-meta');meta.append(el('span','ds-badge',n===null?'Keys':`${n} key${n===1?'':'s'}`));if(item.key_width>1)meta.append(el('span','ds-badge',`${item.key_width}-column keys`));top.append(meta);}
     card.prepend(top);const summary=card.querySelector('summary');if(summary)summary.textContent='View keys';}
    const match=!q||card.textContent.toLowerCase().includes(q);card.hidden=!match;if(match)shown++;
   }

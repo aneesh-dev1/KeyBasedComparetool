@@ -39,7 +39,7 @@ CHUNK = 8 * 1024 * 1024
 # Fonts are served verbatim; every other static file may carry page placeholders.
 FONT_FILES = ('/assets/fonts/inter-latin-wght.woff2', '/assets/fonts/jetbrains-mono-latin-wght.woff2')
 STATIC_FILES = ('/', '/app.js', '/upload-transport.js', '/style.css', '/enterprise.js', '/enterprise.css',
-                '/tokens.css', '/components.css', '/shell.css',
+                '/tokens.css', '/components.css', '/shell.css', '/boot.js',
                 '/assets/transunion-logo.svg', '/assets/transunion-loader.svg', '/assets/tu-favicon.svg',
                 '/assets/lucide-sprite.svg') + FONT_FILES
 

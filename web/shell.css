@@ -40,7 +40,9 @@ body:not(.sidebar-collapsed) #workspaceSidebar #comparisonMenu.is-closing>.ds-me
 #workspaceSidebar .ds-side-subitem small{flex:none;min-width:20px;padding:2px 6px;border-radius:999px;background:#eef2f4;color:#596c78;font-size:10px;text-align:center}
 #workspaceSidebar .ds-side-subitem:hover,#workspaceSidebar .ds-side-subitem:focus-visible{background:#e9ecef;outline:0}
 #workspaceSidebar .ds-side-empty{margin:0;padding:12px 14px;color:#66808c;font:400 12px/1.4 Inter,"Segoe UI",Arial,sans-serif}
-@media (prefers-reduced-motion:reduce){#workspaceSidebar .ds-side-submenu,#workspaceSidebar .ds-side-submenu>.ds-menu-inner{animation:none}}
+#workspaceSidebar .ds-side-submenu.is-closing{animation:ds-menu-close .5s cubic-bezier(.33,1,.68,1) forwards}
+#workspaceSidebar .ds-side-submenu.is-closing>.ds-menu-inner{animation:ds-menu-content-close .5s cubic-bezier(.33,1,.68,1) forwards}
+@media (prefers-reduced-motion:reduce){#workspaceSidebar .ds-side-submenu,#workspaceSidebar .ds-side-submenu>.ds-menu-inner{animation:none!important}}
 /* The phone drawer adds 16px of side padding to the group labels; the logo follows them. */
 @media (max-width:800px){body:not(.sidebar-collapsed) #workspaceSidebar .brand-logo{margin-left:4.5px}}
 
@@ -132,6 +134,10 @@ body:not(.sidebar-collapsed) #workspaceSidebar #comparisonMenu.is-closing>.ds-me
 #appPreloader strong{font-size:var(--text-md);font-weight:600}
 #appPreloader span{font-size:var(--text-xs);color:var(--text-muted)}
 #appPreloader.ready{opacity:0;visibility:hidden;pointer-events:none}
+/* In-app restart: the loader covers the content area only; the sidebar stays visible and still. */
+.soft-reload #appPreloader{left:60px;z-index:50;background:var(--surface-canvas)}
+.soft-reload #appPreloader img{width:56px;height:56px}
+.soft-reload #appPreloader strong{display:none}
 
 /* ───────────── Files & headers: upload card ───────────── */
 #uploadPanel.ds{padding:var(--space-6);animation:ds-fade-up var(--dur-3) var(--ease-out)}
@@ -470,6 +476,10 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #shortcutsDialog kbd{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 7px;border:1px solid var(--border-default);border-bottom-width:2px;border-radius:6px;background:var(--surface-sunken);font:600 var(--text-xs)/1 var(--font-mono);color:var(--text-strong)}
 #shortcutsDialog .ds-key-plus,#shortcutsDialog .ds-key-sep{font-size:var(--text-xs);color:var(--text-faint)}
 #shortcutsDialog .ds-key-sep{margin:0 4px}
+#shortcutsDialog .ds-shortcut-list{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 24px;align-items:center}
+#shortcutsDialog .ds-shortcut-group{grid-column:1/-1;margin-top:10px;font:600 var(--text-2xs)/1 var(--font-sans);letter-spacing:var(--tracking-caps);text-transform:uppercase;color:var(--text-faint)}
+#shortcutsDialog .ds-shortcut-group+dd{display:none}
+#shortcutsDialog .ds-shortcut-list dd{justify-content:flex-end;margin:0}
 
 /* ───────────── Library pages: Ignore key containers, Profile templates ───────────── */
 .ds-library.panel{padding:0!important;border:0!important;background:none!important;box-shadow:none!important}
@@ -481,7 +491,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .ds-lib-form-icon svg.lucide{font-size:20px}
 .ds-library h3{margin:0;font-size:var(--text-lg);font-weight:650;color:var(--text-strong)}
 .ds-lib-form-head p,.ds-lib-head p{margin:4px 0 0;font-size:var(--text-sm);line-height:1.45;color:var(--text-muted)}
-.ds-library .ds-lib-form .settings{display:grid!important;grid-template-columns:minmax(0,1fr) 120px;gap:var(--space-3);margin:0!important;padding:0!important;border:0!important;background:none!important}
+.ds-library .ds-lib-form .settings{display:grid!important;grid-template-columns:minmax(0,1fr);gap:var(--space-3);margin:0!important;padding:0!important;border:0!important;background:none!important}
 .ds-library .ds-lib-form label{display:grid;gap:6px;margin:0;font:600 var(--text-xs)/1.3 var(--font-sans);color:var(--text-default)}
 .ds-library .ds-lib-form :is(input,textarea){width:100%;font-weight:400}
 .ds-library .ds-lib-form textarea{min-height:76px;resize:vertical;font-family:var(--font-mono);font-size:var(--text-xs)}
@@ -493,7 +503,10 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .ds-library #containerStatus,.ds-library #profileStatus{margin:0;font-size:var(--text-xs);color:var(--success)}
 .ds-lib-guidance{margin-top:var(--space-2);padding-top:var(--space-3);border-top:1px solid var(--border-subtle);font-size:var(--text-xs);color:var(--text-muted)}
 .ds-lib-guidance summary{cursor:pointer;font-weight:600;color:var(--text-default)}
-.ds-lib-head{display:flex;align-items:flex-start;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-2)}
+.ds-lib-head{display:flex;align-items:flex-start;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-2);flex:none}
+/* The library is one fixed-height card; its list scrolls inside the card, not the page. */
+.ds-library .ds-lib-list{height:calc(100dvh - var(--topbar-height) - 128px);min-height:360px}
+.ds-library .ds-lib-list>#containerLibrary,.ds-library .ds-lib-list>.ds-template-grid{flex:1;min-height:0;overflow:auto;align-content:start;padding:2px 4px 4px 2px;margin:0 -4px 0 -2px;scrollbar-width:thin;scrollbar-color:var(--n-300) transparent;overscroll-behavior:contain}
 .ds-lib-head>div{flex:1;min-width:200px}
 .ds-lib-search{display:flex;align-items:center;gap:var(--space-2);height:36px;width:220px;padding:0 var(--space-3);border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);color:var(--text-faint)}
 .ds-lib-search:focus-within{border-color:var(--tu-cyan-600);box-shadow:var(--focus-ring)}
