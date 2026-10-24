@@ -671,7 +671,7 @@ window.addEventListener('DOMContentLoaded',()=>{
  const reduced=()=>document.body.classList.contains('reduce-motion')||matchMedia('(prefers-reduced-motion: reduce)').matches;
  const smooth=u=>u<=0?0:u>=1?1:u*u*(3-2*u);
  const ease=u=>u<.5?4*u*u*u:1-Math.pow(-2*u+2,3)/2;
- const SLICES=48;
+ const SLICES=64;
  let running=null;
  function build(){
   const d=dialog.getBoundingClientRect(),f=!fab.hidden&&fab.getClientRects().length?fab.getBoundingClientRect():null;
@@ -722,16 +722,16 @@ window.addEventListener('DOMContentLoaded',()=>{
  dialog.showModal=function(){
   nativeShow();if(reduced())return;
   dialog.style.visibility='hidden';
-  dialog.animate([{opacity:0},{opacity:1}],{duration:420,easing:'ease-out',pseudoElement:'::backdrop'});
-  play(1,0,600).finished.then(()=>{dialog.style.visibility='';});
+  dialog.animate([{opacity:0},{opacity:1}],{duration:700,easing:'ease-out',pseudoElement:'::backdrop'});
+  play(1,0,1000).finished.then(()=>{dialog.style.visibility='';});
  };
  let closing=false;
  async function genieClose(){
   if(!dialog.open||$('startRerun').disabled||closing)return;
   if(reduced()){nativeClose();return;}
   closing=true;
-  const animation=play(0,1,560);dialog.style.visibility='hidden';
-  dialog.animate([{opacity:1},{opacity:0}],{duration:460,easing:'ease-in',fill:'forwards',pseudoElement:'::backdrop'});
+  const animation=play(0,1,900);dialog.style.visibility='hidden';
+  dialog.animate([{opacity:1},{opacity:0}],{duration:800,easing:'ease-in',fill:'forwards',pseudoElement:'::backdrop'});
   try{await animation.finished;}finally{nativeClose();dialog.style.visibility='';dialog.getAnimations().forEach(item=>item.cancel());closing=false;}
  }
  $('closeRerun').addEventListener('click',event=>{event.stopImmediatePropagation();genieClose();},{capture:true});
@@ -998,4 +998,76 @@ function redesignAnalysis(){
  pHead.input.addEventListener('input',paintProfiles);
  const previousLoad=loadProfiles;loadProfiles=async function(){await previousLoad();try{profiles=(await api('/api/profiles')).profiles||[];}catch(error){profiles=[];}paintProfiles();};
  api('/api/profiles').then(result=>{profiles=result.profiles||[];paintProfiles();}).catch(()=>paintProfiles());
+}
+
+// Keys & scope (phase 2): one title with a live summary of the match, three cards sized to the window whose
+// lists scroll inside, numbered key order, container chips and a manual-key count. Every control keeps its
+// id and handler; this only adds presentation and reads app.js state.
+{
+ const scopePanel=$('keysPanel');scopePanel.classList.add('ds','ds-scope');
+ const titleBlock=scopePanel.querySelector('.section-title>div');titleBlock.replaceChildren();
+ const summary=document.createElement('div');summary.className='ds-scope-summary';summary.setAttribute('aria-live','polite');titleBlock.append(summary);
+ $('columnCount').hidden=true;
+ const cards=[...scopePanel.querySelectorAll('.scope-grid>.scope-card')];
+ const [keyCard,ignoreCard,excludeCard]=cards;
+ const hints=['Rows are matched on these columns, in this order.','Left out of the value comparison.','Rows with these key values are skipped in both files.'];
+ const titles=['Match keys','Ignore columns','Exclude keys'];
+ cards.forEach((card,index)=>{
+  const heading=card.querySelector('.scope-card-heading');heading.querySelector('.scope-card-index')?.remove();
+  const h3=heading.querySelector('h3');h3.textContent=titles[index];
+  const hint=document.createElement('p');hint.className='ds-card-hint';hint.textContent=hints[index];h3.after(hint);
+  card.querySelector('.tu-scroll-rail')?.remove();
+ });
+ $('createContainerFromScope').innerHTML=lucide('plus')+'<span>New container</span>';
+ // Chips for chosen containers and a count of manual keys.
+ const chips=document.createElement('div');chips.className='ds-chip-row';excludeCard.querySelector('.ignore-key-section').append(chips);
+ const manualCount=document.createElement('small');manualCount.className='ds-field-hint';$('ignoreKeys').after(manualCount);
+ $('ignoreKeys').closest('label')?.firstChild&&($('ignoreKeys').closest('label').firstChild.textContent='Manual keys ');
+ const countManual=()=>{const text=$('ignoreKeys').value.trim();if(!text)return 0;if(text.startsWith('['))try{return JSON.parse(text).length;}catch(error){return -1;}return text.split(',').map(v=>v.trim()).filter(Boolean).length;};
+ function chip(text,kind){const node=document.createElement('span');node.className='ds-chip'+(kind?' is-'+kind:'');node.textContent=text;return node;}
+ function syncScope(){
+  if(typeof job==='undefined'||!job?.columns)return;
+  const keys=[...selected],ignored=[...ignoredColumns],chosen=keyContainers.filter(item=>selectedContainers.has(item.id)),manual=countManual();
+  // Numbered order on selected keys (composite keys match in this order).
+  for(const label of $('keyList').querySelectorAll('.key-option')){const name=label.querySelector('span')?.textContent,position=keys.indexOf(name);label.classList.toggle('is-selected',position>=0);if(position>=0)label.dataset.order=String(position+1);else delete label.dataset.order;}
+  for(const label of $('ignoreColumnList').querySelectorAll('.key-option')){const input=label.querySelector('input'),span=label.querySelector('span');label.classList.toggle('is-selected',!!input?.checked);const isKey=/ \(key\)$/.test(span?.textContent||'');label.classList.toggle('is-key',isKey);if(isKey&&!label.querySelector('.ds-key-tag')){span.textContent=span.textContent.replace(/ \(key\)$/,'');label.append(Object.assign(document.createElement('em'),{className:'ds-key-tag',textContent:'key'}));}}
+  for(const label of $('keyList').querySelectorAll('.key-option')){const input=label.querySelector('input');label.classList.toggle('is-locked',!!input?.disabled&&!input.checked&&ignoredColumns.has(label.querySelector('span')?.textContent));}
+  summary.replaceChildren();
+  const block=(label,content)=>{const item=document.createElement('div');item.className='ds-summary-item';item.append(Object.assign(document.createElement('span'),{className:'ds-summary-label',textContent:label}),content);summary.append(item);};
+  const keyLine=document.createElement('span');keyLine.className='ds-summary-value';
+  if(keys.length)keys.forEach((key,i)=>{if(i)keyLine.append(Object.assign(document.createElement('span'),{className:'ds-summary-plus',textContent:'+'}));keyLine.append(chip(key,'key'));});
+  else keyLine.append(Object.assign(document.createElement('span'),{className:'ds-summary-empty',textContent:'Choose at least one key'}));
+  block('Match on',keyLine);
+  block('Ignored',Object.assign(document.createElement('strong'),{textContent:`${ignored.length} column${ignored.length===1?'':'s'}`}));
+  const excluded=chosen.length+(manual>0?1:0);
+  block('Excluded keys',Object.assign(document.createElement('strong'),{textContent:excluded?`${chosen.length} container${chosen.length===1?'':'s'}${manual>0?` + ${manual} manual`:''}`:'None'}));
+  block('Compared',Object.assign(document.createElement('strong'),{textContent:`${Math.max(0,job.columns.length-keys.length-ignored.length)} of ${job.columns.length} columns`}));
+  chips.replaceChildren(...chosen.map(item=>chip(item.name,'container')));
+  manualCount.textContent=manual<0?'Check the JSON format for composite keys.':manual?`${manual} key${manual===1?'':'s'} entered`:'Comma-separated values, or JSON tuples for composite keys.';
+  manualCount.classList.toggle('is-error',manual<0);
+ }
+ // Coalesce bursts of changes into one update after the current task (no animation-frame dependency).
+ let scopeQueued=false;const schedule=()=>{if(scopeQueued)return;scopeQueued=true;setTimeout(()=>{scopeQueued=false;syncScope();},0);};
+ for(const name of ['renderKeys','renderIgnoredColumns','renderSelected','loadContainers']){const original=window[name];if(typeof original!=='function')continue;window[name]=function(...args){const result=original.apply(this,args);if(result&&typeof result.then==='function')result.then(schedule);else schedule();return result;};}
+ scopePanel.addEventListener('change',schedule);scopePanel.addEventListener('input',schedule);
+ new MutationObserver(schedule).observe($('containerChoices'),{subtree:true,attributes:true,attributeFilter:['checked']});
+ // Preview opens between the summary and the cards (the earlier panel() hook appends it at the end).
+ const placePreview=()=>{const preview=scopePanel.querySelector('.inline-preview');if(preview)scopePanel.querySelector('.scope-grid').before(preview);};
+ const previousPanel=window.panel;
+ window.panel=function(name){const result=previousPanel.apply(this,arguments);if(name==='keysPanel'){placePreview();schedule();}return result;};
+ placePreview();schedule();
+}
+
+// Comparison rules drawer: design-system presentation, icon close button and numbered build steps.
+{
+ const drawer=$('comparisonRulesDrawer');drawer.classList.add('ds','ds-drawer');
+ drawer.querySelector('.drawer-heading .eyebrow')?.remove();
+ const title=$('comparisonRulesTitle'),sub=document.createElement('p');sub.className='ds-drawer-sub';sub.textContent='Normalise values before they are compared. Keys and ignored columns are excluded.';title.after(sub);
+ const close=$('closeComparisonRules');close.className='ds-icon-btn';close.setAttribute('aria-label','Close comparison rules');close.innerHTML=lucide('x');
+ drawer.querySelector('.comparison-rules-body>p.muted')?.remove();
+ const builder=drawer.querySelector('.comparison-rule-builder');
+ const step=(n,text)=>{const h=document.createElement('div');h.className='ds-step-head';h.innerHTML=`<span>${n}</span><strong></strong>`;h.querySelector('strong').textContent=text;return h;};
+ builder.prepend(step(1,'Choose columns'));
+ builder.querySelector('.rule-options')?.before(step(2,'Choose how values are normalised'));
+ $('addValueRule').className='primary';$('addValueRule').prepend(lucideNode('plus'));
 }
