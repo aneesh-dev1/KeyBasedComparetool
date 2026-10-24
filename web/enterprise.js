@@ -1166,3 +1166,37 @@ function redesignAnalysis(){
  renderHeaders=function(){renderHeadersWithoutDialects();renderDialects();};
  if(job)renderDialects();
 }
+
+// Column headers fill the window on desktop sizes: the header cards, and the preview when it is open,
+// share exactly the height left below everything else, so the page itself does not scroll.
+{
+ const panel=$('headersPanel'),editors=panel.querySelector('.header-editors'),main=$('mainWorkspace');
+ const narrow=matchMedia('(max-width:800px)');
+ let frame=0;
+ function fitHeaderCards(){
+  frame=0;
+  if(panel.hidden||!editors.offsetParent)return;
+  const preview=panel.querySelector('.inline-preview');
+  if(narrow.matches){
+   // Stacked cards: remember their height with the preview closed; when it opens each card halves
+   // and the preview takes exactly the height they gave up.
+   panel.style.removeProperty('--ds-headers-space');
+   if(!preview?.classList.contains('is-open'))panel.style.setProperty('--ds-headers-stacked',Math.round(editors.getBoundingClientRect().height)+'px');
+   return;
+  }
+  // The main area has a minimum height, so the content bottom is its last in-flow child plus spacing.
+  const below=child=>{const style=getComputedStyle(child);return style.display==='none'||style.position==='fixed'||style.position==='absolute'?0:child.getBoundingClientRect().bottom+parseFloat(style.marginBottom);};
+  const contentBottom=Math.max(...[...main.children].map(below))+parseFloat(getComputedStyle(main).paddingBottom);
+  const flexible=editors.getBoundingClientRect().height+(preview?.getBoundingClientRect().height||0);
+  const space=Math.round(Math.min(720,Math.max(260,innerHeight-(contentBottom+scrollY-flexible))));
+  panel.style.setProperty('--ds-headers-space',space+'px');
+ }
+ // A timer rather than an animation frame: it also runs in background tabs, after layout settles.
+ const schedule=()=>{if(!frame)frame=setTimeout(fitHeaderCards,16);};
+ addEventListener('resize',schedule);narrow.addEventListener?.('change',schedule);
+ // Re-measure when anything above or below the cards changes height (status banners, the source bar).
+ const observer=new ResizeObserver(schedule);
+ for(const element of [main,$('uploadPanel'),panel.querySelector('.section-title'),$('headerLayoutStatus'),panel.querySelector('.list-navigation')])if(element)observer.observe(element);
+ const renderHeadersBeforeFit=renderHeaders;renderHeaders=function(){renderHeadersBeforeFit();schedule();};
+ schedule();
+}

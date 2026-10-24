@@ -773,3 +773,58 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 @keyframes ds-dialect-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 #headersPanel.ds .ds-dialect-editor .tu-select-menu{right:auto;min-width:100%;width:max-content}
 #headersPanel.ds .is-editing-dialect .ds-dialect-hint{display:none}
+
+/* Files & headers: Preview files opens inside the space the header cards already use. The cards
+   shrink and the preview takes exactly the freed height, so opening it never makes the page taller.
+   enterprise.js replaces --ds-headers-space with the measured height left in the window. */
+#headersPanel.ds{--ds-headers-space:clamp(260px,calc(100dvh - 430px),720px);--ds-headers-compact:clamp(112px,calc(var(--ds-headers-space) * .5),calc(var(--ds-headers-space) - 148px))}
+#headersPanel.ds .header-editors{height:var(--ds-headers-space);transition:height .36s cubic-bezier(.22,1,.36,1)}
+#uploadPanel.preview-expanded #headersPanel.ds .header-editors{height:var(--ds-headers-compact)}
+#headersPanel.ds .inline-preview{margin:0!important}
+#headersPanel.ds .inline-preview.is-open{max-height:none!important}
+#headersPanel.ds .inline-preview #sourcePanel{display:grid!important;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto minmax(0,1fr);align-items:center;gap:var(--space-2) var(--space-3);max-height:none!important;margin:0!important;box-shadow:none!important;overflow:hidden!important}
+/* Border and padding only while open, so the closed preview takes no height at all. The closed
+   preview already has its flex gap, so the open preview gets exactly the height the cards gave up:
+   cards + preview always equal the cards' normal height (at least 260px), so the page never grows. */
+#headersPanel.ds .inline-preview.is-open #sourcePanel{height:calc(var(--ds-headers-space) - var(--ds-headers-compact));padding:var(--space-2) var(--space-3) var(--space-3)!important;border:1px solid var(--border-default)!important;border-radius:var(--radius-lg)!important;background:var(--surface-card)!important}
+#headersPanel.ds #sourcePanel .section-title{grid-column:1;grid-row:1;margin:0!important}
+#headersPanel.ds #sourcePanel .section-title h2{margin:0;font-size:var(--text-sm);font-weight:650;white-space:nowrap}
+#headersPanel.ds #sourcePanel .section-title p{display:none}
+#headersPanel.ds #sourceStatus{grid-column:2;grid-row:1;min-width:0;margin:0;overflow:hidden;font-size:var(--text-xs);color:var(--text-muted);white-space:nowrap;text-overflow:ellipsis}
+#headersPanel.ds #sourcePanel .preview-controls{grid-column:3;grid-row:1;display:flex!important;align-items:center;gap:var(--space-2);margin:0!important}
+#headersPanel.ds #sourcePanel .preview-controls label{font-size:var(--text-xs);font-weight:600;color:var(--text-default);white-space:nowrap}
+#headersPanel.ds #sourceRows{width:72px!important;height:32px!important}
+#headersPanel.ds #sourcePanel .preview-controls button{height:32px!important;padding:0 var(--space-3)!important;font-size:var(--text-xs)!important;white-space:nowrap}
+#headersPanel.ds #sourcePanel #compare{display:none}
+#headersPanel.ds .source-preview-grid{grid-column:1/-1;grid-row:2;align-self:stretch;min-height:0;max-height:none!important;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-3);margin:0!important;overflow:hidden!important}
+#headersPanel.ds .source-preview-grid>section{display:flex;flex-direction:column;min-height:0;margin:0;border:1px solid var(--border-default);border-radius:var(--radius-md);overflow:hidden}
+#headersPanel.ds .source-preview-grid h3{margin:0;padding:4px var(--space-3);background:var(--surface-sunken);border-bottom:1px solid var(--border-default);font:600 var(--text-xs)/1.3 var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#headersPanel.ds .source-preview-grid .table-scroll{flex:1;min-height:0;max-height:none!important;overflow:auto;margin:0!important;border:0!important}
+#headersPanel.ds .source-preview-grid table{width:max-content;min-width:100%;font:var(--text-xs)/1.4 var(--font-mono)}
+#headersPanel.ds .source-preview-grid th{position:sticky;top:0;z-index:1}
+/* One line per row; long names and values are cut with an ellipsis and the table scrolls sideways. */
+#headersPanel.ds .source-preview-grid :is(th,td){max-width:28ch;padding:6px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* While previewing, header rows are tighter so the shorter cards still show several columns. */
+#uploadPanel.preview-expanded #headersPanel.ds .header-editors>section>p.muted{display:none}
+#uploadPanel.preview-expanded #headersPanel.ds :is(#headerLeftList,#headerRightList){border-top:1px solid var(--border-default)}
+#uploadPanel.preview-expanded #headersPanel.ds .header-edit{padding-block:2px}
+#uploadPanel.preview-expanded #headersPanel.ds .header-edit input{height:28px}
+#uploadPanel.preview-expanded #headersPanel.ds .header-original-box{line-height:28px}
+@media (max-width:1100px){
+ #headersPanel.ds .inline-preview #sourcePanel{grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr)}
+ #headersPanel.ds #sourcePanel .preview-controls{grid-column:2;justify-content:flex-end}
+ #headersPanel.ds #sourceStatus{grid-column:1/-1;grid-row:2}
+ #headersPanel.ds .source-preview-grid{grid-row:3}
+}
+@media (max-width:800px){
+ #headersPanel.ds .header-editors,#uploadPanel.preview-expanded #headersPanel.ds .header-editors{height:auto}
+ /* Each stacked card halves (--ds-headers-stacked is measured with the preview closed), and the
+    preview takes exactly the height the two cards gave up. */
+ #uploadPanel.preview-expanded #headersPanel.ds .header-editors>section{max-height:calc((var(--ds-headers-stacked,112dvh) - 12px) / 4)}
+ #headersPanel.ds .inline-preview.is-open #sourcePanel{height:calc((var(--ds-headers-stacked,112dvh) - 12px) / 2)}
+ #headersPanel.ds .inline-preview #sourcePanel{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto minmax(0,1fr)}
+ #headersPanel.ds #sourcePanel .preview-controls{grid-column:1;grid-row:2;flex-wrap:wrap;justify-content:flex-start}
+ #headersPanel.ds #sourceStatus{grid-row:3}
+ #headersPanel.ds .source-preview-grid{grid-row:4;grid-template-columns:minmax(0,1fr)}
+}
+@media (prefers-reduced-motion:reduce){#headersPanel.ds .header-editors{transition:none}}
