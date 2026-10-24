@@ -1516,7 +1516,7 @@ function redesignAnalysis(){
 }
 
 // Notifications: every message appears as a toast and is saved in this browser (latest 200), so the
-// Notifications view lists what happened even after a toast has gone. Errors stay until dismissed.
+// bell's dropdown in the top bar lists what happened even after a toast has gone. Errors stay until dismissed.
 {
  const KEY='ds-notifications',LIMIT=200;
  const icons={error:'circle-alert',success:'circle-check',warning:'triangle-alert',info:'info'};
@@ -1540,8 +1540,8 @@ function redesignAnalysis(){
   // The same event is saved once: by key when given, otherwise identical messages within a few seconds.
   if(options.key&&list.some(item=>item.key===options.key))return;
   if(!options.key&&list[0]&&list[0].title===title&&list[0].message===text&&Date.now()-list[0].at<4000)return;
-  const item={id:Date.now().toString(36)+Math.random().toString(36).slice(2,7),kind,title,message:text,at:Date.now(),read:currentView==='notificationsPanel',job:options.job||null,key:options.key||null};
-  list.unshift(item);save(list);syncBadge();if(currentView==='notificationsPanel')render();toast(item);
+  const item={id:Date.now().toString(36)+Math.random().toString(36).slice(2,7),kind,title,message:text,at:Date.now(),read:menuOpen(),job:options.job||null,key:options.key||null};
+  list.unshift(item);save(list);syncBadge();if(menuOpen())render();toast(item);
  };
  // Errors become toasts instead of the banner at the top of the page.
  showError=function(error){const message=error?.message||String(error);$('error').hidden=true;notify('error','Something went wrong',message);};
@@ -1569,18 +1569,20 @@ function redesignAnalysis(){
   actions.append(consoleButton,fresh);card.append(head,details,actions);card.hidden=false;
   if(!cancelled)notify('error','Comparison failed',reason,{job:failed?.id,key:failed?.id?failed.id+':Comparison:error':null});
  };
- // The Notifications view.
- const view=$('notificationsPanel');
- view.innerHTML='<div class="ds-notify-head"><div><h2>Notifications</h2><p>Completions, alerts and errors from this browser. The latest 200 are kept.</p></div><div class="ds-notify-actions"><button type="button" class="subtle" id="markNotificationsRead"></button><button type="button" class="subtle" id="clearNotifications"></button></div></div><div class="ds-notify-filter" role="group" aria-label="Show"><button type="button" data-filter="all" aria-pressed="true">All</button><button type="button" data-filter="error" aria-pressed="false">Errors</button><button type="button" data-filter="success" aria-pressed="false">Completed</button></div><div id="notificationList" class="ds-notify-list"></div>';
- $('markNotificationsRead').append(lucideNode('check'),Object.assign(document.createElement('span'),{textContent:'Mark all read'}));
- $('clearNotifications').append(lucideNode('trash-2'),Object.assign(document.createElement('span'),{textContent:'Clear all'}));
+ // The dropdown under the bell: header with actions, filters, then the scrolling list.
+ const view=document.createElement('div');view.id='notificationMenu';view.className='ds-notify-menu';view.hidden=true;
+ view.setAttribute('role','dialog');view.setAttribute('aria-label','Notifications');
+ const menuOpen=()=>!view.hidden;
+ view.innerHTML='<div class="ds-notify-head"><div><h2>Notifications</h2><p>From this browser · latest 200 kept</p></div><div class="ds-notify-actions"><button type="button" class="subtle" id="markNotificationsRead"></button><button type="button" class="subtle" id="clearNotifications"></button></div></div><div class="ds-notify-filter" role="group" aria-label="Show"><button type="button" data-filter="all" aria-pressed="true">All</button><button type="button" data-filter="error" aria-pressed="false">Errors</button><button type="button" data-filter="success" aria-pressed="false">Completed</button></div><div id="notificationList" class="ds-notify-list"></div>';
+ view.querySelector('#markNotificationsRead').append(lucideNode('check'),Object.assign(document.createElement('span'),{textContent:'Mark all read'}));
+ view.querySelector('#clearNotifications').append(lucideNode('trash-2'),Object.assign(document.createElement('span'),{textContent:'Clear all'}));
  let filter='all';
  for(const button of view.querySelectorAll('[data-filter]'))button.addEventListener('click',()=>{filter=button.dataset.filter;for(const other of view.querySelectorAll('[data-filter]'))other.setAttribute('aria-pressed',String(other===button));render();});
- $('markNotificationsRead').addEventListener('click',()=>{save(load().map(item=>({...item,read:true})));syncBadge();render();});
- $('clearNotifications').addEventListener('click',()=>{if(!load().length||confirm('Clear all saved notifications?')){save([]);syncBadge();render();}});
+ view.querySelector('#markNotificationsRead').addEventListener('click',()=>{save(load().map(item=>({...item,read:true})));syncBadge();render();});
+ view.querySelector('#clearNotifications').addEventListener('click',()=>{if(!load().length||confirm('Clear all saved notifications?')){save([]);syncBadge();render();}});
  const dayLabel=time=>{const d=new Date(time),today=new Date();const start=x=>new Date(x.getFullYear(),x.getMonth(),x.getDate()).getTime();const diff=(start(today)-start(d))/864e5;return diff===0?'Today':diff===1?'Yesterday':d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});};
  function render(){
-  const list=load().filter(item=>filter==='all'||item.kind===filter),target=$('notificationList');target.replaceChildren();
+  const list=load().filter(item=>filter==='all'||item.kind===filter),target=view.querySelector('#notificationList');target.replaceChildren();
   if(!list.length){const empty=document.createElement('div');empty.className='ds-notify-empty';empty.append(lucideNode('bell'),Object.assign(document.createElement('strong'),{textContent:filter==='all'?'No notifications yet':'Nothing here'}),Object.assign(document.createElement('span'),{textContent:'Completions, alerts and errors will appear here.'}));target.append(empty);return;}
   let day='';
   for(const item of list){
@@ -1591,22 +1593,37 @@ function redesignAnalysis(){
    if(item.message)copy.append(Object.assign(document.createElement('p'),{textContent:item.message}));
    const meta=document.createElement('div');meta.className='ds-notify-meta';
    meta.append(Object.assign(document.createElement('time'),{textContent:new Date(item.at).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}));
-   if(item.job){const open=Object.assign(document.createElement('button'),{type:'button',className:'ds-notify-open'});open.append(Object.assign(document.createElement('span'),{textContent:'Open comparison'}),lucideNode('chevron-right'));open.addEventListener('click',()=>openJob(item.job).catch(showError));meta.append(open);}
+   if(item.job){const open=Object.assign(document.createElement('button'),{type:'button',className:'ds-notify-open'});open.append(Object.assign(document.createElement('span'),{textContent:'Open comparison'}),lucideNode('chevron-right'));open.addEventListener('click',()=>{closeMenu();openJob(item.job).catch(showError);});meta.append(open);}
    row.append(lucideNode(icons[item.kind]||'info','ds-notify-icon'),copy,meta);target.append(row);
   }
  }
+ // The bell sits in the top bar between Refresh and Help. Like Refresh, it slides open on hover to show
+ // its label; the label stays while the dropdown is open.
+ const bell=$('navNotifications'),badge=$('notificationBadge');
+ bell.className='ds-topbar-refresh ds-topbar-bell';bell.removeAttribute('data-tip');bell.type='button';
+ bell.setAttribute('aria-haspopup','dialog');bell.setAttribute('aria-expanded','false');bell.setAttribute('aria-controls',view.id);
+ bell.replaceChildren(lucideNode('bell'),Object.assign(document.createElement('span'),{className:'ds-refresh-label',textContent:'Notifications'}),badge);
+ const anchor=document.createElement('div');anchor.className='ds-notify-anchor';
+ $('workspaceHelp').before(anchor);anchor.append(bell,view);
+ function openMenu(){
+  view.hidden=false;bell.setAttribute('aria-expanded','true');render();
+  // Opening the list counts as reading it; unread items keep their marker until it closes.
+  save(load().map(item=>({...item,read:true})));syncBadge();
+  $('workspaceHelp').open=false;
+ }
+ function closeMenu(){if(!menuOpen())return;view.hidden=true;bell.setAttribute('aria-expanded','false');}
+ bell.addEventListener('click',()=>menuOpen()?closeMenu():openMenu());
+ document.addEventListener('pointerdown',event=>{if(menuOpen()&&!anchor.contains(event.target))closeMenu();});
+ document.addEventListener('keydown',event=>{if(event.key==='Escape'&&menuOpen()){closeMenu();bell.focus();}});
+ // The former Notifications page is now this dropdown; the bell's own click opens it, so the page's
+ // shared navigation route does nothing.
  const panelBeforeNotifications=panel;
  panel=function(name){
+  if(name==='notificationsPanel')return;
   panelBeforeNotifications(name);
-  if(name==='notificationsPanel'){render();save(load().map(item=>({...item,read:true})));syncBadge();}
   if(name==='runningPanel'&&!['error','cancelled'].includes(job?.state))card.hidden=true;
  };
- // The bell sits in the top bar between Refresh and Help, not in the sidebar.
- const bell=$('navNotifications'),badge=$('notificationBadge');
- bell.className='ds-topbar-bell';bell.removeAttribute('data-tip');bell.title='Notifications';bell.type='button';
- bell.replaceChildren(lucideNode('bell'),badge);
- $('workspaceHelp').before(bell);
- bell.addEventListener('click',()=>goView('notificationsPanel').catch(showError));
+ try{if(localStorage.getItem(workspaceViewKey)==='notificationsPanel')localStorage.removeItem(workspaceViewKey);}catch{}
  syncBadge();
 }
 
