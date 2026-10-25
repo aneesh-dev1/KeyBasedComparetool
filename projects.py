@@ -109,6 +109,14 @@ class Store:
         visible,values=self.visibility('r')
         with self.connect() as db:
             return [dict(r) for r in db.execute('SELECT p.*,count(r.id) AS comparisons,sum(CASE WHEN r.status="Approved" THEN 1 ELSE 0 END) AS approved,max(r.updated) AS updated FROM projects p LEFT JOIN records r ON r.project_id=p.id AND '+visible+' GROUP BY p.id ORDER BY coalesce(max(r.updated),p.created) DESC',values)]
+    def runs(self,identity):
+        """A project's completed table comparisons the viewer can see, oldest first."""
+        with self.connect() as db:
+            if not db.execute('SELECT 1 FROM projects WHERE id=?',(identity,)).fetchone():raise ValueError('Project not found')
+            visible,values=self.visibility()
+            rows=db.execute('SELECT * FROM records WHERE project_id=? AND '+visible,[identity]+values).fetchall()
+        records=[self.record(r) for r in rows]
+        return sorted([r for r in records if r['state']=='complete' and r.get('kind','table')=='table'],key=lambda r:(r.get('finished') or r['created'],r['id']))
     def detail(self,identity,offset=0):
         with self.connect() as db:
             project=db.execute('SELECT * FROM projects WHERE id=?',(identity,)).fetchone()

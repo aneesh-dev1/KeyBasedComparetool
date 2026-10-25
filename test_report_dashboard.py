@@ -46,7 +46,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual([a['data-column'] for a,v in parser.payloads if a.get('class')=='column-pattern-data'],[column])
         self.assertNotIn('<script>bad()</script>',text)
         self.assertIn('20 sample keys of 62 mismatches',text)
-        self.assertIn('reportPatternNext',text);self.assertIn('reportDetailContent',text)
+        self.assertIn('reportPatternNext',text)
         # Regeneration reuses immutable pair evidence but includes fresh comments.
         notes[0]['comment']='Updated review note';(self.root/'annotations.json').write_text(json.dumps(notes))
         export_html(self.root,target);parser=Payloads();parser.feed(target.read_text())

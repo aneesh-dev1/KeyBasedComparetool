@@ -34,6 +34,7 @@ from excel_input import sheets as excel_sheets, convert as convert_excel
 from file_io import atomic_write_text, replace_retry
 from compare import execution_settings, common_headers, align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
 from reports import export_excel, export_html, make_summary_html, REPORT_VERSION
+import run_diff
 import text_dialect
 
 
@@ -304,6 +305,39 @@ class Application:
             ProjectStore(project_database(self.root,job.get('owner'))).mark_removed(identity)
         # Rename atomically removes the job from history before reclaiming large files.
         shutil.rmtree(trash)
+
+    def compare_runs(self, store, project, query):
+        """Two completed runs of one project side by side: counts, columns, settings and, when the runs match on the
+        same keys and both still have their results, the cells that are new, resolved or changed."""
+        runs = store.runs(project)
+        if len(runs) < 2:
+            raise ValueError('This project needs two completed runs to compare')
+        records = {run['id']: run for run in runs}
+        base, target = query.get('base', [''])[0], query.get('target', [''])[0]
+        if not base and not target:
+            base, target = runs[-2]['id'], runs[-1]['id']
+        if base not in records or target not in records:
+            raise ValueError('Choose two completed runs of this project')
+        if base == target:
+            raise ValueError('Choose two different runs to compare')
+        jobs = {identity: self.load(identity) if (self.directory(identity) / 'job.json').exists() else None for identity in (base, target)}
+        # A deleted run keeps its audit summary in the project, so its totals can still be compared.
+        a, b = (jobs[identity] or dict(summary=records[identity]) for identity in (base, target))
+        counts, columns = run_diff.summary_changes(a, b)
+        result = dict(base=base, target=target, counts=counts, columns=columns,
+                      settings=run_diff.setting_changes(a, b) if all(jobs.values()) else [],
+                      runs=[dict(id=run['id'], title=run['title'], finished=run.get('finished') or run['created'],
+                                 changed_cells=run.get('changed_cells'), audit_status=run['audit_status']) for run in runs])
+        reports = [self.directory(identity) / 'report' for identity in (base, target)]
+        if not all(jobs.values()) or not all((report / 'differences.csv').exists() for report in reports):
+            result['cells_unavailable'] = 'The detailed results of one of these runs were deleted, so only their totals can be compared.'
+        elif a.get('keys') != b.get('keys'):
+            result['cells_unavailable'] = 'These runs match rows on different key columns, so their cells cannot be paired.'
+        else:
+            path = run_diff.build(reports[0], reports[1], self.directory(target) / 'run-diffs' / (base + '.sqlite'))
+            offset = max(0, int(query.get('offset', ['0'])[0]))
+            result['cells'] = run_diff.cells(path, query.get('status', ['new'])[0], query.get('column', [''])[0], offset)
+        return result
 
     def clear_analysis(self, identity, message):
         """Delete a job's rebuildable analysis index. Returns the bytes freed; busy jobs are left alone."""
@@ -587,15 +621,12 @@ class Application:
             with (directory/'run.log').open('a') as log:log.write(f'{time.strftime("%H:%M:%S")}  {message}\n')
         try:
             notify('Applying rules to retained evidence; no source reads or sorting')
-            summary=revise(directory/'baseline',directory/'report',job,job['columns'],notify)
+            (directory/'live.json').unlink(missing_ok=True)
+            summary=revise(directory/'baseline',directory/'report',job,job['columns'],notify,live_file=directory/'live.json')
             (directory/'report/summary.html').write_text(make_summary_html(summary),encoding='utf-8')
+            self.write_html_report(identity)
             check_cancel(directory/'cancel-comparison')
-            with self.lock:
-                job=self.load(identity)
-                job.update(state='complete',summary=summary,finished=time.time())
-                job['exports']['html']={'state':'queued','message':'Building in the background'}
-                self.save(job)
-            self.submit(identity,'html',self.run_export,'html')
+            self.patch(identity,state='complete',summary=summary,finished=time.time())
         except Exception as error:self.patch(identity,state='error',error=str(error),finished=time.time())
 
     def run_comparison(self, identity):
@@ -629,17 +660,13 @@ class Application:
             summary['source_types']={side:dict(zip(job.get('source_headers',{}).get(side,[]),job['files'][side].get('parquet',{}).get('types',[]))) if job['files'][side].get('format')=='parquet' else {'values':'stored Excel values converted to text' if job['files'][side].get('format')=='excel' else 'text'} for side in ('left','right')}
             atomic_write_text(directory / 'report/summary.json',json.dumps(summary, indent=2))
             (directory / 'report/summary.html').write_text(make_summary_html(summary), encoding='utf-8')
+            # The HTML report is part of Write results, so a completed comparison opens with its report ready.
+            # Excel is generated on request from the Analysis page with the options the user chooses.
+            self.write_html_report(identity)
             check_cancel(directory/'cancel-comparison')
             with (directory / 'run.log').open('a') as log:
                 log.write(f'{time.strftime("%H:%M:%S")}  Comparison complete | changed cells={summary["changed_cells"]:,}\n')
-            # The comparison is complete once its result files exist. The HTML report builds in the background;
-            # Excel is generated on request from the Analysis page with the options the user chooses.
-            with self.lock:
-                job=self.load(identity)
-                job.update(state='complete', summary=summary, finished=time.time())
-                job['exports']['html']={'state':'queued','message':'Building in the background'}
-                self.save(job)
-            self.submit(identity,'html',self.run_export,'html')
+            self.patch(identity, state='complete', summary=summary, finished=time.time())
             shutil.rmtree(directory/'checkpoints',ignore_errors=True)
         except Exception as error:
             self.patch(identity, state='error', error=str(error), finished=time.time())
@@ -685,6 +712,16 @@ class Application:
                     if len(found)==len(wanted) and job.get('duplicate_policy','first')=='first':break
             for key,values in found.items():
                 for column,(value,null,length) in zip(columns,values):yield [side,wanted[key],column,value,null,length]
+
+    def write_html_report(self, identity):
+        """Build the HTML report inside the Write results stage. A report that fails is shown on its export
+        and can be generated again; only cancelling stops the comparison."""
+        directory = self.directory(identity)
+        check_cancel(directory/'cancel-comparison')
+        atomic_write_text(directory/'progress.json', json.dumps(dict(stage='reports', phase='Writing HTML report')))
+        with (directory/'run.log').open('a') as log:
+            log.write(f'{time.strftime("%H:%M:%S")}  Writing HTML report\n')
+        self.run_export(identity, 'html', pipeline=True)
 
     def run_export(self, identity, kind, pipeline=False):
         def status(state, **values):
@@ -885,6 +922,8 @@ class Handler(BaseHTTPRequestHandler):
                             item=self.app.load(record_id)
                             if self.server.shared and item.get('owner')!=self.workspace:raise ValueError('Create your own review to change this comparison’s project or audit status')
                         store.update_record(config);return self.json_response(dict(saved=True))
+                match_compare=re.fullmatch(r'/api/projects/([a-f0-9]{32})/compare',path)
+                if match_compare and self.command=='GET':return self.json_response(self.app.compare_runs(store,match_compare.group(1),query))
                 match_project=re.fullmatch(r'/api/projects/([a-f0-9]{32})',path)
                 if match_project and self.command=='GET':return self.json_response(store.detail(match_project.group(1),max(0,int(query.get('offset',['0'])[0]))))
                 return self.json_response({'error':'Not found'},404)

@@ -25,9 +25,11 @@ class EnterpriseTests(unittest.TestCase):
         path,job=self.sources_job();before={p:p.read_bytes() for p in self.sources.iterdir()};result=self.complete(path)
         self.assertEqual(result['summary']['changed_cells'],3)
         directory=self.server.app.directory(job['id']);self.assertFalse((directory/'left.csv').exists())
-        # The HTML report builds in the background after completion; Excel is generated only on request.
-        result=self.a.wait(path,lambda j:j['exports'].get('html',{}).get('state') in ('complete','error'))
+        # The HTML report is written in the Write results stage, so it is ready the moment the job completes;
+        # Excel is generated only on request.
         self.assertEqual(result['exports']['html']['state'],'complete');self.assertNotIn('excel',result['exports'])
+        self.assertIn('Writing HTML report',(directory/'run.log').read_text())
+        self.assertIn(b'<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,',(directory/'comparison-report.html').read_bytes())
         self.a.request(path+'/export/excel',dict(max_rows=2,truncate=True))
         result=self.a.wait(path,lambda j:j['exports'].get('excel',{}).get('state') in ('complete','error'))
         self.assertEqual((result['exports']['excel']['state'],result['exports']['excel']['rows_per_column']),('complete',2))

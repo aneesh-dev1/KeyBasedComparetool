@@ -394,12 +394,19 @@ body.reduce-motion #pipelineGraph .pg-node.is-active .pg-box{animation:none}
 #recompareFab:hover .fab-icon svg.lucide{transform:rotate(-20deg)}
 #recompareFab:active{transform:translateY(0) scale(.98)}
 #recompareFab:focus-visible{outline:none;border-color:var(--tu-cyan-600);box-shadow:var(--focus-ring),var(--shadow-2)}
-/* The genie animation (enterprise.js) replaces the dialog's default rise-in. */
+/* Recompare close button: a 40px target with a 22px cross; on hover a light red square with a dark red cross. */
+#rerunDialog .ds-dialog-close{display:grid;place-items:center;flex:none;width:40px;height:40px;padding:0;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);color:var(--text-muted);cursor:pointer;transition:background-color var(--dur-1) ease,border-color var(--dur-1) ease,color var(--dur-1) ease}
+#rerunDialog .ds-dialog-close svg.lucide{font-size:22px;--icon-stroke:2.2}
+#rerunDialog .ds-dialog-close:hover:not(:disabled){background:color-mix(in srgb,var(--danger) 14%,#fff);border-color:color-mix(in srgb,var(--danger) 40%,#fff);color:#9e2f25}
+#rerunDialog .ds-dialog-close:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+/* The pill-to-dialog morph (enterprise.js) replaces the dialog's default rise-in. */
 #rerunDialog[open]{animation:none}
-/* Genie overlay: a transparent top-layer layer that holds the dialog slices during the animation. */
-.ds-genie{position:fixed;inset:0;width:auto;height:auto;margin:0;padding:0;border:0;background:transparent;overflow:visible;pointer-events:none}
-.ds-genie::backdrop{background:transparent}
-.ds-genie>*,.ds-genie *{animation:none!important;transition:none!important}
+/* Morph overlay: a transparent top-layer layer that holds the moving shell during the animation. */
+.ds-morph{position:fixed;inset:0;width:auto;height:auto;margin:0;padding:0;border:0;background:transparent;overflow:visible;pointer-events:none}
+.ds-morph::backdrop{background:transparent}
+.ds-morph-shell{position:fixed;left:0;top:0;overflow:hidden;border:1px solid;box-sizing:border-box;will-change:transform,width,height}
+.ds-morph-pill{position:absolute!important;left:50%!important;top:50%!important;right:auto!important;bottom:auto!important;translate:-50% -50%;max-width:none!important;border:0!important;box-shadow:none!important;background:transparent!important;backdrop-filter:none!important;animation:none!important;transition:none!important}
+.ds-morph-pill *{transition:none!important}
 /* Idle: collapses to the icon tile; hover or focus expands it again (app.js toggles .fab-compact). */
 #recompareFab.fab-compact{max-width:48px;padding:0 7px;gap:0}
 #recompareFab.fab-compact :is(.fab-caption,.fab-key){opacity:0}
@@ -453,11 +460,11 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #results.analysis-dashboard .result-chart-layout{display:none!important}
 #results.analysis-dashboard .result-chart-panel{display:flex!important;flex-direction:column;justify-content:flex-start!important}
 #results.analysis-dashboard .column-panel .section-title p{color:var(--text-muted)}
-.ds-column-head,#columnSummary.ds-column-table .ds-column-row{display:grid;grid-template-columns:28px minmax(120px,1.4fr) 72px minmax(80px,1fr) 92px 20px;align-items:center;column-gap:var(--space-3)}
+.ds-column-head,#columnSummary.ds-column-table .ds-column-row{display:grid;grid-template-columns:28px minmax(120px,1.4fr) 104px minmax(80px,1fr) 92px 20px;align-items:center;column-gap:var(--space-3)}
 .ds-column-head{margin-top:var(--space-2);padding:0 var(--space-3) var(--space-2);border-bottom:1px solid var(--border-default);font:600 var(--text-2xs)/1 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint)}
 .ds-column-head>span:last-child{grid-column:5;text-align:right}
 #columnSummary.ds-column-table{display:flex;flex-direction:column;gap:0;padding:var(--space-1) 0 0}
-#results #columnSummary.ds-column-table .ds-column-row{display:grid!important;grid-template-columns:28px minmax(120px,1.4fr) 72px minmax(80px,1fr) 92px 20px!important;grid-template-rows:auto!important;align-items:center!important;justify-content:stretch!important;column-gap:var(--space-3)!important;row-gap:0!important;height:auto!important}
+#results #columnSummary.ds-column-table .ds-column-row{display:grid!important;grid-template-columns:28px minmax(120px,1.4fr) 104px minmax(80px,1fr) 92px 20px!important;grid-template-rows:auto!important;align-items:center!important;justify-content:stretch!important;column-gap:var(--space-3)!important;row-gap:0!important;height:auto!important}
 #results #columnSummary.ds-column-table .ds-column-row>*{grid-row:1!important;margin:0!important;position:static!important;width:auto!important;max-width:none!important}
 #results #columnSummary.ds-column-table .ds-column-row>.ds-share{position:relative!important}
 #columnSummary.ds-column-table .ds-column-row{width:100%;min-height:48px;margin:0;padding:var(--space-2) var(--space-3)!important;border:0!important;border-bottom:1px solid var(--border-subtle)!important;border-radius:var(--radius-md)!important;background:transparent!important;box-shadow:none!important;color:var(--text-strong);font-family:var(--font-sans);text-align:left;cursor:pointer;transition:background-color var(--dur-1) ease}
@@ -1037,28 +1044,24 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #analysisDrawer.ds-mismatch .analysis-results.is-loading>:is(.table-scroll,#analysisStatus,.list-navigation){display:none!important}
 
 /* Match Mismatch Overview: records pie with legend, then the column bands. */
-.ds-pie{display:grid;grid-template-columns:132px minmax(0,1fr);align-items:center;gap:var(--space-5);padding-bottom:var(--space-4);border-bottom:1px solid var(--border-subtle)}
-.ds-pie svg{width:132px;height:132px;overflow:visible}
+.ds-pie{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:var(--space-4) var(--space-5);padding-bottom:var(--space-4);border-bottom:1px solid var(--border-subtle)}
+.ds-pie svg{flex:none;width:132px;height:132px;overflow:visible}
+.ds-pie-legend{flex:1 1 210px;min-width:0}
 .ds-pie svg>*{stroke:var(--surface-card);stroke-width:.025;transition:opacity var(--dur-1) var(--ease-out)}
 .ds-pie svg:hover>*{opacity:.6}
 .ds-pie svg>*:hover{opacity:1}
-.ds-pie .is-equal{fill:var(--tu-cyan-600)}
-.ds-pie .is-unequal{fill:var(--attention)}
-.ds-pie .is-left{fill:var(--tu-navy-700)}
-.ds-pie .is-right{fill:var(--tu-cyan-300)}
 .ds-pie-legend{display:grid;gap:var(--space-2);margin:0;padding:0;list-style:none}
 .ds-pie-legend li{display:grid;grid-template-columns:10px minmax(0,1fr) auto 56px;align-items:center;gap:var(--space-2);font-size:var(--text-sm);color:var(--text-default)}
 .ds-pie-legend li.is-empty{color:var(--text-faint)}
 .ds-pie-legend .ds-dot{width:10px;height:10px;border-radius:3px}
-.ds-pie-legend .is-equal .ds-dot{background:var(--tu-cyan-600)}
-.ds-pie-legend .is-unequal .ds-dot{background:var(--attention)}
-.ds-pie-legend .is-left .ds-dot{background:var(--tu-navy-700)}
-.ds-pie-legend .is-right .ds-dot{background:var(--tu-cyan-300)}
+/* Band slices share the band colours used across the results page. */
+.ds-pie .is-perfect{fill:var(--tu-cyan-700)}.ds-pie .is-low{fill:var(--tu-cyan-300)}.ds-pie .is-medium{fill:var(--warning)}.ds-pie .is-high{fill:var(--danger)}.ds-pie svg .is-none{fill:var(--surface-sunken)}
+.ds-pie-legend .is-perfect .ds-dot{background:var(--tu-cyan-700)}.ds-pie-legend .is-low .ds-dot{background:var(--tu-cyan-300)}.ds-pie-legend .is-medium .ds-dot{background:var(--warning)}.ds-pie-legend .is-high .ds-dot{background:var(--danger)}
 .ds-pie-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ds-pie-legend b{font-weight:650;color:var(--text-strong);font-variant-numeric:tabular-nums}
 .ds-pie-legend small{font-size:var(--text-xs);color:var(--text-muted);text-align:right;font-variant-numeric:tabular-nums}
 .ds-health-sub{margin:0 0 calc(var(--space-2) * -1);font:600 var(--text-2xs)/1.4 var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint)}
-@media (max-width:560px){.ds-pie{grid-template-columns:96px minmax(0,1fr)}.ds-pie svg{width:96px;height:96px}}
+@media (max-width:560px){.ds-pie svg{width:96px;height:96px}}
 
 /* ───────────── Sidebar: larger labels and icons, more space between items (width unchanged) ───────────── */
 .enterprise-ui .sidebar nav,.enterprise-ui.sidebar-collapsed .sidebar nav{gap:20px!important}
@@ -1465,3 +1468,227 @@ body.reduce-motion #projectsPanel.pj .pj-bar-fill{animation:none}
 #projectsPanel.pj .pj-head-actions button{white-space:nowrap}
 @media (max-width:1100px){#projectsPanel.pj .pj-value-full{display:none}#projectsPanel.pj .pj-value-short{display:inline}}
 @media (max-width:900px){#projectsPanel.pj .pj-head-actions{width:100%}#projectsPanel.pj .pj-head-actions button{flex:1;justify-content:center}#projectsPanel.pj .pj-titles h2{font-size:22px}#projectsPanel.pj .pj-strip{gap:3px}#projectsPanel.pj .pj-bar-date{font-size:10px}}
+
+/* Recompare dialog (enterprise.js): header actions, plan strip, counted tabs, the Keys & scope summary strip and
+   card layouts that match the Keys & scope page and the Comparison rules drawer. */
+.enterprise-ui #rerunDialog.rc{width:min(1040px,calc(100vw - 48px));height:min(820px,calc(100dvh - 48px));max-height:calc(100dvh - 48px)!important;background:var(--surface-card);border-radius:16px;box-shadow:var(--shadow-3)}
+.enterprise-ui #rerunDialog.rc .drawer-heading{align-items:flex-start;gap:var(--space-4);padding:22px 24px 14px;background:none;border-bottom:0}
+#rerunDialog.rc .rc-title{display:flex;align-items:center;gap:10px}
+#rerunDialog.rc .rc-title svg.lucide{font-size:22px;color:var(--tu-cyan-700);--icon-stroke:2}
+#rerunDialog.rc .rc-title h2{margin:0;font:700 22px/1.2 var(--font-sans);color:var(--text-strong)}
+#rerunDialog.rc .drawer-heading p{margin:6px 0 0;font-size:var(--text-sm);color:var(--text-muted)}
+#rerunDialog.rc .rc-actions{display:flex;align-items:center;gap:10px;flex:none}
+#rerunDialog.rc #startRerun{height:40px;padding:0 18px;white-space:nowrap;font-weight:650}
+#rerunDialog.rc .rc-plan{display:flex;align-items:flex-start;gap:10px;flex-shrink:0;margin:0 24px;padding:10px 14px;border:1px solid #c7e6ee;border-radius:var(--radius-md);background:var(--tu-cyan-50);color:#00596f;font-size:var(--text-sm);line-height:1.45}
+#rerunDialog.rc .rc-plan:has(#reviewPlan:empty){display:none}
+#rerunDialog.rc .rc-plan svg.lucide{flex:none;margin-top:2px;font-size:16px;color:var(--tu-cyan-700)}
+#rerunDialog.rc #reviewPlan{margin:0!important;padding:0!important;background:none!important;border:0!important}
+.enterprise-ui #rerunDialog.rc #rerunError{flex-shrink:0;margin:8px 24px 0;padding:0;font-size:var(--text-sm)}
+.enterprise-ui #rerunDialog.rc .rerun-tabs{flex-shrink:0;gap:2px;margin:14px 24px 0;padding:3px;border:1px solid var(--border-default);border-bottom:1px solid var(--border-default);border-radius:10px;background:var(--surface-sunken)}
+.enterprise-ui #rerunDialog.rc .rerun-tabs [role=tab]{position:relative;display:flex;align-items:center;justify-content:center;gap:8px;flex:1;height:40px;padding:0 12px;border:1px solid transparent;border-radius:8px;background:none;color:var(--text-muted);font:500 var(--text-sm)/1 var(--font-sans);cursor:pointer;transition:background-color var(--dur-1) ease,color var(--dur-1) ease}
+.enterprise-ui #rerunDialog.rc .rerun-tabs [role=tab]:hover{color:var(--text-strong)}
+.enterprise-ui #rerunDialog.rc .rerun-tabs [role=tab][aria-selected=true]{background:var(--surface-card);border-color:#c4dce6;color:var(--text-strong);font-weight:650}
+.enterprise-ui #rerunDialog.rc .rerun-tabs [role=tab][aria-selected=true]::after{content:"";position:absolute;left:16px;right:16px;bottom:2px;height:3px;border-radius:2px;background:var(--tu-cyan-500)}
+#rerunDialog.rc .rc-count{min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--n-200);color:var(--text-muted);font:600 11px/20px var(--font-sans);text-align:center}
+#rerunDialog.rc .rc-count:empty{display:none}
+#rerunDialog.rc [aria-selected=true] .rc-count{background:var(--tu-cyan-50);color:var(--tu-cyan-700)}
+#rerunDialog.rc .rc-summary{flex-shrink:0;margin:14px 24px 0}
+#rerunDialog.rc .rc-summary[hidden]{display:none}
+#rerunDialog.rc .rc-summary .rc-lock{font-size:14px;color:var(--text-faint)}
+.enterprise-ui #rerunDialog.rc .rerun-footer{display:none}
+.enterprise-ui #rerunDialog.rc .rerun-body{flex:1 1 auto;min-height:0;max-height:none;padding:16px 24px 24px;background:none}
+#rerunDialog.rc #rerun-scope:not([hidden]){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:16px}
+#rerunDialog.rc :is(#rerun-overrides,#rerun-rules):not([hidden]){display:flex;flex-direction:column;gap:16px}
+#rerunDialog.rc .rc-wide{grid-column:1/-1}
+/* Match keys is one compact row; at desktop sizes the two cards below fill the rest of the tab and their lists
+   scroll inside, so the tab itself never needs a scroll bar. */
+#rerunDialog.rc .rc-card.rc-keys{flex-direction:row;align-items:center;gap:12px;padding:10px 12px 10px 20px}
+#rerunDialog.rc .rc-keys h3{margin:0;flex:none;font:650 14px/1.3 var(--font-sans);color:var(--text-strong)}
+#rerunDialog.rc .rc-keys p{flex:1;min-width:0;margin:0;overflow:hidden;font-size:12.5px;color:var(--text-muted);text-overflow:ellipsis;white-space:nowrap}
+#rerunDialog.rc .rc-keys .rc-locked{height:30px;padding:0 10px;font-size:12px}
+@media (max-width:699px){#rerunDialog.rc #rerun-scope:not([hidden]){grid-template-columns:1fr}}
+@media (min-width:700px){
+ #rerunDialog.rc #rerun-scope:not([hidden]){height:100%;grid-template-rows:auto minmax(0,1fr);align-items:stretch}
+ #rerunDialog.rc #rerun-scope .rc-card:not(.rc-keys){min-height:0;overflow:hidden}
+ #rerunDialog.rc #rerun-scope .rc-check-list{flex:1 1 auto;min-height:96px;max-height:none}
+ #rerunDialog.rc #rerun-scope .rc-containers{flex:1 1 auto;min-height:0;overflow:auto}
+ #rerunDialog.rc #rerun-scope .rc-field textarea{min-height:56px}
+}
+#rerunDialog.rc .rc-card,#rerunDialog.rc .rc-step{display:flex;flex-direction:column;gap:12px;min-width:0;padding:18px 20px;border:1px solid var(--border-default);border-radius:12px;background:var(--surface-card)}
+#rerunDialog.rc .rc-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+#rerunDialog.rc .rc-card-head h3{margin:0;font:650 15px/1.3 var(--font-sans);color:var(--text-strong)}
+#rerunDialog.rc .rc-card-head p{margin:4px 0 0;font-size:12.5px;line-height:1.45;color:var(--text-muted)}
+#rerunDialog.rc .rc-wide .rc-card-head{align-items:center}
+#rerunDialog.rc .rc-pill{flex:none;padding:3px 10px;border-radius:var(--radius-full);background:var(--n-100);color:var(--text-muted);font:600 11.5px/16px var(--font-sans);white-space:nowrap}
+#rerunDialog.rc .rc-pill.is-accent{background:var(--tu-cyan-50);color:var(--tu-cyan-700)}
+#rerunDialog.rc .rc-locked{display:inline-flex;align-items:center;gap:8px;flex:none;height:36px;padding:0 14px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-sunken);color:var(--text-muted);font:600 12.5px/1 var(--font-sans)}
+#rerunDialog.rc .rc-locked svg.lucide{font-size:16px}
+#rerunDialog.rc .rc-chips{display:flex;flex-wrap:wrap;gap:6px}
+#rerunDialog.rc .rerun-body :is(input:not([type=checkbox]),select){box-sizing:border-box;height:36px;border-radius:var(--radius-md)}
+#rerunDialog.rc .rc-search{position:relative}
+#rerunDialog.rc .rc-search svg.lucide{position:absolute;left:12px;top:50%;translate:0 -50%;font-size:16px;color:var(--text-faint);pointer-events:none}
+#rerunDialog.rc .rc-search input{width:100%;padding-left:36px}
+#rerunDialog.rc .rc-check-list{display:flex;flex-direction:column;gap:2px;max-height:300px;overflow:auto;padding:6px;border:1px solid var(--n-100);border-radius:var(--radius-md);background:var(--surface-sunken);overscroll-behavior:contain}
+#rerunDialog.rc .rc-check{display:flex;flex-direction:row;align-items:center;gap:10px;padding:5px 8px;border:1px solid transparent;border-radius:6px;color:var(--text-muted);font:500 12.5px/1.3 var(--font-mono);cursor:pointer}
+#rerunDialog.rc .rc-check:hover{background:var(--surface-card)}
+#rerunDialog.rc .rc-check.is-selected{background:var(--surface-card);border-color:#c4dce6;color:var(--text-strong)}
+#rerunDialog.rc .rc-check span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#rerunDialog.rc input[type=checkbox]{flex:none;width:16px!important;height:16px!important;min-height:0!important;margin:0!important;padding:0!important;accent-color:var(--tu-navy-950)}
+#rerunDialog.rc .rc-pager{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--text-muted)}
+#rerunDialog.rc .rc-pager div{display:flex;gap:8px}
+#rerunDialog.rc .rc-pager button{height:32px;padding:0 12px}
+#rerunDialog.rc .rc-field{display:flex;flex-direction:column;gap:6px;min-width:0;font:600 12px/1.2 var(--font-sans);color:var(--text-muted)}
+#rerunDialog.rc .rc-field-label{font:600 12px/1.2 var(--font-sans);color:var(--text-muted)}
+#rerunDialog.rc .rc-field textarea{box-sizing:border-box;width:100%;min-height:72px;padding:10px 12px;border:1px solid var(--border-default);border-radius:var(--radius-md);font:400 12.5px/1.5 var(--font-mono);color:var(--text-strong);resize:vertical}
+#rerunDialog.rc .rc-hint{font:400 11.5px/1.4 var(--font-sans);color:var(--text-faint)}
+#rerunDialog.rc .rc-hint.is-error{color:var(--danger)}
+#rerunDialog.rc .rc-containers{display:flex;flex-direction:column;gap:8px}
+#rerunDialog.rc .rc-container{display:grid;grid-template-columns:16px minmax(0,1fr) auto;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);cursor:pointer}
+#rerunDialog.rc .rc-container.is-selected{background:#fffdf3;border-color:#e5d79c}
+#rerunDialog.rc .rc-container-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+#rerunDialog.rc .rc-container-text strong{overflow:hidden;font:650 12.5px/1.3 var(--font-mono);color:var(--text-strong);text-overflow:ellipsis;white-space:nowrap}
+#rerunDialog.rc .rc-container-text small{overflow:hidden;font-size:11.5px;color:var(--text-muted);text-overflow:ellipsis;white-space:nowrap}
+#rerunDialog.rc .rc-container-size{font:600 12px/1 var(--font-sans);color:var(--text-muted);white-space:nowrap}
+#rerunDialog.rc .rc-empty{margin:4px 0;font-size:var(--text-sm);color:var(--text-muted)}
+#rerunDialog.rc .rc-override-form{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) 20px minmax(0,1fr) auto;align-items:end;gap:12px}
+#rerunDialog.rc .rc-arrow{display:grid;place-items:center;height:36px;color:var(--text-faint)}
+#rerunDialog.rc .rc-arrow svg.lucide,#rerunDialog.rc .rc-arrow-cell svg.lucide{font-size:16px}
+#rerunDialog.rc .rc-add{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 16px;font-weight:650}
+#rerunDialog.rc .rc-add svg.lucide{font-size:16px}
+#rerunDialog.rc .rc-note{margin:0;font-size:12.5px;line-height:1.45;color:var(--text-muted)}
+#rerunDialog.rc .rc-note:empty{display:none}
+#rerunDialog.rc .rc-note[data-tone=error]{color:var(--danger)}
+#rerunDialog.rc .rc-note[data-tone=success]{color:var(--success)}
+#rerunDialog.rc .rc-note[data-tone=info]{color:var(--tu-cyan-700)}
+#rerunDialog.rc .rc-table-wrap{overflow:auto}
+#rerunDialog.rc .rc-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}
+#rerunDialog.rc .rc-table th{padding:9px 12px;background:var(--surface-sunken);color:var(--text-muted);font:600 11.5px/1.2 var(--font-sans);text-align:left}
+#rerunDialog.rc .rc-table th:nth-child(1){width:30%}
+#rerunDialog.rc .rc-table th:nth-child(3){width:36px}
+#rerunDialog.rc .rc-table th:nth-child(5){width:52px}
+#rerunDialog.rc .rc-table th:first-child{border-radius:6px 0 0 6px}
+#rerunDialog.rc .rc-table th:last-child{border-radius:0 6px 6px 0}
+#rerunDialog.rc .rc-table td{padding:8px 12px;border-bottom:1px solid var(--n-100);vertical-align:middle}
+#rerunDialog.rc .rc-mono{overflow:hidden;font:650 12.5px/1.3 var(--font-mono);color:var(--text-strong);text-overflow:ellipsis;white-space:nowrap}
+#rerunDialog.rc .rc-arrow-cell{color:var(--text-faint);text-align:center}
+#rerunDialog.rc .rc-cell-action{text-align:right}
+#rerunDialog.rc .rc-value{display:inline-block;max-width:100%;overflow:hidden;padding:3px 10px;border-radius:6px;font:600 12.5px/1.4 var(--font-mono);text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
+#rerunDialog.rc .rc-value.is-before{background:#fdeeea;color:#8f3a2f}
+#rerunDialog.rc .rc-value.is-after{background:#e8f5ef;color:#2b6b4e}
+#rerunDialog.rc .rc-value.is-empty{font-style:italic;font-weight:500}
+#rerunDialog.rc .rc-footnote{margin:0;font-size:12px;color:var(--text-muted)}
+#rerunDialog.rc .rc-icon-btn{display:inline-grid;place-items:center;width:32px;height:32px;padding:0;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);color:var(--text-muted);cursor:pointer;transition:background-color var(--dur-1) ease,border-color var(--dur-1) ease,color var(--dur-1) ease}
+#rerunDialog.rc .rc-icon-btn svg.lucide{font-size:16px}
+#rerunDialog.rc .rc-icon-btn:hover{background:var(--surface-sunken);color:var(--text-strong)}
+#rerunDialog.rc .rc-icon-btn.is-danger:hover{background:color-mix(in srgb,var(--danger) 14%,#fff);border-color:color-mix(in srgb,var(--danger) 40%,#fff);color:#9e2f25}
+#rerunDialog.rc .rc-icon-btn:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+#rerunDialog.rc .rc-rule-list{display:flex;flex-direction:column;gap:6px}
+#rerunDialog.rc .rc-rule-row{display:grid;grid-template-columns:16px minmax(140px,.9fr) minmax(0,1.6fr) auto;align-items:center;gap:12px;padding:6px 6px 6px 14px;border:1px solid var(--n-100);border-radius:var(--radius-md);background:var(--surface-sunken)}
+#rerunDialog.rc .rc-rule-row>svg.lucide{font-size:16px;color:var(--tu-cyan-700)}
+#rerunDialog.rc .rc-rule-columns{overflow:hidden;font:650 12.5px/1.3 var(--font-mono);color:var(--text-strong);text-overflow:ellipsis;white-space:nowrap}
+#rerunDialog.rc .rc-tags{display:flex;flex-wrap:wrap;gap:6px}
+#rerunDialog.rc .rc-tag{padding:2px 10px;border:1px solid var(--border-default);border-radius:var(--radius-full);background:var(--surface-card);color:var(--text-strong);font:600 11.5px/18px var(--font-sans);white-space:nowrap}
+#rerunDialog.rc .rc-row-actions{display:flex;gap:6px}
+/* The drawer's builder, moved into the tab: two step cards side by side. */
+#rerunDialog.rc .comparison-rule-builder{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:16px!important;margin:0!important;padding:0!important;border:0!important;background:none!important;box-shadow:none!important}
+#rerunDialog.rc .rc-step>label{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;font-size:var(--text-xs);font-weight:600;color:var(--text-muted)}
+#rerunDialog.rc .rc-step #ruleColumnChoices{max-height:220px!important}
+/* Step 1: search on its own row, with the selection tools and count under it. */
+#rerunDialog.rc .rc-step #ruleColumnPicker{grid-template-columns:minmax(0,1fr)!important;grid-template-rows:none!important;align-content:start!important;flex:none}
+#rerunDialog.rc .rc-step #ruleColumnSearch{width:100%;box-sizing:border-box}
+#rerunDialog.rc .rc-step .rule-selection-tools{grid-column:1!important}
+/* Step 2 options in two groups of three: the clean-up options (trim, case, number formatting) on one row and the
+   tolerance and date formats on the next, each on the same three equal columns so the groups line up. */
+#rerunDialog.rc .rc-step .rule-options{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;align-items:stretch!important;gap:14px 10px!important}
+#rerunDialog.rc .rc-step .rule-options label{min-width:0!important;flex:none!important;margin:0!important}
+#rerunDialog.rc .rc-step .rule-options label:has(input[type=checkbox]){box-sizing:border-box;min-height:44px!important;gap:8px;padding:6px 10px;font-size:12.5px;line-height:1.25;white-space:normal}
+#rerunDialog.rc .rc-step .rule-options label:not(:has(input[type=checkbox])){justify-content:flex-end;white-space:nowrap}
+#rerunDialog.rc .rc-step .rule-options input:not([type=checkbox]){box-sizing:border-box;width:100%;height:36px!important}
+#rerunDialog.rc .rc-step .ds-rule-type{grid-template-columns:repeat(2,minmax(0,1fr))}
+#rerunDialog.rc .rc-step .ds-rule-type label:first-child{grid-column:1/-1}
+#rerunDialog.rc .rc-step .ds-rule-type input{box-sizing:border-box;width:100%;height:36px}
+/* Apply is the dialog's one primary action, so adding rules is a secondary button here. */
+#rerunDialog.rc .rc-step #addValueRule{align-self:flex-end;background:var(--surface-card)!important;border:1px solid var(--border-default)!important;color:var(--text-strong)!important;box-shadow:none!important}
+#rerunDialog.rc .rc-step #addValueRule:hover{background:var(--surface-sunken)!important}
+@media (max-width:900px){
+ #rerunDialog.rc .comparison-rule-builder{grid-template-columns:1fr}
+ #rerunDialog.rc .rc-override-form{grid-template-columns:1fr 1fr}
+ #rerunDialog.rc .rc-arrow{display:none}
+ #rerunDialog.rc .rc-rule-row{grid-template-columns:16px minmax(0,1fr) auto}
+ #rerunDialog.rc .rc-tags{grid-column:2/-1;grid-row:2}
+}
+@media (max-width:650px){
+ .enterprise-ui #rerunDialog.rc{width:calc(100vw - 16px);height:calc(100dvh - 16px)}
+ .enterprise-ui #rerunDialog.rc .drawer-heading{flex-wrap:wrap;padding:16px}
+ #rerunDialog.rc :is(.rc-plan,.rc-summary,.rerun-tabs){margin-left:16px!important;margin-right:16px!important}
+ .enterprise-ui #rerunDialog.rc .rerun-body{padding:14px 16px 16px}
+ #rerunDialog.rc .rc-override-form{grid-template-columns:1fr}
+}
+
+/* Projects: Compare runs (enterprise.js). Totals, the columns that changed (a bar either side of a centre line:
+   right and amber is worse, left and green is better), then the cells, by kind of change. */
+#projectsPanel.pj .pj-delta-button{height:auto;padding:2px 6px;margin:-2px -6px;border:0;border-radius:6px;background:none;font:inherit;font-weight:600;cursor:pointer}
+#projectsPanel.pj .pj-delta-button:hover{background:var(--surface-sunken);text-decoration:underline;text-underline-offset:3px}
+#projectsPanel.pj .pj-delta-button:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+#projectsPanel.pj .pj-compare{display:flex;flex-direction:column;gap:24px;transition:opacity var(--dur-2) var(--ease-out)}
+#projectsPanel.pj .pj-compare.is-loading{opacity:.55;pointer-events:none}
+#projectsPanel.pj .pj-compare-loading{margin:24px 0;color:var(--text-muted)}
+#projectsPanel.pj .pj-back{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;height:32px;margin:0 0 -12px -8px;padding:0 8px;border:0;border-radius:6px;background:none;color:var(--text-muted);font:600 var(--text-sm)/1 var(--font-sans);cursor:pointer}
+#projectsPanel.pj .pj-back:hover{background:var(--surface-sunken);color:var(--pj-ink)}
+#projectsPanel.pj .pj-back svg.lucide{font-size:16px}
+#projectsPanel.pj .pj-compare-pick{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto;align-items:end;gap:10px;margin-top:-8px}
+#projectsPanel.pj .pj-compare-run{display:flex;flex-direction:column;gap:6px;min-width:0;font:600 var(--text-xs)/1 var(--font-sans);color:var(--text-muted)}
+#projectsPanel.pj .pj-compare-run select{height:38px;width:100%;font:500 var(--text-sm) var(--font-sans);color:var(--pj-ink)}
+#projectsPanel.pj .pj-compare-arrow{display:grid;place-items:center;height:38px;color:var(--text-faint)}
+#projectsPanel.pj .pj-compare-arrow svg.lucide{font-size:18px}
+#projectsPanel.pj .pj-compare-pick .pj-icon-button{width:38px;height:38px}
+#projectsPanel.pj .pj-compare-hint{margin:-14px 0 0;font-size:var(--text-xs);color:var(--text-muted)}
+#projectsPanel.pj .pj-compare-notice{display:flex;gap:12px;padding:14px 16px;border:1px solid #ecd9a0;border-left:4px solid var(--tu-yellow-500,#fcd800);border-radius:0 8px 8px 0;background:#fffbea}
+#projectsPanel.pj .pj-compare-notice>svg.lucide{flex:none;font-size:18px;color:#a26a00;margin-top:1px}
+#projectsPanel.pj .pj-compare-notice strong{display:block;font-size:var(--text-sm);color:var(--pj-ink)}
+#projectsPanel.pj .pj-compare-notice p{margin:2px 0 6px;font-size:var(--text-xs);color:var(--text-muted)}
+#projectsPanel.pj .pj-compare-notice ul{margin:0;padding-left:18px;font-size:var(--text-sm);line-height:1.5;color:var(--text-default)}
+#projectsPanel.pj .pj-compare-totals{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-top:1px solid var(--pj-ink);border-bottom:1px solid var(--pj-line)}
+#projectsPanel.pj .pj-compare-total{display:flex;flex-direction:column;gap:6px;min-width:0;padding:14px 16px 14px 0}
+#projectsPanel.pj .pj-compare-total+.pj-compare-total{padding-left:16px;border-left:1px solid var(--pj-line)}
+#projectsPanel.pj .pj-compare-label{font:600 var(--text-xs)/1.2 var(--font-sans);color:var(--text-muted)}
+#projectsPanel.pj .pj-compare-values{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:var(--text-sm);color:var(--text-muted);font-variant-numeric:tabular-nums}
+#projectsPanel.pj .pj-compare-values strong{font-size:20px;font-weight:650;line-height:1.1;color:var(--pj-ink)}
+#projectsPanel.pj .pj-compare-values svg.lucide{font-size:13px;color:var(--text-faint)}
+#projectsPanel.pj .pj-compare-keys{margin:-12px 0 0;font-size:var(--text-sm);color:var(--text-default)}
+#projectsPanel.pj .pj-segmented{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--pj-line);border-radius:8px;background:var(--surface-sunken)}
+#projectsPanel.pj .pj-segmented button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:0;border-radius:6px;background:none;color:var(--text-muted);font:600 var(--text-xs)/1 var(--font-sans);cursor:pointer}
+#projectsPanel.pj .pj-segmented button[aria-pressed=true]{background:var(--surface-card);color:var(--pj-ink);box-shadow:0 1px 2px rgb(0 43 64/.12)}
+#projectsPanel.pj .pj-segment-count{min-width:18px;padding:0 5px;border-radius:9px;background:var(--pj-line);color:var(--text-muted);font:600 11px/18px var(--font-sans);text-align:center;font-variant-numeric:tabular-nums}
+#projectsPanel.pj [aria-pressed=true] .pj-segment-count,#projectsPanel.pj [aria-selected=true] .pj-segment-count{background:color-mix(in srgb,var(--pj-review) 14%,#fff);color:#006a82}
+#projectsPanel.pj .pj-compare-column{max-width:260px}
+#projectsPanel.pj .pj-compare-column .pj-name-button strong,#projectsPanel.pj .pj-compare-column .pj-name-button{font-family:var(--font-mono);font-size:12.5px;font-weight:600;color:var(--pj-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#projectsPanel.pj .pj-compare-column .pj-name-button:disabled{cursor:default;text-decoration:none}
+#projectsPanel.pj .pj-change-col{width:30%;min-width:150px}
+#projectsPanel.pj .pj-change-cell{display:flex;align-items:center;gap:10px}
+#projectsPanel.pj .pj-change{position:relative;flex:1;height:8px;border-radius:4px;background:linear-gradient(var(--pj-ink),var(--pj-ink)) center/1px 100% no-repeat,var(--surface-sunken)}
+#projectsPanel.pj .pj-change i{position:absolute;top:0;bottom:0;border-radius:4px}
+#projectsPanel.pj .pj-change i.is-worse{left:50%;background:#d7922b}
+#projectsPanel.pj .pj-change i.is-better{right:50%;background:var(--pj-approved)}
+#projectsPanel.pj .pj-change-value{flex:none;min-width:48px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:var(--text-muted)}
+#projectsPanel.pj .pj-change-value.is-worse{color:#b5651d}
+#projectsPanel.pj .pj-change-value.is-better{color:var(--pj-approved)}
+#projectsPanel.pj .pj-more{margin-top:10px}
+#projectsPanel.pj .pj-compare-tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px;border-bottom:1px solid var(--pj-line)}
+#projectsPanel.pj .pj-compare-tab{display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 12px;margin-bottom:-1px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--text-muted);font:600 var(--text-sm)/1 var(--font-sans);cursor:pointer}
+#projectsPanel.pj .pj-compare-tab:hover{color:var(--pj-ink)}
+#projectsPanel.pj .pj-compare-tab[aria-selected=true]{border-bottom-color:var(--pj-review);color:var(--pj-ink)}
+#projectsPanel.pj .pj-filter-chip{display:inline-flex;align-items:center;gap:6px;height:28px;margin-bottom:12px;padding:0 10px;border:1px solid color-mix(in srgb,var(--pj-review) 40%,#fff);border-radius:14px;background:color-mix(in srgb,var(--pj-review) 8%,#fff);color:#006a82;font:600 var(--text-xs)/1 var(--font-sans);cursor:pointer}
+#projectsPanel.pj .pj-filter-chip svg.lucide{font-size:13px}
+#projectsPanel.pj .pj-mono{font-family:var(--font-mono);font-size:12.5px;color:var(--pj-ink);white-space:nowrap}
+#projectsPanel.pj .pj-cell-table td{max-width:320px}
+#projectsPanel.pj .pj-pair{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0}
+#projectsPanel.pj .pj-pair svg.lucide{flex:none;font-size:12px;color:var(--text-faint)}
+#projectsPanel.pj .pj-v{min-width:0;max-width:140px;overflow:hidden;padding:2px 8px;border-radius:5px;font:600 12px/1.5 var(--font-mono);text-overflow:ellipsis;white-space:nowrap}
+#projectsPanel.pj .pj-v.is-left{background:#fdeeea;color:#8f3a2f}
+#projectsPanel.pj .pj-v.is-right{background:#e8f5ef;color:#2b6b4e}
+#projectsPanel.pj .pj-pair-none{font-size:var(--text-xs);font-style:italic;color:var(--text-muted)}
+#projectsPanel.pj .pj-compare-cells .pj-pager{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:12px}
+#projectsPanel.pj .pj-compare-cells .pj-pager .pj-section-note{margin-right:auto}
+@media (max-width:1100px){#projectsPanel.pj .pj-compare-pick{grid-template-columns:minmax(0,1fr) auto}#projectsPanel.pj .pj-compare-arrow{display:none}#projectsPanel.pj .pj-compare-pick .pj-compare-run:first-child{grid-column:1/-1}#projectsPanel.pj .pj-compare-totals{grid-template-columns:repeat(3,minmax(0,1fr))}#projectsPanel.pj .pj-compare-total:nth-child(4){padding-left:0;border-left:0}}
+@media (max-width:700px){#projectsPanel.pj .pj-compare-totals{grid-template-columns:repeat(2,minmax(0,1fr))}#projectsPanel.pj .pj-compare-total:nth-child(odd){padding-left:0;border-left:0}#projectsPanel.pj .pj-compare-total:nth-child(4){padding-left:16px;border-left:1px solid var(--pj-line)}#projectsPanel.pj .pj-compare-arrow{display:none}}

@@ -165,7 +165,7 @@ function filterOverrideEditor(){const select=$('overrideEditorColumn'),previous=
 function openOverrideEditor(){if(!rerunDraft)return;$('overrideEditorSearch').value=$('overrideEditorLeft').value=$('overrideEditorRight').value=$('overrideEditorError').textContent='';filterOverrideEditor();$('overrideEditor').showModal();$('overrideEditorSearch').focus();}
 $('overrideEditorSearch').oninput=filterOverrideEditor;$('closeOverrideEditor').onclick=()=>$('overrideEditor').close();
 $('saveOverrideEditor').onclick=()=>{const rule={column:$('overrideEditorColumn').value,left:$('overrideEditorLeft').value,right:$('overrideEditorRight').value};if(!rule.column){$('overrideEditorError').textContent='Select a value column.';return;}if(!rerunDraft.value_overrides.some(r=>JSON.stringify(r)===JSON.stringify(rule)))rerunDraft.value_overrides.push(rule);renderRerunRows('overrides');scheduleReviewPlan();$('overrideEditor').close();};
-const originalRecomparison=openRecomparison;openRecomparison=function(){originalRecomparison();const box=$('rerun-scope');box.querySelector('select').disabled=true;const policy=[...box.querySelectorAll('label')].find(l=>l.firstChild?.textContent==='Duplicate keys');if(policy)policy.hidden=true;};
+const originalRecomparison=openRecomparison;openRecomparison=function(){originalRecomparison();const box=$('rerun-scope'),keySelect=box.querySelector('select');if(keySelect)keySelect.disabled=true;const policy=[...box.querySelectorAll('label')].find(l=>l.firstChild?.textContent==='Duplicate keys');if(policy)policy.hidden=true;};
 // Existing listener references the original controller; enforce locked keys on open too.
 new MutationObserver(()=>{if($('rerunDialog').open){const select=$('rerun-scope').querySelector('select');if(select)select.disabled=true;for(const label of $('rerun-scope').querySelectorAll('label'))if(label.firstChild?.textContent==='Duplicate keys')label.hidden=true;}}).observe($('rerunDialog'),{attributes:true,attributeFilter:['open']});
 
@@ -725,7 +725,8 @@ window.addEventListener('DOMContentLoaded',()=>{
  const icons={validate:'shield-check',read:'arrow-down-narrow-wide',compare:'arrow-left-right',write:'file-text',complete:'flag',review:'refresh-cw'};
  function node(stage,column,extra=''){
   const live=stage.kind==='compare'&&stage.state==='active'&&job?.progress?.rows!==undefined?`<b>${number(job.progress.rows)} keys</b>`
-   :stage.kind==='read'&&stage.state==='active'&&readPercent.value!==null?`<b>${readPercent.value}% read</b>`:'';
+   :stage.kind==='read'&&stage.state==='active'&&readPercent.value!==null?`<b>${readPercent.value}% read</b>`
+   :stage.kind==='write'&&stage.state==='active'&&/HTML/.test(job?.progress?.phase||'')?'<b>Building HTML report</b>':'';
   return `<div class="pg-node is-${stage.state} ${extra}" data-col="${column}" data-kind="${stage.kind}"><span class="pg-box"><span class="pg-port pg-port-in"></span>${lucide(icons[stage.kind]||'circle','pg-icon')}<span class="pg-port pg-port-out"></span></span><strong>${stage.title}</strong><small>${stage.subtitle}</small>${live}</div>`;
  }
  function render(){
@@ -765,99 +766,86 @@ window.addEventListener('DOMContentLoaded',()=>{
  fab.removeAttribute('title');
 }
 
-// Recompare dialog: macOS genie minimize/maximize. The dialog is drawn as thin horizontal strips; each strip is
-// squeezed to the width of a funnel that ends at the Recompare button, so the window warps into the button
-// (minimize) and pours back out of it (maximize). Strips are temporary visual copies in a top-layer overlay,
-// hidden from assistive technology, and removed when the animation ends.
-// Smoothness on slower GPUs: each strip only holds its own band of the dialog (one dialog's worth of pixels in
-// total, not one per strip), and the motion is precomputed into Web Animations of transform and opacity, which
-// the browser runs on its compositor even while the page is busy.
+// Recompare dialog: the Recompare pill opens into the dialog in three steps. The expanded pill glides from its
+// corner to the centre of the screen, widens to the dialog's width, then grows to its height while its corners
+// settle to the dialog's radius; the dialog's content fades in last. Closing plays the same steps in reverse
+// and the pill returns to its corner. One shell in a top-layer overlay does the motion with Web Animations;
+// it is a visual copy, hidden from assistive technology, and removed when the animation ends.
 {
  const dialog=$('rerunDialog'),fab=$('recompareFab'),nativeShow=dialog.showModal.bind(dialog),nativeClose=dialog.close.bind(dialog);
  const reduced=()=>document.body.classList.contains('reduce-motion')||matchMedia('(prefers-reduced-motion: reduce)').matches;
- const smooth=u=>u<=0?0:u>=1?1:u*u*(3-2*u);
- const ease=u=>u<.5?4*u*u*u:1-Math.pow(-2*u+2,3)/2;
- const SLICES=64,SAMPLES=48;
+ const OPEN_MS=1000,CLOSE_MS=900,GLIDE=.4,WIDEN=.7,EASE='cubic-bezier(.45,0,.2,1)';
  let running=null;
  function build(){
-  const d=dialog.getBoundingClientRect(),f=!fab.hidden&&fab.getClientRects().length?fab.getBoundingClientRect():null;
-  const g={L:d.left,T:d.top,W:d.width,H:d.height,tx:f?f.left+Math.min(f.width,f.height)/2:innerWidth/2,ty:f?f.top+f.height/2:innerHeight-24,tw:f?Math.min(f.width,f.height)*.8:40};
-  const overlay=document.createElement('div');overlay.className='ds-genie';overlay.setAttribute('aria-hidden','true');overlay.setAttribute('popover','manual');
-  const computed=getComputedStyle(dialog),copy=['backgroundColor','backgroundImage','borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth','borderTopStyle','borderRightStyle','borderBottomStyle','borderLeftStyle','borderTopColor','borderRightColor','borderBottomColor','borderLeftColor','borderTopLeftRadius','borderTopRightRadius','borderBottomLeftRadius','borderBottomRightRadius','paddingTop','paddingRight','paddingBottom','paddingLeft','color','fontFamily','fontSize','lineHeight','display','flexDirection','rowGap','columnGap','overflow'];
-  // The copy keeps its ids so every #rerunDialog style applies and it looks exactly like the dialog. It is
-  // added after the dialog, so lookups by id still find the real elements first.
-  const template=dialog.cloneNode(true);template.querySelector('.tu-request-loader')?.remove();
-  const band=g.H/SLICES,slices=[];
-  for(let i=0;i<SLICES;i++){
-   // The strip clips its band; the copy inside is shifted up so the band shows the right part of the dialog.
-   const strip=document.createElement('div');
-   Object.assign(strip.style,{position:'fixed',left:g.L+'px',top:(g.T+i*band)+'px',width:g.W+'px',height:(band+1).toFixed(2)+'px',overflow:'hidden',transformOrigin:'0 0',willChange:'transform,opacity'});
-   const copyOf=document.createElement('div');copyOf.className=dialog.className;copyOf.id=dialog.id;copyOf.setAttribute('open','');
-   for(const name of copy)copyOf.style[name]=computed[name];
-   Object.assign(copyOf.style,{position:'absolute',left:'0',top:(-i*band).toFixed(2)+'px',width:g.W+'px',height:g.H+'px',margin:'0',boxSizing:'border-box'});
-   copyOf.append(...[...template.cloneNode(true).childNodes]);
-   strip.append(copyOf);slices.push(strip);
-  }
-  overlay.append(...slices);document.body.append(overlay);
+  const d=dialog.getBoundingClientRect(),computed=getComputedStyle(dialog);
+  const overlay=document.createElement('div');overlay.className='ds-morph';overlay.setAttribute('aria-hidden','true');overlay.setAttribute('popover','manual');
+  // The pill is the Recompare button at its expanded size, whatever its idle state. It keeps the button's id so
+  // every #recompareFab style applies; it is added last, so lookups by id still find the real button first.
+  const pill=fab.cloneNode(true);pill.classList.remove('fab-compact','fab-ready');pill.classList.add('ds-morph-pill');
+  pill.hidden=false;pill.removeAttribute('style');pill.setAttribute('tabindex','-1');
+  const shell=document.createElement('div');shell.className='ds-morph-shell';
+  for(const name of ['backgroundColor','boxShadow'])shell.style[name]=computed[name];
+  shell.style.borderColor=computed.borderTopColor;shell.style.borderWidth=computed.borderTopWidth;
+  shell.append(pill);overlay.append(shell);document.body.append(overlay);
   try{overlay.showPopover();}catch(error){}
-  return {g,overlay,slices};
+  const pw=pill.offsetWidth,ph=pill.offsetHeight,f=!fab.hidden&&fab.getClientRects().length?fab.getBoundingClientRect():null;
+  const radius=parseFloat(computed.borderTopLeftRadius)||16;
+  const from=f?{x:f.right-pw/2,y:f.top+f.height/2}:{x:innerWidth/2,y:innerHeight-ph};
+  const to={x:d.left+d.width/2,y:d.top+d.height/2};
+  const pose=(c,w,h,r,offset)=>({offset,easing:EASE,width:w+'px',height:h+'px',borderRadius:r+'px',transform:`translate(${(c.x-w/2).toFixed(2)}px,${(c.y-h/2).toFixed(2)}px)`});
+  // Closed (pill in its corner) to open (the dialog's box).
+  const frames=[pose(from,pw,ph,ph/2,0),pose(to,pw,ph,ph/2,GLIDE),pose(to,d.width,ph,ph/2,WIDEN),pose(to,d.width,d.height,radius,1)];
+  const pillFrames=[{offset:0,opacity:1},{offset:GLIDE,opacity:1},{offset:GLIDE+.14,opacity:0},{offset:1,opacity:0}];
+  return {overlay,shell,pill,frames,pillFrames};
  }
- // Funnel half-edges at screen height y once fraction q of the funnel has formed.
- function edges(g,y,q){
-  const half=g.tw/2;if(y>=g.T+g.H)return [g.tx-half,g.tx+half];
-  const u=smooth((y-g.T)/g.H)*q;return [g.L+(g.tx-half-g.L)*u,g.L+g.W+(g.tx+half-g.L-g.W)*u];
- }
- // Each strip's transform and opacity at p (0 = window fully open, 1 = fully inside the button).
- function pose(g,p){
-  const split=.4,q=ease(Math.min(1,p/split)),s=ease(Math.max(0,(p-split)/(1-split)));
-  const offset=s*(g.ty-g.T+8),h=g.H/SLICES,poses=[];
-  for(let i=0;i<SLICES;i++){
-   const y=g.T+(i+.5)*h+offset;
-   if(y>g.ty){poses.push({opacity:0,transform:poses.at(-1)?.transform||`translate(0px,${offset.toFixed(2)}px) scaleX(0.001)`});continue;}
-   const [a,b]=edges(g,y,q),scale=Math.max(.001,(b-a)/g.W);
-   poses.push({opacity:1,transform:`translate(${(a-g.L).toFixed(2)}px,${offset.toFixed(2)}px) scaleX(${scale.toFixed(4)})`});
-  }
-  return poses;
- }
- function play(from,to,duration){
+ function play(direction,duration){
   if(running)running.cancel();
   const state=build();let stopped=false,done;
   const finished=new Promise(resolve=>{done=resolve;});
-  // Keyframes are sampled along the path and played linearly between samples, so the shape stays exact.
-  const frames=state.slices.map(()=>[]);
-  for(let k=0;k<=SAMPLES;k++){
-   pose(state.g,from+(to-from)*k/SAMPLES).forEach((frame,i)=>frames[i].push(frame));
-  }
-  const animations=state.slices.map((slice,i)=>slice.animate(frames[i],{duration,easing:'linear',fill:'forwards'}));
+  const options={duration,direction,fill:'both'};
+  const animations=[state.shell.animate(state.frames,options),state.pill.animate(state.pillFrames,options)];
   const end=()=>{if(stopped)return;stopped=true;clearTimeout(fallback);animations.forEach(item=>item.cancel());try{state.overlay.hidePopover();}catch(error){}state.overlay.remove();running=null;done();};
-  // A hidden tab may never finish its animations; never leave the dialog stuck mid-genie.
+  // A hidden tab may never finish its animations; never leave the dialog stuck mid-morph.
   const fallback=setTimeout(end,duration+400);
   animations[0].finished.then(end,end);
-  running={cancel:end,finished,state};
+  running={cancel:end,finished};
   return running;
  }
+ const content=()=>[...dialog.children].filter(child=>!child.classList.contains('tu-request-loader'));
  dialog.showModal=function(){
   nativeShow();if(reduced())return;
-  dialog.style.visibility='hidden';
-  dialog.animate([{opacity:0},{opacity:1}],{duration:700,easing:'ease-out',pseudoElement:'::backdrop'});
-  play(1,0,1000).finished.then(()=>{dialog.style.visibility='';});
+  dialog.style.visibility='hidden';fab.style.visibility='hidden';
+  dialog.animate([{opacity:0},{opacity:1}],{duration:OPEN_MS*.7,easing:'ease-out',pseudoElement:'::backdrop'});
+  play('normal',OPEN_MS).finished.then(()=>{
+   dialog.style.visibility='';fab.style.visibility='';
+   for(const child of content())child.animate([{opacity:0},{opacity:1}],{duration:200,easing:'ease-out'});
+  });
  };
  let closing=false;
- async function genieClose(){
+ async function morphClose(){
   if(!dialog.open||$('startRerun').disabled||closing)return;
   if(reduced()){nativeClose();return;}
   closing=true;
-  const animation=play(0,1,900);dialog.style.visibility='hidden';
-  dialog.animate([{opacity:1},{opacity:0}],{duration:800,easing:'ease-in',fill:'forwards',pseudoElement:'::backdrop'});
-  try{await animation.finished;}finally{nativeClose();dialog.style.visibility='';dialog.getAnimations().forEach(item=>item.cancel());closing=false;}
+  try{
+   await Promise.race([Promise.all(content().map(child=>child.animate([{opacity:1},{opacity:0}],{duration:160,easing:'ease-in',fill:'forwards'}).finished)),new Promise(resolve=>setTimeout(resolve,400))]);
+   fab.style.visibility='hidden';
+   const animation=play('reverse',CLOSE_MS);dialog.style.visibility='hidden';
+   dialog.animate([{opacity:1},{opacity:0}],{duration:CLOSE_MS*.8,easing:'ease-in',fill:'forwards',pseudoElement:'::backdrop'});
+   await animation.finished;
+  }finally{
+   nativeClose();dialog.style.visibility='';fab.style.visibility='';
+   dialog.getAnimations({subtree:true}).forEach(item=>item.cancel());closing=false;
+  }
  }
- $('closeRerun').addEventListener('click',event=>{event.stopImmediatePropagation();genieClose();},{capture:true});
- dialog.addEventListener('cancel',event=>{event.preventDefault();event.stopImmediatePropagation();genieClose();},{capture:true});
+ // A larger close button with a Lucide cross; it turns red on hover.
+ {const close=$('closeRerun');close.innerHTML=lucide('x');close.classList.add('ds-dialog-close');close.title='Close';}
+ $('closeRerun').addEventListener('click',event=>{event.stopImmediatePropagation();morphClose();},{capture:true});
+ dialog.addEventListener('cancel',event=>{event.preventDefault();event.stopImmediatePropagation();morphClose();},{capture:true});
  // Alt/⌥ R (and R when not typing) toggles: it opens Recompare, and pressing it again closes it.
  document.addEventListener('keydown',event=>{
   if(!dialog.open||event.repeat||event.ctrlKey||event.metaKey)return;
   const typing=event.target?.closest?.('input,textarea,select,[contenteditable="true"]');
-  if(event.code==='KeyR'&&(event.altKey||!typing)){event.preventDefault();event.stopImmediatePropagation();genieClose();}
+  if(event.code==='KeyR'&&(event.altKey||!typing)){event.preventDefault();event.stopImmediatePropagation();morphClose();}
  },{capture:true});
 }
 
@@ -888,7 +876,7 @@ window.addEventListener('DOMContentLoaded',()=>{
  menu.addEventListener('keydown',event=>{if(event.key==='Escape'&&menu.open){event.stopPropagation();menu.open=false;menu.querySelector('summary').focus();}});
 }
 
-// Analysis redesign: ranked column table (rank · column · match · share of mismatches · count) and a
+// Analysis redesign: ranked column table (rank · column · mismatch · share of mismatches · count) and a
 // "Column health" summary. Rows keep their buttons and click handlers; bar widths go through CSSOM
 // because the Content-Security-Policy blocks inline style attributes.
 function redesignAnalysis(){
@@ -896,7 +884,7 @@ function redesignAnalysis(){
  const list=$('columnSummary'),rows=[...list.querySelectorAll('.column-row')];
  const matched=Math.max(0,Number(summary.matched_keys||0)),counts=rows.map(row=>Number((row.querySelector('strong')?.textContent||'0').replace(/[^0-9.-]/g,''))||0),maxCount=Math.max(1,...counts);
  list.classList.add('ds-column-table');
- if(!list.previousElementSibling?.classList.contains('ds-column-head')&&rows.length){const head=document.createElement('div');head.className='ds-column-head';head.setAttribute('aria-hidden','true');head.innerHTML='<span>#</span><span>Column</span><span>Match</span><span>Share of mismatches</span><span>Changes</span>';list.before(head);}
+ if(!list.previousElementSibling?.classList.contains('ds-column-head')&&rows.length){const head=document.createElement('div');head.className='ds-column-head';head.setAttribute('aria-hidden','true');head.innerHTML='<span>#</span><span>Column</span><span>Mismatch</span><span>Share of mismatches</span><span>Changes</span>';list.before(head);}
  rows.forEach((row,index)=>{
   if(row.dataset.dsDone)return;row.dataset.dsDone='1';
   const name=row.firstElementChild?.textContent||'',count=counts[index],rate=matched?Math.max(0,100-count*100/matched):0;
@@ -904,7 +892,10 @@ function redesignAnalysis(){
   row.dataset.risk=risk;row.classList.add('ds-column-row');
   const rank=Object.assign(document.createElement('span'),{className:'ds-rank',textContent:String(index+1)});
   const label=Object.assign(document.createElement('span'),{className:'ds-col-name',textContent:name});label.title=name;
-  const pill=Object.assign(document.createElement('span'),{className:'ds-rate is-'+risk,textContent:matched?`${rate.toFixed(rate>99&&rate<100?2:1)}%`:'—'});
+  // Mismatch rate to four decimals; a column with any mismatch never reads as 0.0000%.
+  const mismatch=matched?count*100/matched:0,mismatchText=count&&mismatch<0.00005?'<0.0001%':mismatch.toFixed(4)+'%';
+  const pill=Object.assign(document.createElement('span'),{className:'ds-rate is-'+risk,textContent:matched?mismatchText:'—'});
+  pill.title=matched?`${(100-mismatch).toFixed(4)}% match`:'';
   const bar=document.createElement('span');bar.className='ds-share';const fill=document.createElement('i');fill.style.width=Math.max(2,count*100/maxCount)+'%';bar.append(fill);
   const value=document.createElement('span');value.className='ds-count';value.innerHTML=`<b></b><small>changes</small>`;value.querySelector('b').textContent=number(count);
   const go=document.createElement('span');go.className='ds-go';go.innerHTML=lucide('chevron-right');
@@ -930,31 +921,31 @@ function redesignAnalysis(){
  }
  health.querySelector('.ds-health-foot').textContent=`${number(summary.changed_cells||0)} mismatched cells · ${number(summary.changed_rows||0)} keys with differences`;
  const title=panel.querySelector('h2');if(title)title.textContent='Match Mismatch Overview';
- // Records pie: every key lands in exactly one slice, so the slices add up to all keys in both files.
- const slices=[['Equal keys','equal',summary.equal_rows],['Unequal keys','unequal',summary.changed_rows],['Only in champion','left',summary.left_only],['Only in challenger','right',summary.right_only]].map(([label,key,count])=>({label,key,count:Math.max(0,Number(count)||0)}));
- const keys=slices.reduce((sum,slice)=>sum+slice.count,0);
+ // Columns pie: each slice is the number of value columns in one match-rate band, so the slices add up to
+ // every compared column. The legend carries the counts, so the band rows below it are not repeated.
  const pie=document.createElement('div');pie.className='ds-pie';
  const svgNS='http://www.w3.org/2000/svg',svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox','-1 -1 2 2');svg.setAttribute('role','img');
- svg.setAttribute('aria-label',slices.map(slice=>`${slice.label}: ${number(slice.count)}`).join(', '));
+ svg.setAttribute('aria-label',total&&matched?'Columns by match rate: '+bands.map(band=>`${band.label}: ${number(band.count)}`).join(', '):'No columns to compare');
  let angle=-Math.PI/2;
- for(const slice of slices){
-  if(!slice.count)continue;const share=slice.count/keys;let shape;
+ if(!total||!matched){const ring=document.createElementNS(svgNS,'circle');ring.setAttribute('r','1');ring.setAttribute('class','is-none');svg.append(ring);}
+ else for(const band of bands){
+  if(!band.count)continue;const share=band.count/total;let shape;
   if(share>=1){shape=document.createElementNS(svgNS,'circle');shape.setAttribute('r','1');}
   else{const end=angle+share*2*Math.PI,large=share>.5?1:0;shape=document.createElementNS(svgNS,'path');
    shape.setAttribute('d',`M0 0L${Math.cos(angle)} ${Math.sin(angle)}A1 1 0 ${large} 1 ${Math.cos(end)} ${Math.sin(end)}Z`);angle=end;}
-  shape.setAttribute('class','is-'+slice.key);const tip=document.createElementNS(svgNS,'title');tip.textContent=`${slice.label}: ${number(slice.count)} (${percentText(slice.count,keys)})`;shape.append(tip);svg.append(shape);
+  shape.setAttribute('class','is-'+band.key);const tip=document.createElementNS(svgNS,'title');tip.textContent=`${band.label}: ${number(band.count)} columns (${percentText(band.count,total)})`;shape.append(tip);svg.append(shape);
  }
  const legend=document.createElement('ul');legend.className='ds-pie-legend';
- for(const slice of slices){
-  const li=document.createElement('li');li.className='is-'+slice.key+(slice.count?'':' is-empty');
+ for(const band of bands){
+  const li=document.createElement('li');li.className='is-'+band.key+(band.count?'':' is-empty');
   li.innerHTML='<span class="ds-dot"></span><span class="ds-pie-label"></span><b></b><small></small>';
-  li.querySelector('.ds-pie-label').textContent=slice.label;li.querySelector('b').textContent=number(slice.count);li.querySelector('small').textContent=keys?percentText(slice.count,keys):'—';
+  li.querySelector('.ds-pie-label').textContent=band.label;li.querySelector('b').textContent=number(band.count);li.querySelector('small').textContent=total&&matched?percentText(band.count,total):'—';
   legend.append(li);
  }
+ const pieHead=document.createElement('p');pieHead.className='ds-health-sub';pieHead.textContent='Columns by match rate';
  pie.append(svg,legend);
- health.querySelector('.ds-stack')?.remove();
- const columnsHead=document.createElement('p');columnsHead.className='ds-health-sub';columnsHead.textContent='Columns';
- health.prepend(pie,columnsHead);
+ health.querySelector('.ds-stack')?.remove();health.querySelector('.ds-bands')?.remove();
+ health.prepend(pieHead,pie);
 }
 {const previousRender=renderSummary;renderSummary=function(){previousRender();redesignAnalysis();};if(job?.state==='complete')redesignAnalysis();}
 
@@ -1762,7 +1753,11 @@ function redesignAnalysis(){
  function phaseText(snapshot){
   const progress=job?.progress||{};
   if(job?.state==='queued')return 'Waiting for a server worker…';
-  if(snapshot?.state==='writing'||snapshot?.stage==='reports'||progress.stage==='reports')return 'All keys compared · writing the result files and reports';
+  const review=job?.execution_mode==='review';
+  if(snapshot?.state==='writing'||snapshot?.stage==='reports'||progress.stage==='reports')return review?'All retained differences re-evaluated · writing the result files and reports':'All keys compared · writing the result files and reports';
+  // A re-evaluation reads the differences the original comparison kept; the source files are not read again.
+  if(snapshot?.state==='reviewing')return `Re-evaluating retained differences · ${number(snapshot.reviewed)} of ${number(snapshot.review_total)} checked (${Math.floor(100*snapshot.reviewed/Math.max(1,snapshot.review_total))}%)`;
+  if(review)return 'Re-evaluating retained differences · the source files are not read again';
   if(snapshot?.state==='reading'&&snapshot.ranges_total)return `Reading both files · ${Math.floor(100*snapshot.ranges_read/snapshot.ranges_total)}% read · exact mismatches follow once both files are read`;
   if(snapshot?.key_ranges)return `Comparing · ${number(snapshot.key_ranges_done)} of ${number(snapshot.key_ranges)} key ranges done`;
   if(snapshot&&snapshot.matched_keys+snapshot.left_only+snapshot.right_only>0)return `Comparing · ${number(snapshot.matched_keys+snapshot.left_only+snapshot.right_only)} keys compared so far`;
@@ -2148,10 +2143,14 @@ loadDiagnostics=async function(){
    review.setAttribute('aria-label',`Review ${record.title}`);name.append(review);
    const finished=el('td','pj-date',longDate(record.finished||record.created));
    const differences=el('td','is-number pj-figure',record.changed_cells==null?'—':number(record.changed_cells));
-   const change=el('td','is-number');const delta=deltas.get(record.id);
+   const change=el('td','is-number');const entry=deltas.get(record.id),delta=entry?.change;
    if(delta===undefined)change.append(el('span','pj-delta is-none','—'));
-   else if(delta===0)change.append(el('span','pj-delta is-flat','No change'));
-   else{const better=delta<0,tag=el('span',`pj-delta ${better?'is-down':'is-up'}`);tag.append(lucideNode(better?'arrow-down':'arrow-up'),document.createTextNode(number(Math.abs(delta))));tag.title=better?'Fewer differences than the previous run':'More differences than the previous run';change.append(tag);}
+   else{
+    // The change opens the comparison of this run with the one before it.
+    const better=delta<0,tag=projectButton('',()=>openRunCompare(entry.previous,record.id),`pj-delta pj-delta-button ${delta===0?'is-flat':better?'is-down':'is-up'}`);
+    if(delta===0)tag.textContent='No change';else tag.append(lucideNode(better?'arrow-down':'arrow-up'),document.createTextNode(number(Math.abs(delta))));
+    tag.title='Compare with the previous run';tag.setAttribute('aria-label',(delta===0?'No change':`${number(Math.abs(delta))} ${better?'fewer':'more'} differences`)+'. Compare with the previous run');change.append(tag);
+   }
    const status=el('td');const pill=projectButton('',()=>openProjectAudit(record.id),`pj-status ${statusClass[record.audit_status]||''}`);pill.textContent=record.audit_status;pill.title='Change sign-off';status.append(pill);
    const open=el('td','pj-col-open');
    if(record.kind!=='json'&&record.source_available!==false&&record.state==='complete'){const button=projectButton('',()=>openJob(record.id),'pj-icon-button');button.append(lucideNode('external-link'));button.setAttribute('aria-label',`Open ${record.title}`);button.title='Open comparison';open.append(button);}
@@ -2175,20 +2174,170 @@ loadDiagnostics=async function(){
   $('projectDrawerBody').append(list);
  }
 
+ // Compare runs: what changed between two runs of this project. Totals first, then the columns that got better or
+ // worse, then the cells themselves (new, resolved, changed values, still mismatching). It replaces the dashboard
+ // until Back is pressed; the server pairs cells by key and column and keeps the result with the later run.
+ const cellTabs=[['new','New mismatches'],['resolved','Resolved'],['changed','Values changed'],['same','Still mismatching']];
+ const totalsShown=[['changed_cells','Differences','lower'],['changed_rows','Keys with differences','lower'],['equal_rows','Matching keys','higher'],['left_only','Only in File 1','lower'],['right_only','Only in File 2','lower']];
+ let compareState=null;
+ function deltaTag(before,after,better){
+  if(before==null||after==null)return el('span','pj-delta is-none','—');
+  const change=after-before;if(!change)return el('span','pj-delta is-flat','No change');
+  const good=better==='higher'?change>0:better==='lower'?change<0:null;
+  const tag=el('span','pj-delta '+(good===null?'is-flat':good?'is-down':'is-up'));
+  tag.append(lucideNode(change<0?'arrow-down':'arrow-up'),document.createTextNode(number(Math.abs(change))));return tag;
+ }
+ // Runs are numbered oldest first, as reviewers talk about them ("run 7 against run 8"); seconds are added
+ // when two runs finished in the same minute.
+ function runLabels(runs){
+  const minute=run=>longDate(run.finished),seen=new Map();for(const run of runs)seen.set(minute(run),(seen.get(minute(run))||0)+1);
+  return new Map(runs.map((run,index)=>{const when=seen.get(minute(run))>1?new Date(run.finished*1000).toLocaleString(undefined,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'}):minute(run);
+   return [run.id,`Run ${index+1} · ${when} · ${number(run.changed_cells||0)} differences`];}));
+ }
+ async function openRunCompare(base='',target='',status='new',column='',offset=0,focusCells=false){
+  compareState={base,target,status,column,offset};
+  const dashboard=$('projectDashboard');
+  if(!dashboard.querySelector('.pj-compare')){dashboard.replaceChildren(el('p','pj-compare-loading','Comparing runs…'));}
+  else dashboard.querySelector('.pj-compare')?.classList.add('is-loading');
+  const params=new URLSearchParams({status,column,offset:String(offset)});if(base)params.set('base',base);if(target)params.set('target',target);
+  let data;
+  try{data=await api(`/api/projects/${activeProject}/compare?${params}`);}
+  catch(error){dashboard.querySelector('.pj-compare')?.classList.remove('is-loading');throw error;}
+  compareState={...compareState,base:data.base,target:data.target,data};
+  renderCompare(data);
+  if(focusCells)dashboard.querySelector('.pj-compare-cells')?.scrollIntoView({block:'start',behavior:reduced()?'auto':'smooth'});
+ }
+ function renderCompare(data){
+  const dashboard=$('projectDashboard'),view=el('div','pj-compare'),runs=new Map(data.runs.map(run=>[run.id,run]));
+  const back=projectButton('',()=>selectProject(activeProject,projectOffset),'pj-back');back.append(lucideNode('arrow-left'),document.createTextNode('Back to '+(projectDetail?.project?.name||'project')));
+  const header=el('div','pj-head'),titles=el('div','pj-titles');
+  titles.append(el('h2','','Compare runs'),el('p','pj-description','What changed between two runs of this project: totals, columns and the mismatching cells themselves.'));
+  header.append(titles);
+  // Run pickers: From (the earlier run) and To.
+  const picker=el('div','pj-compare-pick'),labels=runLabels(data.runs);
+  const choose=(label,value,other)=>{const wrap=el('label','pj-compare-run'),select=el('select');wrap.append(el('span','',label),select);
+   for(const run of data.runs){const option=new Option(labels.get(run.id),run.id);option.disabled=run.id===other;select.add(option);}select.value=value;return {wrap,select};};
+  const from=choose('From',data.base,data.target),to=choose('To',data.target,data.base);
+  const swap=projectButton('',()=>openRunCompare(data.target,data.base),'pj-icon-button');swap.append(lucideNode('arrow-left-right'));swap.title='Swap runs';swap.setAttribute('aria-label','Swap runs');
+  from.select.addEventListener('change',()=>openRunCompare(from.select.value,to.select.value).catch(showError));
+  to.select.addEventListener('change',()=>openRunCompare(from.select.value,to.select.value).catch(showError));
+  const arrow=el('span','pj-compare-arrow');arrow.append(lucideNode('arrow-right'));
+  picker.append(from.wrap,arrow,to.wrap,swap);
+  view.append(back,header,picker);
+  if((runs.get(data.base)?.finished||0)>(runs.get(data.target)?.finished||0))view.append(el('p','pj-compare-hint','From is the later run here, so the changes read backwards in time.'));
+  if(data.settings.length){
+   const notice=el('div','pj-compare-notice'),text=el('div'),list=el('ul');
+   notice.append(lucideNode('triangle-alert'),text);
+   text.append(el('strong','','Settings changed between these runs'),el('p','','Some differences may come from the settings rather than the data.'),list);
+   for(const change of data.settings)list.append(el('li','',change));
+   view.append(notice);
+  }
+  // Totals.
+  const totals=el('section','pj-compare-totals');totals.setAttribute('aria-label','Totals');
+  for(const [field,label,better] of totalsShown){
+   const count=data.counts[field]||{},cell=el('div','pj-compare-total');
+   const values=el('span','pj-compare-values');values.append(el('span','',count.base==null?'—':number(count.base)),lucideNode('arrow-right'),el('strong','',count.target==null?'—':number(count.target)));
+   cell.append(el('span','pj-compare-label',label),values,deltaTag(count.base,count.target,better));totals.append(cell);
+  }
+  view.append(totals);
+  if(data.cells){
+   const keys=el('p','pj-compare-keys');
+   keys.textContent=`${number(data.cells.new_keys)} ${data.cells.new_keys===1?'key now mismatches':'keys now mismatch'} that did not before; ${number(data.cells.resolved_keys)} ${data.cells.resolved_keys===1?'key no longer mismatches':'keys no longer mismatch'}.`;
+   view.append(keys);
+  }
+  view.append(columnSection(data),cellSection(data));
+  dashboard.replaceChildren(view);
+ }
+ // Columns: mismatches per column in both runs, with the change as a bar either side of a centre line.
+ let columnFilter='changed',columnLimit=25;
+ function columnSection(data){
+  const section=el('section','pj-compare-columns');section.setAttribute('aria-labelledby','pjCompareColumns');
+  const byColumn=data.cells?.by_column||{};
+  const rows=data.columns.map(item=>({...item,change:(item.target||0)-(item.base||0),fresh:byColumn[item.column]?.new||0,resolved:byColumn[item.column]?.resolved||0,altered:byColumn[item.column]?.changed||0}));
+  const groups={changed:rows.filter(row=>row.change||row.fresh||row.resolved||row.altered),worse:rows.filter(row=>row.change>0),better:rows.filter(row=>row.change<0),all:rows};
+  const head=el('div','pj-section-head'),title=el('h3','','Columns');title.id='pjCompareColumns';
+  const filters=el('div','pj-segmented');filters.setAttribute('role','group');filters.setAttribute('aria-label','Show columns');
+  for(const [name,label] of [['changed','Changed'],['worse','Worse'],['better','Better'],['all','All']]){
+   const button=projectButton('',()=>{columnFilter=name;columnLimit=25;section.replaceWith(columnSection(data));},'');button.setAttribute('aria-pressed',String(columnFilter===name));
+   button.append(document.createTextNode(label),el('span','pj-segment-count',number(groups[name].length)));filters.append(button);
+  }
+  head.append(title,filters);section.append(head);
+  const shown=groups[columnFilter].sort((a,b)=>Math.abs(b.change)-Math.abs(a.change)||(b.fresh+b.resolved+b.altered)-(a.fresh+a.resolved+a.altered)||a.column.localeCompare(b.column));
+  if(!shown.length){section.append(el('p','pj-empty-line',columnFilter==='all'?'No compared columns.':'No column changed in this way between the two runs.'));return section;}
+  const widest=Math.max(1,...shown.map(row=>Math.abs(row.change)));
+  const scroll=el('div','pj-ledger-scroll'),table=el('table','pj-table pj-compare-table'),headRow=el('tr');
+  const cellsShown=!!data.cells;
+  for(const [label,cls] of [['Column',''],['From','is-number'],['To','is-number'],['Change','pj-change-col'],...(cellsShown?[['New','is-number'],['Resolved','is-number'],['Values changed','is-number']]:[])]){const th=el('th',cls,label);th.scope='col';headRow.append(th);}
+  const thead=el('thead');thead.append(headRow);const tbody=el('tbody');
+  for(const row of shown.slice(0,columnLimit)){
+   const tr=el('tr'),name=el('td','pj-compare-column');
+   const first=row.fresh?'new':row.resolved?'resolved':row.altered?'changed':'same';
+   const pick=projectButton(row.column,()=>openRunCompare(compareState.base,compareState.target,first,row.column,0,true),'pj-name-button');
+   pick.title=cellsShown?`Show the cells of ${row.column}`:row.column;pick.disabled=!cellsShown;name.append(pick);
+   const bar=el('td','pj-change-col'),track=el('span','pj-change'),fill=el('i',row.change>0?'is-worse':'is-better');
+   fill.style.width=(Math.abs(row.change)*50/widest)+'%';track.append(fill);
+   const holder=el('div','pj-change-cell');holder.append(track,el('span','pj-change-value'+(row.change>0?' is-worse':row.change<0?' is-better':''),row.change?(row.change>0?'+':'−')+number(Math.abs(row.change)):'0'));bar.append(holder);
+   tr.append(name,el('td','is-number',row.base==null?'—':number(row.base)),el('td','is-number pj-figure',row.target==null?'—':number(row.target)),bar);
+   if(cellsShown)tr.append(el('td','is-number',number(row.fresh)),el('td','is-number',number(row.resolved)),el('td','is-number',number(row.altered)));
+   tbody.append(tr);
+  }
+  table.append(thead,tbody);scroll.append(table);section.append(scroll);
+  if(shown.length>columnLimit){const more=projectButton(`Show ${number(Math.min(25,shown.length-columnLimit))} more of ${number(shown.length-columnLimit)}`,()=>{columnLimit+=25;section.replaceWith(columnSection(data));},'subtle pj-more');section.append(more);}
+  return section;
+ }
+ // Cells: one tab per kind of change, filtered to a column when one is chosen above.
+ function cellSection(data){
+  const section=el('section','pj-compare-cells');section.setAttribute('aria-labelledby','pjCompareCells');
+  const head=el('div','pj-section-head'),title=el('h3','','Cells');title.id='pjCompareCells';head.append(title);section.append(head);
+  if(!data.cells){section.append(el('p','pj-empty-line',data.cells_unavailable));return section;}
+  const cells=data.cells,column=cells.column;
+  head.append(el('span','pj-section-note',column?`In ${column}`:'All columns'));
+  const tabs=el('div','pj-compare-tabs');tabs.setAttribute('role','tablist');
+  for(const [status,label] of cellTabs){
+   const count=column?(cells.by_column[column]?.[status]||0):cells.totals[status];
+   const tab=projectButton('',()=>openRunCompare(compareState.base,compareState.target,status,column),'pj-compare-tab');
+   tab.setAttribute('role','tab');tab.setAttribute('aria-selected',String(cells.status===status));
+   tab.append(document.createTextNode(label),el('span','pj-segment-count',number(count)));tabs.append(tab);
+  }
+  section.append(tabs);
+  if(column){const chip=projectButton('',()=>openRunCompare(compareState.base,compareState.target,cells.status,''),'pj-filter-chip');chip.append(document.createTextNode('Column: '+column),lucideNode('x'));chip.setAttribute('aria-label','Show all columns');section.append(chip);}
+  if(!cells.cells.length){section.append(el('p','pj-empty-line',{new:'No new mismatches.',resolved:'Nothing was resolved.',changed:'No mismatch changed its values.',same:'No mismatch carried over unchanged.'}[cells.status]));return section;}
+  const pair=values=>{const box=el('span','pj-pair');if(!values){box.append(el('span','pj-pair-none',cells.status==='new'?'Matched':'Now matches'));return box;}
+   const [left,right]=values;box.append(el('span','pj-v is-left',left===''?'(empty)':left),lucideNode('arrow-right'),el('span','pj-v is-right',right===''?'(empty)':right));box.title=`File 1: ${left}\nFile 2: ${right}`;return box;};
+  const scroll=el('div','pj-ledger-scroll'),table=el('table','pj-table pj-cell-table'),headRow=el('tr');
+  for(const label of ['Key','Column','From run (File 1 → File 2)','To run (File 1 → File 2)']){const th=el('th','',label);th.scope='col';headRow.append(th);}
+  const thead=el('thead');thead.append(headRow);const tbody=el('tbody');
+  for(const cell of cells.cells){
+   const tr=el('tr'),key=Array.isArray(cell.key)?cell.key.join(' · '):String(cell.key);
+   const before=el('td'),after=el('td');before.append(pair(cell.base));after.append(pair(cell.target));
+   tr.append(el('td','pj-mono',key),el('td','pj-mono',cell.column),before,after);tbody.append(tr);
+  }
+  table.append(thead,tbody);scroll.append(table);section.append(scroll);
+  if(cells.total>cells.page_size){
+   const pager=el('div','pj-pager'),range=el('span','pj-section-note',`${number(cells.offset+1)}–${number(Math.min(cells.offset+cells.page_size,cells.total))} of ${number(cells.total)}`);
+   const previous=projectButton('Previous',()=>openRunCompare(compareState.base,compareState.target,cells.status,column,Math.max(0,cells.offset-cells.page_size),true));previous.prepend(lucideNode('arrow-left'));previous.disabled=cells.offset===0;
+   const next=projectButton('Next',()=>openRunCompare(compareState.base,compareState.target,cells.status,column,cells.offset+cells.page_size,true));next.append(lucideNode('arrow-right'));next.disabled=cells.offset+cells.page_size>=cells.total;
+   pager.append(range,previous,next);section.append(pager);
+  }
+  return section;
+ }
+
  selectProject=async function(identity,offset=0){
   activeProject=identity;projectOffset=offset;renderProjectLibrary();
   const detail=await api('/api/projects/'+identity+'?offset='+offset);if(activeProject!==identity)return;projectDetail=detail;
   const dashboard=$('projectDashboard');dashboard.replaceChildren();
   const runs=detail.trend||[];
   // Change against the previous completed run, in finishing order.
-  const deltas=new Map();runs.forEach((run,index)=>{if(index)deltas.set(run.id,(run.changed_cells||0)-(runs[index-1].changed_cells||0));});
+  const deltas=new Map();runs.forEach((run,index)=>{if(index)deltas.set(run.id,{change:(run.changed_cells||0)-(runs[index-1].changed_cells||0),previous:runs[index-1].id});});
   // A div, not a header element: the page has global styles for header elements.
   const header=el('div','pj-head');const titles=el('div','pj-titles');
   titles.append(el('h2','',detail.project.name),el('p','pj-description',detail.project.description||'Group comparisons of the same data to follow their differences and sign-off.'));
   const actions=el('div','pj-head-actions');actions.id='projectAttachAction';
   const activity=projectButton('Activity',openActivity);activity.prepend(lucideNode('history'));
   const attach=projectButton('Attach comparison',()=>showProjectCandidates(),'primary');attach.prepend(lucideNode('plus'));
-  actions.append(activity,attach);header.append(titles,actions);
+  const compare=projectButton('Compare runs',()=>openRunCompare());compare.prepend(lucideNode('git-compare-arrows'));
+  compare.hidden=runs.length<2;compare.title='See what changed between two runs';
+  actions.append(activity,compare,attach);header.append(titles,actions);
   const approved=detail.audit_counts.Approved||0,latest=detail.latest;
   const summary=el('p','pj-summary');
   summary.textContent=!detail.total?'No comparisons attached yet.':
@@ -2206,4 +2355,262 @@ loadDiagnostics=async function(){
   top.append(el('h2','','Projects'),refresh,create);
   library.prepend(top);panelTitle.hidden=true;
  }
+}
+
+// Recompare dialog, laid out like the Keys & scope page and the Comparison rules drawer. Apply sits in the header
+// beside close, the plan reads under the header, each tab shows its count and a summary strip repeats the Keys &
+// scope page. Keys & scope edits the draft with searchable checkbox lists, overrides are added inline, and
+// comparison rules are built inline with the drawer's own two-step builder, which moves into the tab while the
+// dialog is open and back into the drawer when it closes. The draft, plan check and Apply flow are unchanged.
+{
+ const dialog=$('rerunDialog'),heading=dialog.querySelector('.drawer-heading'),tabs=dialog.querySelector('.rerun-tabs'),start=$('startRerun'),close=$('closeRerun');
+ const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;};
+ const plural=(count,word)=>`${number(count)} ${word}${count===1?'':'s'}`;
+ dialog.classList.add('rc');
+ // Header: title with its icon, then Apply and close on the right.
+ const titleBox=heading.firstElementChild,titleRow=el('div','rc-title');
+ titleRow.append(lucideNode('list-restart'),$('rerunTitle'));titleBox.prepend(titleRow);
+ titleBox.querySelector('p').textContent='Change exclusions, overrides or rules. Your original results are kept.';
+ const actions=el('div','rc-actions');actions.append(start,close);heading.append(actions);
+ // The plan says what Apply will do; errors read right under it.
+ const plan=el('div','rc-plan');plan.append(lucideNode('info'),$('reviewPlan'));heading.after(plan);plan.after($('rerunError'));
+ const counts={};
+ for(const name of ['overrides','rules']){counts[name]=el('span','rc-count');$('rerun-tab-'+name).append(counts[name]);}
+ const summary=el('div','ds-scope-summary rc-summary');tabs.after(summary);
+ dialog.querySelector('.rerun-footer').hidden=true;
+
+ const card=(title,sub,extra)=>{const box=el('section','rc-card'),head=el('div','rc-card-head'),text=el('div');text.append(el('h3','',title));if(sub)text.append(el('p','',sub));head.append(text);if(extra)head.append(extra);box.append(head);return box;};
+ const iconButton=(icon,label,danger)=>{const button=el('button','rc-icon-btn'+(danger?' is-danger':''));button.type='button';button.title=label;button.setAttribute('aria-label',label);button.append(lucideNode(icon));return button;};
+ const searchBox=(placeholder,label)=>{const wrap=el('div','rc-search'),input=el('input');input.type='search';input.placeholder=placeholder;input.setAttribute('aria-label',label);wrap.append(lucideNode('search'),input);return {wrap,input};};
+ const valueColumns=()=>job.columns.filter(column=>!rerunDraft.keys.includes(column)&&!rerunDraft.ignore_columns.includes(column));
+ // Comma-separated keys, or JSON tuples for composite keys; -1 when the JSON cannot be read.
+ function keyCount(text){
+  const value=(text||'').trim();if(!value)return 0;
+  if(value.startsWith('[')){for(const candidate of [value,'['+value+']']){try{const parsed=JSON.parse(candidate);if(Array.isArray(parsed)&&parsed.every(Array.isArray))return parsed.length;}catch(error){}}return -1;}
+  return value.split(',').filter(part=>part.trim()).length;
+ }
+ // Rules with identical settings read as one row: "balance, credit_limit · Number · ± 0.01".
+ function ruleGroups(rules){
+  const groups=new Map();
+  for(const rule of rules){const {column,...settings}=rule,id=JSON.stringify(Object.keys(settings).sort().map(name=>[name,settings[name]]));if(!groups.has(id))groups.set(id,{settings:rule,columns:[]});groups.get(id).columns.push(column);}
+  return [...groups.values()];
+ }
+
+ function syncSummary(){
+  if(!rerunDraft||!job?.columns)return;
+  summary.replaceChildren();
+  const block=(label,content)=>{const item=el('div','ds-summary-item');item.append(el('span','ds-summary-label',label),content);summary.append(item);};
+  const keyLine=el('span','ds-summary-value');
+  rerunDraft.keys.forEach((key,i)=>{if(i)keyLine.append(el('span','ds-summary-plus','+'));keyLine.append(el('span','ds-chip is-key',key));});
+  keyLine.append(lucideNode('lock','rc-lock'));block('Match on',keyLine);
+  block('Ignored',el('strong','',plural(rerunDraft.ignore_columns.length,'column')));
+  const containers=rerunDraft.ignore_container_ids.length,manual=keyCount(rerunDraft.ignore_keys);
+  const parts=[containers&&plural(containers,'container'),manual>0&&plural(manual,'typed key')].filter(Boolean);
+  block('Excluded keys',el('strong','',parts.join(' + ')||'None'));
+  block('Compared',el('strong','',`${number(valueColumns().length)} of ${number(job.columns.length)} columns`));
+  counts.overrides.textContent=rerunDraft.value_overrides.length||'';
+  counts.rules.textContent=ruleGroups(rerunDraft.comparison_rules).length||'';
+ }
+
+ // Keys & scope.
+ let ignorePage=0;const PAGE=100;
+ function renderScope(){
+  const box=$('rerun-scope');box.replaceChildren();
+  // Match keys: one compact row, so the lists below get the height.
+  const locked=el('span','rc-locked');locked.append(lucideNode('lock'),document.createTextNode('Locked'));
+  locked.title='Keys are fixed for a recompare. Start a new comparison to change them.';
+  const keysCard=el('section','rc-card rc-wide rc-keys'),keyChips=el('div','rc-chips');
+  for(const key of rerunDraft.keys)keyChips.append(el('span','ds-chip is-key',key));
+  keysCard.append(el('h3','','Match keys'),keyChips,el('p','','Fixed for a recompare. Start a new comparison to change them.'),locked);
+  // Ignore columns: a searchable, paged checkbox list.
+  const ignoredPill=el('span','rc-pill is-accent'),ignoreCard=card('Ignore columns','Left out of the value comparison.',ignoredPill);
+  const search=searchBox('Find a column','Find a column to ignore'),list=el('div','rc-check-list');list.setAttribute('role','group');list.setAttribute('aria-label','Columns to ignore');
+  const pager=el('div','rc-pager'),range=el('span'),buttons=el('div'),previous=el('button','subtle','Previous'),next=el('button','subtle','Next');
+  previous.type=next.type='button';buttons.append(previous,next);pager.append(range,buttons);
+  ignoreCard.append(search.wrap,list,pager);
+  function paint(){
+   const query=search.input.value.toLowerCase(),shown=job.columns.filter(column=>!rerunDraft.keys.includes(column)&&column.toLowerCase().includes(query));
+   const pages=Math.max(1,Math.ceil(shown.length/PAGE));ignorePage=Math.min(ignorePage,pages-1);
+   list.replaceChildren();
+   for(const column of shown.slice(ignorePage*PAGE,ignorePage*PAGE+PAGE)){
+    const label=el('label','rc-check'),input=el('input');input.type='checkbox';input.value=column;input.checked=rerunDraft.ignore_columns.includes(column);label.classList.toggle('is-selected',input.checked);
+    input.addEventListener('change',()=>{
+     const ignored=new Set(rerunDraft.ignore_columns);if(input.checked)ignored.add(column);else ignored.delete(column);
+     rerunDraft.ignore_columns=job.columns.filter(name=>ignored.has(name));label.classList.toggle('is-selected',input.checked);
+     ignoredPill.textContent=`${number(rerunDraft.ignore_columns.length)} ignored`;syncSummary();
+    });
+    label.append(input,el('span','',column));list.append(label);
+   }
+   if(!shown.length)list.append(el('p','rc-empty','No columns match this search.'));
+   range.textContent=shown.length?`${number(ignorePage*PAGE+1)}–${number(Math.min(shown.length,ignorePage*PAGE+PAGE))} of ${number(shown.length)}`:'No columns';
+   previous.disabled=ignorePage===0;next.disabled=ignorePage>=pages-1;
+   ignoredPill.textContent=`${number(rerunDraft.ignore_columns.length)} ignored`;
+  }
+  // Searching filters the list only; it is not a draft change, so it does not re-check the plan.
+  search.input.addEventListener('input',event=>{event.stopPropagation();ignorePage=0;paint();});
+  previous.addEventListener('click',()=>{ignorePage--;paint();list.scrollTop=0;});next.addEventListener('click',()=>{ignorePage++;paint();list.scrollTop=0;});
+  paint();
+  // Exclude keys: typed keys and saved containers.
+  const excludedPill=el('span','rc-pill'),excludeCard=card('Exclude keys','Rows with these keys are skipped in both files.',excludedPill);
+  const typed=el('label','rc-field'),area=el('textarea'),hint=el('small','rc-hint');
+  area.rows=3;area.value=rerunDraft.ignore_keys||'';area.placeholder='AC0000017, AC0000233';area.spellcheck=false;
+  typed.append(el('span','','Keys to exclude'),area,hint);
+  const containerList=el('div','rc-containers');
+  function syncExcluded(){
+   const manual=keyCount(rerunDraft.ignore_keys),chosen=keyContainers.filter(item=>rerunDraft.ignore_container_ids.includes(item.id));
+   hint.textContent=manual<0?'Check the JSON format for composite keys.':manual?`${plural(manual,'key')} typed. Comma separated; JSON tuples for composite keys.`:'Comma separated. Use JSON tuples for composite keys.';
+   hint.classList.toggle('is-error',manual<0);
+   const total=Math.max(0,manual)+chosen.reduce((sum,item)=>sum+(item.keys?.length??Math.max(0,keyCount(item.values))),0);
+   excludedPill.textContent=plural(total,'key');syncSummary();
+  }
+  area.addEventListener('input',()=>{rerunDraft.ignore_keys=area.value;syncExcluded();});
+  for(const item of keyContainers){
+   const row=el('label','rc-container'),input=el('input'),text=el('span','rc-container-text'),size=item.keys?.length??Math.max(0,keyCount(item.values));
+   input.type='checkbox';input.checked=rerunDraft.ignore_container_ids.includes(item.id);row.classList.toggle('is-selected',input.checked);
+   text.append(el('strong','',item.name),el('small','',item.reason||''));
+   input.addEventListener('change',()=>{rerunDraft.ignore_container_ids=rerunDraft.ignore_container_ids.filter(id=>id!==item.id);if(input.checked)rerunDraft.ignore_container_ids.push(item.id);row.classList.toggle('is-selected',input.checked);syncExcluded();});
+   row.append(input,text,el('span','rc-container-size',plural(size,'key')));containerList.append(row);
+  }
+  if(!keyContainers.length)containerList.append(el('p','rc-empty','No saved containers. Create them on the Key containers page.'));
+  excludeCard.append(typed,el('span','rc-field-label','Saved containers'),containerList);
+  syncExcluded();
+  box.append(keysCard,ignoreCard,excludeCard);
+ }
+
+ // Value overrides: add inline, list below.
+ let overrideColumn;
+ function fillOverrideColumns(){
+  if(!overrideColumn)return;const previous=overrideColumn.value;overrideColumn.replaceChildren(new Option('Choose a column',''));
+  for(const column of valueColumns())overrideColumn.add(new Option(column,column));
+  if([...overrideColumn.options].some(option=>option.value===previous))overrideColumn.value=previous;
+ }
+ function renderOverrides(){
+  const box=$('rerun-overrides');box.replaceChildren();
+  const addCard=card('Add a value override','Treat one pair of values as equal in a column, for example ACTIVE in File 1 and A in File 2.');
+  const form=el('div','rc-override-form'),field=(label,control)=>{const wrap=el('label','rc-field');wrap.append(el('span','',label),control);return wrap;};
+  overrideColumn=el('select');const left=el('input'),right=el('input'),add=el('button','subtle rc-add'),note=el('p','rc-note');
+  left.placeholder='Value in File 1';right.placeholder='Value in File 2';add.type='button';add.append(lucideNode('plus'),document.createTextNode('Add'));
+  const arrow=el('span','rc-arrow');arrow.append(lucideNode('arrow-right'));
+  form.append(field('Column',overrideColumn),field('File 1 value',left),arrow,field('File 2 value',right),add);
+  // Typing in the form is not a draft change until the override is added.
+  form.addEventListener('input',event=>event.stopPropagation());form.addEventListener('change',event=>event.stopPropagation());
+  add.addEventListener('click',()=>{
+   const rule={column:overrideColumn.value,left:left.value,right:right.value};note.textContent='';note.dataset.tone='error';
+   if(!rule.column){note.textContent='Choose a column first.';overrideColumn.focus();return;}
+   if(rerunDraft.value_overrides.some(item=>item.column===rule.column&&item.left===rule.left&&item.right===rule.right)){note.textContent='This override is already in the list.';return;}
+   rerunDraft.value_overrides.push(rule);left.value=right.value='';note.dataset.tone='success';note.textContent=`Override added to ${rule.column}.`;
+   renderOverrideRows();syncSummary();scheduleReviewPlan();left.focus();
+  });
+  addCard.append(form,note);fillOverrideColumns();
+  const listPill=el('span','rc-pill is-accent'),listCard=card('Overrides in this recompare','',listPill),list=el('div','rc-table-wrap');list.id='rerun-overrides-list';list.dataset.pill='';
+  listCard.append(list,el('p','rc-footnote','Overrides apply only to compared value columns. Keys and ignored columns are never changed.'));
+  box.append(addCard,listCard);renderOverrideRows();
+ }
+ function renderOverrideRows(){
+  const list=$('rerun-overrides-list');if(!list||!rerunDraft)return;list.replaceChildren();
+  const pill=list.closest('.rc-card')?.querySelector('.rc-pill');if(pill)pill.textContent=plural(rerunDraft.value_overrides.length,'override');
+  if(!rerunDraft.value_overrides.length){list.append(el('p','rc-empty','No overrides yet. Add one above to accept a known value difference.'));return;}
+  const table=el('table','rc-table'),head=el('tr');
+  for(const label of ['Column','File 1 value','','File 2 value',''])head.append(el('th','',label));
+  table.append(el('thead'));table.tHead.append(head);const body=el('tbody');table.append(body);
+  const value=(text,side)=>{const span=el('span','rc-value is-'+side+(text===''?' is-empty':''),text===''?'(empty)':text);span.title=text;return span;};
+  rerunDraft.value_overrides.forEach((rule,index)=>{
+   const row=el('tr'),name=el('td','rc-mono',rule.column),from=el('td'),arrow=el('td','rc-arrow-cell'),to=el('td'),remove=el('td','rc-cell-action');
+   from.append(value(rule.left,'before'));arrow.append(lucideNode('arrow-right'));to.append(value(rule.right,'after'));
+   const button=iconButton('trash-2','Remove override for '+rule.column,true);
+   button.addEventListener('click',()=>{rerunDraft.value_overrides.splice(index,1);renderOverrideRows();syncSummary();scheduleReviewPlan();});
+   remove.append(button);row.append(name,from,arrow,to,remove);body.append(row);
+  });
+  list.append(table);
+ }
+
+ // Comparison rules: the drawer's builder, laid out as two step cards inside the tab.
+ const builder=document.querySelector('#comparisonRulesDrawer .comparison-rule-builder');
+ let builderHome=null,builderChildren=null,editing=null,backup=null,eligibleKey='';
+ const ruleNote=el('p','rc-note');
+ const inline=()=>dialog.open&&!!builder?.closest('#rerunDialog');
+ function renderRulesTab(){
+  const box=$('rerun-rules');box.replaceChildren();box.classList.add('ds-drawer');
+  const pill=el('span','rc-pill is-accent'),listCard=card('Rules in this recompare','',pill),list=el('div','rc-rule-list');list.id='rerun-rules-list';
+  listCard.append(list,ruleNote);box.append(listCard);
+  if(builder){
+   if(!builderHome){builderHome={parent:builder.parentNode,next:builder.nextSibling};builderChildren=[...builder.children];}
+   const heads=builderChildren.filter(child=>child.classList.contains('ds-step-head')),split=builderChildren.indexOf(heads[1]);
+   const first=el('div','rc-step'),second=el('div','rc-step');
+   first.append(...builderChildren.slice(0,split<0?builderChildren.length:split));if(split>=0)second.append(...builderChildren.slice(split));
+   builder.replaceChildren(first,second);box.append(builder);
+  }
+  eligibleKey='';prepareRules();
+ }
+ // Same set-up as opening the drawer for a recompare, without opening it.
+ function prepareRules(){
+  ruleEditorMode='rerun';
+  if(!builder)return renderRuleRows();
+  const allowed=eligibleRuleColumns(),key=allowed.join('\u0001');if(key===eligibleKey)return;eligibleKey=key;
+  ruleEditorDraft=structuredClone(rerunDraft.comparison_rules).filter(rule=>allowed.includes(rule.column));editing=backup=null;
+  const choices=$('ruleColumnChoices');choices.replaceChildren();
+  for(const column of allowed){const label=el('label'),input=el('input'),name=el('span','',column);input.type='checkbox';input.value=column;input.addEventListener('change',renderRuleColumnChoices);label.title=column;label.append(input,name);choices.append(label);}
+  $('ruleTargetScope').value='selected';$('ruleTargetScope').dispatchEvent(new Event('change'));$('ruleColumnSearch').value='';
+  clearRuleBuilder();renderRuleColumnChoices();ruleNote.textContent='';renderRuleEditor();
+  // Before the dialog opens the editor hook does not run, so the list is drawn here as well.
+  if(!inline()){rerunDraft.comparison_rules=structuredClone(ruleEditorDraft);renderRuleRows();}
+ }
+ function renderRuleRows(){
+  const list=$('rerun-rules-list');if(!list||!rerunDraft)return;list.replaceChildren();
+  const groups=ruleGroups(rerunDraft.comparison_rules),pill=list.closest('.rc-card')?.querySelector('.rc-pill');
+  if(pill)pill.textContent=plural(groups.length,'rule');
+  if(!groups.length){list.append(el('p','rc-empty','No rules yet. Values are compared as exact text.'));return;}
+  for(const group of groups){
+   const row=el('div','rc-rule-row'),columns=el('span','rc-rule-columns',group.columns.join(', ')),tags=el('span','rc-tags'),buttons=el('span','rc-row-actions');
+   columns.title=group.columns.join(', ');tags.setAttribute('aria-label',ruleDescription(group.settings));
+   for(const text of ruleChips(group.settings))tags.append(el('span','rc-tag',text));
+   const edit=iconButton('pencil','Edit rules for '+group.columns.join(', ')),remove=iconButton('trash-2','Remove rules for '+group.columns.join(', '),true);
+   edit.addEventListener('click',()=>editGroup(group));
+   remove.addEventListener('click',()=>{ruleEditorDraft=ruleEditorDraft.filter(rule=>!group.columns.includes(rule.column));renderRuleEditor();});
+   buttons.append(edit,remove);row.append(lucideNode('columns-3'),columns,tags,buttons);list.append(row);
+  }
+ }
+ // Editing loads a row's columns and settings into the builder; adding then replaces that row's rules.
+ function editGroup(group){
+  const rule=group.settings;clearRuleBuilder();
+  $('ruleTargetScope').value='selected';$('ruleTargetScope').dispatchEvent(new Event('change'));$('ruleColumnSearch').value='';
+  for(const input of $('ruleColumnChoices').querySelectorAll('input'))input.checked=group.columns.includes(input.value);
+  $('ruleTrim').checked=!!rule.trim;$('ruleCase').checked=!!rule.ignore_case;
+  const sameNumber=rule.tolerance!==undefined&&Number(rule.tolerance)===0;$('ruleNumericFormat').checked=sameNumber;$('ruleNumericFormat').dispatchEvent(new Event('change'));
+  if(rule.tolerance!==undefined&&!sameNumber)$('ruleTolerance').value=rule.tolerance;
+  if(rule.left_date_format){$('ruleDateLeft').value=rule.left_date_format;$('ruleDateRight').value=rule.right_date_format||'';}
+  if($('ruleType')&&rule.type){$('ruleType').value=rule.type;$('ruleType').dispatchEvent(new Event('change'));if(rule.scale!==undefined&&$('ruleScale'))$('ruleScale').value=rule.scale;if(rule.timezone&&$('ruleTimezone'))$('ruleTimezone').value=rule.timezone;}
+  renderRuleColumnChoices();editing=group.columns;
+  ruleNote.dataset.tone='info';ruleNote.textContent=`Editing ${group.columns.join(', ')}. Change the settings below, then add the rules again to replace them.`;
+  builder.scrollIntoView({block:'nearest',behavior:'smooth'});
+ }
+ // While editing, the row's old rules are set aside so the new settings replace them instead of merging.
+ $('addValueRule').addEventListener('click',()=>{if(!inline()||!editing)return;backup=ruleEditorDraft;ruleEditorDraft=ruleEditorDraft.filter(rule=>!editing.includes(rule.column));},{capture:true});
+ const baseRenderRuleEditor=renderRuleEditor;
+ renderRuleEditor=function(){
+  baseRenderRuleEditor();if(!inline())return;
+  editing=backup=null;rerunDraft.comparison_rules=structuredClone(ruleEditorDraft);renderRuleRows();syncSummary();scheduleReviewPlan();
+ };
+ const baseRuleStatus=ruleStatus;
+ ruleStatus=function(text,tone='error'){
+  baseRuleStatus(text,tone);if(!inline())return;
+  if(tone==='error'&&backup){ruleEditorDraft=backup;backup=null;}
+  ruleNote.dataset.tone=tone;ruleNote.textContent=text.replace(' Apply to save this configuration.',' They are part of this recompare.');
+ };
+ dialog.addEventListener('close',()=>{
+  if(!builderHome||!builder.closest('#rerunDialog'))return;
+  builder.replaceChildren(...builderChildren);builderHome.parent.insertBefore(builder,builderHome.next);ruleEditorMode='setup';editing=backup=null;
+ });
+
+ // The older renderers now draw into the new layout.
+ const baseRenderRows=renderRerunRows;
+ renderRerunRows=function(kind){if(!$('rerun-overrides-list')?.classList.contains('rc-table-wrap'))return baseRenderRows(kind);if(kind==='overrides')renderOverrideRows();else renderRuleRows();syncSummary();};
+ renderRerunRuleSummary=function(){renderRuleRows();syncSummary();};
+ const baseShowTab=showRerunTab;
+ // The summary strip is shown on Value overrides only; Keys & scope and Comparison rules show the same facts in their cards.
+ showRerunTab=function(tab){baseShowTab(tab);summary.hidden=tab!=='overrides';if(!rerunDraft||!dialog.open)return;if(tab==='overrides')fillOverrideColumns();if(tab==='rules')prepareRules();};
+ // Built just before the dialog opens, so the opening animation already has the final size.
+ const show=dialog.showModal;
+ dialog.showModal=function(){if(rerunDraft&&job?.columns){ignorePage=0;renderScope();renderOverrides();renderRulesTab();syncSummary();}return show.call(dialog);};
+ dialog.addEventListener('change',syncSummary);
 }

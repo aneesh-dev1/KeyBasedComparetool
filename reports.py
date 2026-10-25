@@ -13,10 +13,7 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 11
-
-STYLE = '''body{font:15px system-ui,sans-serif;color:#004364;background:#f7f9fa;margin:40px auto;max-width:1200px;padding:0 24px}h1{font-size:32px}a{color:#007b99}table{border-collapse:collapse;width:100%;background:white;margin:20px 0}th,td{padding:12px;border:1px solid #dce5eb;text-align:left;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}th{background:#e6f6fa}nav{display:flex;gap:24px}p{line-height:1.6}'''
-
+REPORT_VERSION = 12
 
 def summary_rows(summary):
     yield ['Metric', 'Value']
@@ -27,12 +24,6 @@ def summary_rows(summary):
     yield ['Column', 'Changed cells']
     for name, count in summary['changed_cells_by_column'].items():
         yield [name, count]
-
-
-def html_start(title):
-    logo = base64.b64encode((Path(__file__).parent / 'web/assets/transunion-logo.svg').read_bytes()).decode('ascii')
-    brand = f'<header style="padding:0 0 24px;border-bottom:4px solid #fcd800;margin-bottom:32px"><img src="data:image/svg+xml;base64,{logo}" alt="TransUnion" width="201" height="53"></header>'
-    return '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>' + html.escape(title) + '</title><style>' + STYLE + '</style><body>' + brand + '<h1>' + html.escape(title) + '</h1>'
 
 
 def html_row(row, heading=False):
@@ -100,25 +91,197 @@ def match_bands(summary):
     return bands
 
 
-LEADERSHIP_STYLE = '''
-body{max-width:1240px;margin:0 auto;background:#f4f7f9;padding:36px;color:#004364;font:14px system-ui,sans-serif}
-body>header{display:flex;align-items:center;justify-content:space-between;background:white;padding:22px!important;margin-bottom:24px!important;border-radius:12px}body>h1{display:none}
-.hero{background:#004364;color:white;border-radius:12px;padding:30px;border-bottom:5px solid #fcd800;margin-bottom:22px}.hero h1{font-size:34px;margin:8px 0}.hero p{color:#d6edf4}.eyebrow{text-transform:uppercase;letter-spacing:2px;font-size:11px;font-weight:700}
-.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:24px 0}.card,section{background:white;border:1px solid #dce5eb;border-radius:12px;padding:22px;margin-bottom:22px}.card{margin:0;border-top:4px solid #00a6ca}.card strong{display:block;font-size:30px;margin:10px 0}.card small,.muted{color:#59717d}
-h2{font-size:21px;margin:0 0 15px}h3{font-size:16px}.overview{display:grid;grid-template-columns:1fr 1fr;gap:24px}.chart-wrap{display:flex;align-items:center;gap:26px;flex-wrap:wrap}.pie{width:220px;max-width:100%;height:auto}.legend{list-style:none;padding:0;flex:1}.legend li{padding:10px 0;border-bottom:1px solid #e5edf0;display:flex;gap:10px;align-items:center}.swatch{width:12px;height:12px;border-radius:50%;flex-shrink:0}.legend strong{margin-left:auto}.source{overflow-wrap:anywhere;padding:10px 0}.source strong{display:block}.callout{background:#fff9df;border-left:5px solid #e5bd25}.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{background:#e9f6f7;border:1px solid #c7e8eb;padding:7px 10px;border-radius:6px;color:#006779}.table-wrap{overflow:auto}table{margin:12px 0;font-size:13px}th{background:#004364;color:white;white-space:normal}td{border-width:0 0 1px;padding:11px}tr:nth-child(even){background:#f6fafb}.count{font-variant-numeric:tabular-nums}.container{border:1px solid #e5d79c;background:#fffdf3;border-radius:9px;padding:18px;margin:12px 0}.container summary{cursor:pointer;font-weight:650}input{font:inherit;border:1px solid #afc8d2;border-radius:6px;padding:10px;width:300px;max-width:100%}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}.print{background:#007b99;color:white;border:0;border-radius:6px;padding:10px 18px;cursor:pointer}footer{padding:12px 0 30px;font-size:12px;color:#59717d}.rate-note{font-size:12px}.mismatch-sample{border:1px solid #dce5eb;border-radius:8px;margin:10px 0;padding:14px}.sample-dropdown{width:min(650px,70vw);min-width:260px}.mismatch-sample summary{cursor:pointer;font-weight:650;overflow-wrap:anywhere}.sample-before{background:#fff0ed}.sample-after{background:#eaf7f3}.badge{font-size:12px;border-radius:5px;padding:5px 9px;background:#e9f6f7;display:inline-block}
-@media(max-width:850px){body{padding:16px}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.overview{grid-template-columns:1fr}.hero h1{font-size:28px}}
-.report-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.report-tabs button{font:inherit;font-size:12px;border:1px solid #b6ced8;background:white;color:#004364;border-radius:7px;padding:10px 14px;cursor:pointer}.report-tabs button[aria-pressed=true]{background:#004364;color:white}.report-tabs button:focus-visible{outline:3px solid #00a6ca;outline-offset:2px}
-@media screen{body.compact-report{box-sizing:border-box;max-width:none;height:100dvh;padding:18px 24px;display:flex;flex-direction:column;overflow:hidden}.compact-report>header{padding:10px 16px!important;margin-bottom:10px!important;flex-shrink:0}.compact-report main{display:flex;flex-direction:column;flex:1;min-height:0}.compact-report .hero{padding:14px 20px;margin:0}.compact-report .hero h1{font-size:25px;margin:4px 0}.compact-report .hero p{margin:4px 0}.compact-report .cards{gap:10px;margin:12px 0}.compact-report .card{padding:12px 16px}.compact-report .card strong{font-size:25px;margin:5px 0}.compact-report .report-panels{min-height:0;flex:1;overflow:auto;overscroll-behavior:contain}.compact-report .report-inactive{display:none!important}.compact-report section{padding:18px;margin-bottom:0}.compact-report footer{font-size:10px;padding:8px 0 0}.compact-report .overview{gap:14px}.compact-report .pie{width:170px}.compact-report .legend li{padding:6px 0}.compact-report th{position:sticky;top:0}.compact-report .table-wrap{max-width:100%}}
-@media screen and (max-width:700px){body.compact-report{padding:12px;min-height:100dvh;height:auto;overflow:auto}.compact-report .report-panels{max-height:65dvh;flex:auto}.compact-report .hero h1{font-size:22px}.compact-report .report-tabs button{padding:8px}.compact-report .card{padding:10px}}
-@media print{.report-tabs{display:none}.report-panels{overflow:visible!important}.report-inactive{display:block!important}}
-@media print{body{background:white;padding:0;font-size:11px}.print,input,.search-label{display:none!important}.hero,th,.swatch,.chip{-webkit-print-color-adjust:exact;print-color-adjust:exact}section{break-inside:auto}.card,.container,.hero{break-inside:avoid}.cards{gap:8px}.card{padding:12px}.card strong{font-size:23px}.table-wrap{overflow:visible}tr{break-inside:avoid}thead{display:table-header-group}[hidden]{display:table-row!important}a{color:inherit;text-decoration:none}}
+REPORT_STYLE = '''
+:root{--ink:#002b40;--ink-2:#3d5566;--muted:#5f7682;--line:#d9e3e9;--line-soft:#eaf0f3;--canvas:#eef3f6;--paper:#fff;--cyan:#00a6ca;--link:#007b99;--yellow:#fcd800;--yellow-soft:#fff8d1;
+--band-perfect:#c4dfe7;--band-low:#00a6ca;--band-medium:#e9b824;--band-high:#ce6256;
+--key-equal:#007b99;--key-changed:#d7922b;--key-left:#004364;--key-right:#69cbd8;
+--s1:#0089ab;--s2:#eb6834;--s3:#1baf7a;--s4:#6250d6;--s5:#e87ba4;--s6:#c98500;--s-other:#a8bac4;
+--sans:"Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,"Helvetica Neue",Arial,sans-serif}
+*{box-sizing:border-box}
+.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+html{scroll-behavior:smooth;scroll-padding-top:64px}
+body{margin:0;background:var(--canvas);color:var(--ink);font:15px/1.55 var(--sans);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+a{color:var(--link)}
+:focus-visible{outline:3px solid var(--cyan);outline-offset:2px}
+.page{max-width:1160px;margin:0 auto;padding:0 32px 48px}
+.masthead{background:var(--paper);border-bottom:4px solid var(--yellow)}
+.masthead-inner{max-width:1160px;margin:0 auto;padding:22px 32px 26px;display:grid;grid-template-columns:auto 1fr auto;gap:8px 28px;align-items:center}
+.masthead img{display:block;width:150px;max-width:100%;height:auto}
+.masthead h1{margin:0;font-size:22px;line-height:1.2;font-weight:600;padding-left:28px;border-left:1px solid var(--line)}
+.masthead time{display:block;font-size:13px;color:var(--muted);font-weight:400;margin-top:2px}
+.print{font:inherit;font-size:14px;font-weight:600;background:var(--ink);color:#fff;border:0;border-radius:6px;padding:10px 16px;cursor:pointer;white-space:nowrap}
+.print:hover{background:#004364}
+.files{grid-column:1/-1;margin:14px 0 0;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;font-size:14px;color:var(--ink-2)}
+.files strong{color:var(--ink);font-weight:600;overflow-wrap:anywhere}
+.files .vs{color:var(--muted)}
+.files .keys{margin-left:auto;color:var(--muted)}
+.files .keys strong{color:var(--ink)}
+.toc{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--canvas) 92%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
+.toc ol{max-width:1160px;margin:0 auto;padding:0 32px;list-style:none;display:flex;gap:4px;overflow-x:auto;scrollbar-width:none}
+.toc a{display:block;padding:13px 12px 11px;font-size:13.5px;font-weight:600;color:var(--muted);text-decoration:none;border-bottom:3px solid transparent;white-space:nowrap}
+.toc a:hover{color:var(--ink)}
+.toc a[aria-current=true]{color:var(--ink);border-bottom-color:var(--cyan)}
+.toc .count{font-weight:400;margin-left:4px}
+.block{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:28px 32px;margin-top:20px}
+.block>h2,.split h2{margin:0 0 6px;font-size:19px;line-height:1.3;font-weight:600}
+.lede{margin:0 0 20px;color:var(--muted);font-size:14px;max-width:72ch}
+.verdict{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:8px 48px;align-items:end;padding-bottom:26px;margin-bottom:24px;border-bottom:1px solid var(--line-soft)}
+.rate{margin:0;font-size:60px;line-height:1;font-weight:300;letter-spacing:-.02em;white-space:nowrap}
+.rate small{display:block;white-space:normal;font-size:14px;letter-spacing:0;font-weight:400;color:var(--muted);margin-top:10px}
+.verdict-text{margin:0;font-size:17px;line-height:1.5;max-width:60ch;color:var(--ink-2)}
+.verdict-text strong{color:var(--ink);font-weight:600}
+.state{display:inline-flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;font-weight:600;color:var(--ink)}
+.state::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--band-high)}
+.state.is-clean::before{background:var(--key-equal)}
+.state.is-empty::before{background:var(--s-other)}
+.barcode-head{display:flex;justify-content:space-between;gap:16px;align-items:baseline;flex-wrap:wrap}
+.barcode-head h3{margin:0;font-size:15px;font-weight:600}
+.barcode-head p{margin:0;font-size:13px;color:var(--muted)}
+.barcode{display:block;width:100%;height:56px;margin:12px 0 10px;border-radius:4px;background:var(--line-soft)}
+.barcode rect{shape-rendering:crispEdges}
+.barcode rect[data-row]{cursor:pointer}
+.barcode:hover rect{opacity:.55}.barcode rect:hover{opacity:1}
+.b0{fill:var(--band-perfect)}.b1{fill:var(--band-low)}.b2{fill:var(--band-medium)}.b3{fill:var(--band-high)}
+.bands{display:flex;flex-wrap:wrap;gap:6px 22px;margin:0;padding:0;list-style:none;font-size:13px;color:var(--ink-2)}
+.bands li{display:flex;align-items:center;gap:7px}
+.bands b{color:var(--ink);font-weight:600}
+.dot{width:10px;height:10px;border-radius:3px;flex:none;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.dot.b0{background:var(--band-perfect)}.dot.b1{background:var(--band-low)}.dot.b2{background:var(--band-medium)}.dot.b3{background:var(--band-high)}
+.rate-note{margin:10px 0 0;font-size:12px;color:var(--muted)}
+.notice{margin-top:20px;padding:16px 20px;border-radius:8px;background:var(--yellow-soft);border-left:4px solid var(--yellow)}
+.notice h2{margin:0 0 4px;font-size:15px}.notice p{margin:4px 0;font-size:14px;color:var(--ink-2)}
+.keybar{display:flex;gap:2px;height:14px;margin:4px 0 18px;border-radius:4px;overflow:hidden;background:var(--line-soft)}
+.keybar span{min-width:3px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.k-equal{background:var(--key-equal)}.k-changed{background:var(--key-changed)}.k-left{background:var(--key-left)}.k-right{background:var(--key-right)}
+.figures{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;margin:0}
+.figures>div{padding:2px 20px 2px 0}
+.figures>div+div{padding-left:20px;border-left:1px solid var(--line-soft)}
+.figures dt{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.figures dt .dot{border-radius:2px}
+.figures dd{margin:6px 0 0;font-size:26px;font-weight:600;line-height:1.1}
+.figures dd small{display:block;font-size:12px;font-weight:400;color:var(--muted);margin-top:4px}
+.sources{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:22px 0 0;padding-top:18px;border-top:1px solid var(--line-soft);font-size:13.5px;color:var(--ink-2)}
+.sources p{margin:0}.sources strong{color:var(--ink);overflow-wrap:anywhere}
+.split{display:grid;grid-template-columns:240px minmax(0,1fr);gap:32px;align-items:center;padding-bottom:24px;margin-bottom:8px;border-bottom:1px solid var(--line-soft)}
+.donut{width:100%;max-width:240px;height:auto;display:block}
+.donut path,.donut circle.slice{stroke:#fff;stroke-width:1.5}
+.donut .total{font-size:24px;font-weight:600;fill:var(--ink)}
+.donut .total-label{font-size:10.5px;fill:var(--muted)}
+.s1{fill:var(--s1)}.s2{fill:var(--s2)}.s3{fill:var(--s3)}.s4{fill:var(--s4)}.s5{fill:var(--s5)}.s6{fill:var(--s6)}.s-other{fill:var(--s-other)}
+.dot.s1{background:var(--s1)}.dot.s2{background:var(--s2)}.dot.s3{background:var(--s3)}.dot.s4{background:var(--s4)}.dot.s5{background:var(--s5)}.dot.s6{background:var(--s6)}.dot.s-other{background:var(--s-other)}
+.slices{margin:12px 0 0;padding:0;list-style:none;max-width:520px}
+.slices li{display:grid;grid-template-columns:10px minmax(0,1fr) auto 64px;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-soft);font-size:14px}
+.slices li:last-child{border-bottom:0}
+.slices .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slices b{font-weight:600;text-align:right}
+.slices small{font-size:13px;color:var(--muted);text-align:right}
+.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:end;flex-wrap:wrap;margin:20px 0 4px}
+.toolbar h3{margin:0;font-size:15px;font-weight:600}
+.toolbar p{margin:2px 0 0;font-size:13px;color:var(--muted)}
+.search-label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted)}
+input[type=search]{font:inherit;font-size:14px;color:var(--ink);border:1px solid #b8cbd5;border-radius:6px;padding:8px 12px;width:260px;max-width:100%;background:#fff}
+.table-wrap{overflow:auto;max-width:100%}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{padding:10px 12px;text-align:left;vertical-align:top;overflow-wrap:anywhere;white-space:pre-wrap}
+thead th{position:sticky;top:0;background:#f3f7f9;color:var(--ink-2);font-size:12.5px;font-weight:600;border-bottom:1px solid var(--line);white-space:normal}
+tbody td{border-bottom:1px solid var(--line-soft)}
+td.num,th.num{text-align:right;white-space:nowrap}
+#columnStats{min-width:760px}
+#columnStats>tbody>tr{cursor:pointer;transition:background-color .15s}
+#columnStats>tbody>tr:hover{background:#f5fafc}
+#columnStats>tbody>tr>td:first-child{font-weight:600;color:var(--ink)}
+#columnStats>tbody>tr.flash{animation:flash 1.6s ease-out}
+@keyframes flash{from{background:#fff3a6}to{background:transparent}}
+.share{display:inline-block;width:72px;height:6px;margin-left:10px;border-radius:3px;background:var(--line-soft);vertical-align:middle;overflow:hidden}
+.share i{display:block;height:100%;width:0;background:var(--band-high);border-radius:3px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.share.b1 i{background:var(--band-low)}.share.b2 i{background:var(--band-medium)}
+.mismatch-sample summary{cursor:pointer;color:var(--link);font-weight:600;white-space:nowrap}
+.sample-dropdown{margin-top:10px;width:min(640px,70vw);min-width:260px}
+.sample-dropdown p{margin:0 0 8px;font-size:12.5px;color:var(--muted);white-space:normal}
+.sample-dropdown table{font-size:12.5px}
+.sample-before{background:#fdeeea}.sample-after{background:#e8f5ef}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.chip{font-size:13px;padding:4px 10px;border-radius:999px;background:#eef6f8;border:1px solid #d3e7ec;color:var(--ink-2)}
+.empty{margin:12px 0 0;color:var(--muted)}
+.callout{border-left:4px solid var(--yellow)}
+.container{border:1px solid var(--line);border-radius:8px;padding:14px 18px;margin:12px 0}
+.container h3{margin:0;font-size:15px}.container p{margin:4px 0 8px;color:var(--ink-2)}
+.container summary{cursor:pointer;color:var(--link);font-weight:600;font-size:14px}
+.defs{display:grid;grid-template-columns:minmax(160px,220px) minmax(0,1fr);gap:0;margin:16px 0 0;font-size:14px}
+.defs dt,.defs dd{padding:10px 0;border-top:1px solid var(--line-soft);margin:0}
+.defs dt{color:var(--muted);padding-right:16px}
+.defs dd{overflow-wrap:anywhere;color:var(--ink)}
+.scope-text p{max-width:78ch;color:var(--ink-2)}
+footer{max-width:1160px;margin:0 auto;padding:20px 32px 40px;font-size:12.5px;color:var(--muted)}
+@media (max-width:900px){.masthead img{width:120px}.print{font-size:13px;padding:8px 12px}.page,.masthead-inner,.toc ol,footer{padding-left:16px;padding-right:16px}.masthead-inner{grid-template-columns:auto 1fr}.masthead h1{grid-column:1/-1;border-left:0;padding-left:0}.print{grid-row:1;grid-column:2;justify-self:end}.files .keys{margin-left:0;flex-basis:100%}.block{padding:22px 18px}.verdict{grid-template-columns:1fr;gap:16px}.rate{font-size:48px}.figures{grid-template-columns:1fr 1fr;row-gap:18px}.figures>div:nth-child(3){padding-left:0;border-left:0}.split{grid-template-columns:1fr}.donut{max-width:200px;margin:0 auto}.sources{grid-template-columns:1fr}.defs{grid-template-columns:1fr}.defs dd{border-top:0;padding-top:0}}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}#columnStats>tbody>tr.flash{animation:none}}
+@media print{body{background:#fff;font-size:11.5px}.toc,.print,.search-label,.report-drawer{display:none!important}.masthead{border-bottom-width:3px}.block{border:0;border-top:1px solid var(--line);border-radius:0;padding:16px 0;margin:0;break-inside:auto}.verdict,.split,.notice,.container,tr{break-inside:avoid}.table-wrap{overflow:visible}thead{display:table-header-group}[hidden]{display:table-row!important}.chip[hidden]{display:inline-block!important}.barcode,.donut,.keybar{-webkit-print-color-adjust:exact;print-color-adjust:exact}a{color:inherit;text-decoration:none}#columnStats{min-width:0}}
 '''
+
+# Column slices use a fixed, colour-blind-checked order; the same one the results page pie uses.
+SLICE_LIMIT = 6
+
+
+def html_start(title):
+    assets = Path(__file__).parent / 'web/assets'
+    logo = base64.b64encode((assets / 'transunion-logo.svg').read_bytes()).decode('ascii')
+    # The same tab icon as the application, embedded so the single-file report keeps it offline.
+    icon = base64.b64encode((assets / 'tu-favicon.svg').read_bytes()).decode('ascii')
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'
+            + html.escape(title) + f'</title><link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,{icon}"><style>' + REPORT_STYLE + '</style></head><body>'
+            + f'<header class="masthead"><div class="masthead-inner"><img src="data:image/svg+xml;base64,{logo}" alt="TransUnion" width="201" height="53">')
+
+
+def band_index(count, matched):
+    return 0 if count == 0 else 1 if count * 100 <= matched else 2 if count * 100 <= matched * 5 else 3
+
+
+def column_slices(summary):
+    ranked = sorted(((name, count) for name, count in summary['changed_cells_by_column'].items() if count), key=lambda item: (-item[1], item[0]))
+    slices = [(name, count, f's{index + 1}') for index, (name, count) in enumerate(ranked[:SLICE_LIMIT])]
+    rest = ranked[SLICE_LIMIT:]
+    if rest:
+        slices.append((f'Other columns ({len(rest):,})', sum(count for _, count in rest), 's-other'))
+    return slices
+
+
+def donut_svg(slices, total, esc):
+    import math
+    out = '<svg class="donut" viewBox="0 0 200 200" role="img" aria-label="' + esc('Mismatched cells by column: ' + '; '.join(f'{name}: {count:,}' for name, count, _ in slices)) + '">'
+    start = -math.pi / 2
+    for name, count, colour in slices:
+        tip = f'<title>{esc(name)}: {count:,} mismatched cells ({100 * count / total:.2f}%)</title>'
+        if count == total:
+            out += f'<circle class="slice {colour}" cx="100" cy="100" r="96">{tip}</circle>'
+            continue
+        end = start + 2 * math.pi * count / total
+        large = int(count > total / 2)
+        point = lambda angle, radius: f'{100 + radius * math.cos(angle):.3f} {100 + radius * math.sin(angle):.3f}'
+        out += (f'<path class="{colour}" d="M{point(start, 96)} A96 96 0 {large} 1 {point(end, 96)} '
+                f'L{point(end, 60)} A60 60 0 {large} 0 {point(start, 60)} Z">{tip}</path>')
+        start = end
+    if slices and slices[0][1] == total:
+        out += '<circle cx="100" cy="100" r="60" fill="#fff"/>'
+    out += f'<text class="total" x="100" y="102" text-anchor="middle">{total:,}</text><text class="total-label" x="100" y="122" text-anchor="middle">mismatched cells</text></svg>'
+    return out
+
+
+def barcode_svg(summary, row_of, esc):
+    """One mark per compared column, in file order, coloured by its match-rate band."""
+    matched = summary.get('matched_keys', 0)
+    names = list(summary['changed_cells_by_column'].items())
+    width = 1 if len(names) > 160 else 0.82
+    out = f'<svg class="barcode" viewBox="0 0 {len(names)} 1" preserveAspectRatio="none" role="img" aria-label="Match rate of each column in file order">'
+    for index, (name, count) in enumerate(names):
+        rate = f'{100 * (matched - count) / matched:.4f}% match' if matched else 'no matched keys'
+        row = f' data-row="{row_of[name]}"' if name in row_of else ''
+        out += f'<rect x="{index + (1 - width) / 2:.3f}" y="0" width="{width}" height="1" class="b{band_index(count, matched) if matched else 0}"{row}><title>{esc(name)}: {count:,} mismatched cells, {rate}</title></rect>'
+    return out + '</svg>'
 
 
 def make_summary_html(summary, samples=None):
     samples = samples or {}
-    row_notes=comment_lookup(summary)
-    import math
+    row_notes = comment_lookup(summary)
     from datetime import datetime, timezone
     esc = lambda value: html.escape(str(value))
     stats = column_stats(summary)
@@ -126,86 +289,149 @@ def make_summary_html(summary, samples=None):
     changed = [row for row in stats if row[1]]
     equal = [row for row in stats if not row[1]] if matched else []
     total = len(stats)
-    overall = 100 * (1-summary['changed_cells']/(matched*total)) if matched and total else None
-    generated = datetime.now(timezone.utc).strftime('%d %b %Y · %H:%M UTC')
-    out = html_start('TransUnion | Data comparison report') + '<style>'+LEADERSHIP_STYLE+'</style>'
-    out += '<main><div class="hero"><div class="eyebrow">TransUnion · Data quality &amp; comparison</div><h1>Data comparison report</h1><p>Leadership summary · '+generated+'</p><span class="badge">'+('Differences identified' if changed or summary.get('left_only') or summary.get('right_only') else 'No differences within selected scope' if matched and total else 'Insufficient comparable data')+'</span></div>'
-    out += '<div class="toolbar"><p>Complete column coverage. Match rates reflect the configured comparison scope.</p><button class="print" onclick="window.print()">Print / save as PDF</button></div><div class="cards">'
-    for title, value, note in [('Overall cell match',percent(overall),'Across matched keys and compared columns'),('Fully matching columns',f'{len(equal):,} / {total:,}','Exactly zero mismatched cells'),('Columns with differences',f'{len(changed):,}','All listed below'),('Mismatched cells',f'{summary["changed_cells"]:,}','After configured exclusions and rules')]:
-        out += '<div class="card"><small>'+title+'</small><strong>'+value+'</strong><small>'+note+'</small></div>'
-    out += '</div><div class="overview"><section><h2>Column match distribution</h2><p class="muted">Number of columns in each match-rate band.</p><div class="chart-wrap">'
-    bands = match_bands(summary)
-    if matched and total:
-        out += '<svg class="pie" viewBox="0 0 240 240" role="img" aria-label="Column match-rate distribution"><title>'+esc('; '.join(f'{name}: {count} columns' for name,count,_ in bands))+'</title>'
-        start = -math.pi/2
-        for name,count,color in bands:
-            if not count: continue
-            if count == total:
-                out += f'<circle cx="120" cy="120" r="110" fill="{color}" />'
-            else:
-                end = start + 2*math.pi*count/total
-                x1,y1=120+110*math.cos(start),120+110*math.sin(start)
-                x2,y2=120+110*math.cos(end),120+110*math.sin(end)
-                out += f'<path d="M120 120 L{x1:.4f} {y1:.4f} A110 110 0 {int(count>total/2)} 1 {x2:.4f} {y2:.4f} Z" fill="{color}" stroke="white" stroke-width="2"><title>{esc(name)}: {count}</title></path>'
-                start=end
-        out += '</svg><ul class="legend">'
-        for name,count,color in bands:
-            out += f'<li><span class="swatch" style="background:{color}"></span>{esc(name)}<strong>{count:,}</strong></li>'
-        out += '</ul>'
+    cells = summary['changed_cells']
+    left_only, right_only = summary.get('left_only', 0), summary.get('right_only', 0)
+    overall = 100 * (1 - cells / (matched * total)) if matched and total else None
+    generated = datetime.now(timezone.utc)
+    files = source_labels(summary)
+    row_of = {row[0]: index for index, row in enumerate(changed)}
+
+    out = html_start('TransUnion | Data comparison report')
+    out += ('<h1>Data comparison report<time datetime="' + generated.isoformat(timespec='seconds') + '">Generated '
+            + generated.strftime('%d %b %Y, %H:%M UTC') + '</time></h1><button class="print" type="button" onclick="window.print()">Print or save as PDF</button>'
+            + '<p class="files">' + ''.join(('<span class="vs">compared with</span>' if index else '') + ('' if name == label else f'<span>{label}</span>') + f'<strong>{esc(name)}</strong>'
+                                       for index, (label, name) in enumerate(zip(('File 1', 'File 2'), files))) + '<span class="keys">Matched on <strong>' + esc(', '.join(summary['keys'])) + '</strong></span></p></div></header>')
+    sections = [('summary', 'Summary', None), ('keys', 'Keys', None), ('statistics', 'Mismatching columns', len(changed)), ('matching', 'Matching columns', len(equal)), ('scope', 'Exclusions', None), ('interpretation', 'Scope', None)]
+    if summary.get('analysis_notes'):
+        sections.append(('comments', 'Review comments', len(summary['analysis_notes'])))
+    out += '<nav class="toc" aria-label="Report sections"><ol>' + ''.join(
+        f'<li><a href="#{anchor}">{label}' + (f'<span class="count">{count:,}</span>' if count is not None else '') + '</a></li>' for anchor, label, count in sections) + '</ol></nav>'
+    out += '<main class="page">'
+
+    # Summary: the overall answer first, then every column as one mark so the shape of the problem is visible.
+    if not (matched and total):
+        state, state_class = 'Insufficient comparable data', 'is-empty'
+        sentence = 'No matched rows; match rates cannot be calculated.' if not matched else 'No non-key columns in comparison scope.'
+    elif changed or left_only or right_only:
+        state, state_class = 'Differences identified', ''
+        parts = [f'<strong>{cells:,}</strong> mismatched cells across <strong>{len(changed):,}</strong> of {total:,} columns'] if changed else ['Every compared column matches']
+        if left_only or right_only:
+            parts.append(f'<strong>{left_only:,}</strong> keys only in File 1 and <strong>{right_only:,}</strong> only in File 2')
+        sentence = '; '.join(parts) + f'. {matched:,} keys were found in both files.'
     else:
-        out += '<p>No matched rows; match rates cannot be calculated.</p>' if not matched else '<p>No non-key columns in comparison scope.</p>'
-    out += '</div><p class="rate-note">100% means zero mismatches. Other bands use exact counts before display rounding; bands do not overlap.</p></section><section><h2>Comparison coverage</h2>'
-    for label,source in zip(('File 1','File 2'),source_labels(summary)):
-        out += '<div class="source"><strong>'+label+'</strong>'+esc(source)+'</div>'
-    for title,value in [('Matched keys',matched),('Keys only in File 1',summary.get('left_only',0)),('Keys only in File 2',summary.get('right_only',0)),('Source rows · File 1',summary.get('left_rows','N/A')),('Source rows · File 2',summary.get('right_rows','N/A'))]:
-        out += '<p>'+title+': <strong>'+esc(f'{value:,}' if isinstance(value,int) else value)+'</strong></p>'
-    out += '<p>Key columns: <strong>'+esc(', '.join(summary['keys']))+'</strong></p></section></div>'
+        state, state_class = 'No differences within selected scope', 'is-clean'
+        sentence = f'All {total:,} compared columns match for the <strong>{matched:,}</strong> keys found in both files.'
+    out += ('<section class="block" id="summary"><div class="verdict"><p class="rate">' + percent(overall)
+            + '<small>Overall cell match across matched keys and compared columns</small></p><div><span class="state ' + state_class + '">'
+            + state + '</span><p class="verdict-text">' + sentence + '</p></div></div>')
+    out += '<div class="barcode-head"><h3>Column match distribution</h3><p>Each mark is one column, in file order. Select a column with differences to find it in the table.</p></div>'
+    if matched and total:
+        out += barcode_svg(summary, row_of, esc)
+        out += '<ul class="bands">' + ''.join(f'<li><span class="dot b{index}"></span>{esc(name)} <b>{count:,}</b></li>' for index, (name, count, _) in enumerate(match_bands(summary))) + '</ul>'
+        out += '<p class="rate-note">100% means zero mismatches. Bands use exact counts before display rounding and do not overlap.</p>'
+    else:
+        out += '<p class="empty">' + ('No matched rows; match rates cannot be calculated.' if not matched else 'No non-key columns in comparison scope.') + '</p>'
     if summary.get('review_revision'):
-        out += '<section class="callout"><h2>Review revision</h2><p>'+esc(' · '.join(k.replace('_',' ')+': '+str(v) for k,v in summary['review_revision'].items()))+'</p><p>Re-evaluated retained evidence; original comparison preserved.</p></section>'
+        out += '<div class="notice"><h2>Review revision</h2><p>' + esc(', '.join(k.replace('_', ' ') + ': ' + str(v) for k, v in summary['review_revision'].items())) + '</p><p>Re-evaluated retained evidence; the original comparison is preserved.</p></div>'
     if summary.get('left_duplicate_keys') or summary.get('right_duplicate_keys'):
-        out += '<section class="callout"><h2>Warning: duplicate keys</h2><p>'+esc(f"Kept the {summary.get('duplicate_policy','first')} source occurrence per key. File 1: {summary.get('left_duplicate_keys',0):,} duplicate keys / {summary.get('left_duplicate_rows_skipped',0):,} skipped rows. File 2: {summary.get('right_duplicate_keys',0):,} duplicate keys / {summary.get('right_duplicate_rows_skipped',0):,} skipped rows.")+'</p><p>Skipped duplicates are outside the match-rate denominator. The detailed duplicate audit remains available in the app and Excel workbook.</p></section>'
-    notes={n['column']:n['status']+': '+n['comment'] for n in summary.get('analysis_notes',[]) if n['key'] is None}
-    out += '<section id="statistics"><div class="toolbar"><h2>All mismatching columns ('+str(len(changed))+')</h2><label class="search-label">Find a column <input id="columnSearch" type="search" placeholder="Column name"></label></div><p class="muted">Largest difference counts first. Percentages use '+f'{matched:,}'+' matched keys.</p><div class="table-wrap"><table id="columnStats"><thead>'+html_row(['Column','Mismatched cells','Matching cells','Mismatch %','Match %','Review notes','Samples'],True)+'</thead><tbody>'
-    for index,(name,count,mismatch,match) in enumerate(changed):
-        row = html_row([name,f'{count:,}',f'{max(0,matched-count):,}',percent(mismatch),percent(match),notes.get(name,'')]).rstrip()
-        out += row[:-5]+'<td>'
-        rows=samples.get(name,[])
+        out += '<div class="notice"><h2>Warning: duplicate keys</h2><p>' + esc(
+            f"Kept the {summary.get('duplicate_policy', 'first')} source occurrence per key. File 1: {summary.get('left_duplicate_keys', 0):,} duplicate keys, {summary.get('left_duplicate_rows_skipped', 0):,} skipped rows. "
+            f"File 2: {summary.get('right_duplicate_keys', 0):,} duplicate keys, {summary.get('right_duplicate_rows_skipped', 0):,} skipped rows.") + '</p><p>Skipped duplicates are outside the match-rate denominator. The detailed duplicate audit remains available in the app and the Excel workbook.</p></div>'
+    out += '</section>'
+
+    # Keys: every key lands in exactly one group, so the bar adds up to all keys in both files.
+    groups = [('k-equal', 'Matching keys', summary.get('equal_rows', max(0, matched - summary.get('changed_rows', 0))), 'Identical in every compared column'),
+              ('k-changed', 'Keys with differences', summary.get('changed_rows', 0), 'At least one mismatched cell'),
+              ('k-left', 'Only in File 1', left_only, 'Not found in File 2'),
+              ('k-right', 'Only in File 2', right_only, 'Not found in File 1')]
+    all_keys = sum(group[2] for group in groups)
+    out += '<section class="block" id="keys"><h2>Keys</h2><p class="lede">How the keys of both files line up. Only keys found in both files are compared cell by cell.</p>'
+    if all_keys:
+        out += '<div class="keybar" role="img" aria-label="' + esc('; '.join(f'{label}: {count:,}' for _, label, count, _ in groups)) + '">' + ''.join(
+            f'<span class="{css}" data-grow="{count}" title="{esc(label)}: {count:,}"></span>' for css, label, count, _ in groups if count) + '</div>'
+    out += '<dl class="figures">' + ''.join(
+        f'<div><dt><span class="dot {css}"></span>{label}</dt><dd>{count:,}<small>' + (f'{100 * count / all_keys:.2f}% of all keys' if all_keys else note) + '</small></dd></div>'
+        for css, label, count, note in groups) + '</dl>'
+    out += '<div class="sources">'
+    for label, side, name in (('File 1', 'left', files[0]), ('File 2', 'right', files[1])):
+        rows = summary.get(side + '_rows', 'N/A')
+        out += f'<p>{label}: <strong>{esc(name)}</strong><br>Source rows: <strong>{esc(f"{rows:,}" if isinstance(rows, int) else rows)}</strong></p>'
+    out += '</div></section>'
+
+    # Mismatching columns: where the differences concentrate, then the complete ranked list.
+    notes = {n['column']: n['status'] + ': ' + n['comment'] for n in summary.get('analysis_notes', []) if n['key'] is None}
+    out += '<section class="block" id="statistics"><h2>All mismatching columns (' + str(len(changed)) + ')</h2><p class="lede">Where the mismatched cells are. Percentages use ' + f'{matched:,}' + ' matched keys.</p>'
+    if changed:
+        slices = column_slices(summary)
+        out += '<div class="split">' + donut_svg(slices, cells, esc) + '<div><h3 class="visually-hidden">Share of mismatched cells</h3><ul class="slices">' + ''.join(
+            f'<li><span class="dot {colour}"></span><span class="name" title="{esc(name)}">{esc(name)}</span><b>{count:,}</b><small>{100 * count / cells:.2f}%</small></li>' for name, count, colour in slices) + '</ul></div></div>'
+    out += '<div class="toolbar"><div><h3>Every column with differences</h3><p>Largest first. Select a row to see its mismatch patterns.</p></div><label class="search-label">Find a column <input id="columnSearch" type="search" placeholder="Column name"></label></div>'
+    out += '<div class="table-wrap"><table id="columnStats"><thead><tr><th>Column</th><th class="num">Mismatched cells</th><th class="num">Mismatch %</th><th class="num">Match %</th><th>Review notes</th><th>Samples</th></tr></thead><tbody>'
+    largest = changed[0][1] if changed else 0
+    for index, (name, count, mismatch, match) in enumerate(changed):
+        out += (f'<tr id="column-{index}"><td>{esc(name)}</td><td class="num">{count:,}<span class="share b{band_index(count, matched)}" data-share="{count / largest:.4f}"><i></i></span></td>'
+                f'<td class="num">{percent(mismatch)}</td><td class="num">{percent(match)}</td><td>{esc(notes.get(name, ""))}</td><td>')
+        rows = samples.get(name, [])
         if rows:
-            out += f'<details class="mismatch-sample" id="sample-{index}"><summary>View {len(rows)} keys</summary><div class="sample-dropdown"><p>'+esc(name)+f' · {len(rows)} sample keys of {count:,} mismatches. First keys in comparison order; values over 1,000 characters are marked as truncated.</p><div class="table-wrap"><table><thead>'+html_row(summary['keys']+['File 1 value','File 2 value']+(['Comments'] if row_notes else []),True)+'</thead><tbody>'
+            out += f'<details class="mismatch-sample" id="sample-{index}"><summary>View {len(rows)} keys</summary><div class="sample-dropdown"><p>' + esc(name) + f': {len(rows)} sample keys of {count:,} mismatches. First keys in comparison order; values over 1,000 characters are marked as truncated.</p><div class="table-wrap"><table><thead>' + html_row(summary['keys'] + ['File 1 value', 'File 2 value'] + (['Comments'] if row_notes else []), True) + '</thead><tbody>'
             for values in rows:
-                out += '<tr>'+''.join('<td>'+esc(value)+'</td>' for value in values[:-2])+'<td class="sample-before">'+esc(values[-2])+'</td><td class="sample-after">'+esc(values[-1])+'</td>'+('<td>'+esc(applicable_comments(row_notes,name,values[:-2]))+'</td>' if row_notes else '')+'</tr>'
+                out += '<tr>' + ''.join('<td>' + esc(value) + '</td>' for value in values[:-2]) + '<td class="sample-before">' + esc(values[-2]) + '</td><td class="sample-after">' + esc(values[-1]) + '</td>' + ('<td>' + esc(applicable_comments(row_notes, name, values[:-2])) + '</td>' if row_notes else '') + '</tr>'
             out += '</tbody></table></div></div></details>'
-        else:out += 'Generate HTML report to include samples'
+        else:
+            out += 'Generate HTML report to include samples'
         out += '</td></tr>'
     out += '</tbody></table></div>'
-    if not changed: out += '<p>No mismatching columns in the selected scope.</p>'
-    out += '</section><section id="matching"><h2>Attributes with 100% match ('+str(len(equal))+')</h2><p>Each listed column has '+f'{matched:,}'+' matched cells and zero mismatches.</p><div class="chips">'+''.join('<span class="chip">'+esc(row[0])+'</span>' for row in equal)+'</div></section>'
-    out += '<section id="scope" class="callout"><h2>Ignored key containers — excluded from comparison</h2><p>File 1 excluded rows: <strong>'+f"{summary.get('left_excluded_rows',0):,}"+'</strong> · File 2 excluded rows: <strong>'+f"{summary.get('right_excluded_rows',0):,}"+'</strong></p><p>Configured keys can overlap across containers or be absent from source files. Container counts are not additive; excluded-row counts reflect actual input rows.</p>'
-    for item in summary.get('ignore_key_containers',[]):
-        out += '<div class="container"><h3>'+esc(item['name'])+'</h3><p>'+esc(item['reason'])+'</p><details><summary>'+f'{len(item["keys"]):,}'+' configured keys · view details</summary><div class="table-wrap"><table><thead>'+html_row(summary['keys'],True)+'</thead><tbody>'+''.join(html_row(key) for key in item['keys'])+'</tbody></table></div></details></div>'
-    if not summary.get('ignore_key_containers'): out += '<p>No ignored key containers configured.</p>'
-    out += '</section><section><h2>Scope &amp; interpretation</h2><p>Match rate = matching cells ÷ compared cells for retained keys present in both files. One-sided keys, ignored rows, skipped duplicates, ignored columns and non-common headers are excluded. A perfect column match does not imply identical source files.</p><p>Ignored columns: '+esc(', '.join(summary.get('ignored_columns',[])) or 'None')+'</p>'
-    for side,label in [('left','File 1'),('right','File 2')]:
-        out += '<p>Non-common columns · '+label+': '+esc(', '.join(summary.get('unmatched_columns',{}).get(side,[])) or 'None')+'</p>'
-    out += '<p>Applied value rules: '+esc(json.dumps(summary.get('comparison_rules',[]),ensure_ascii=False))+'</p><p>Value overrides: '+esc(json.dumps(summary.get('value_overrides',[]),ensure_ascii=False))+'</p>'
-    out += '<p>Comparison: '+esc(summary.get('comparison','exact text'))+'. Accepted override cells: '+esc(summary.get('override_equivalent_cells',0))+'. Accepted rule cells: '+esc(summary.get('rule_equivalent_cells',0))+'.</p><p>This single-file report includes every compared column and every configured ignored key. The Excel workbook contains the complete exported cell mismatches. Use the application’s analysis drawer to inspect keys and their differences.</p></section>'
+    if not changed:
+        out += '<p class="empty">No mismatching columns in the selected scope.</p>'
+    out += '</section>'
+
+    out += ('<section class="block" id="matching"><div class="toolbar"><div><h2>Attributes with 100% match (' + str(len(equal)) + ')</h2><p>Each listed column has ' + f'{matched:,}'
+            + ' matched cells and zero mismatches.</p></div>' + ('<label class="search-label">Find a column <input id="matchingSearch" type="search" placeholder="Column name"></label>' if equal else '')
+            + '</div><div class="chips">' + ''.join('<span class="chip">' + esc(row[0]) + '</span>' for row in equal) + '</div>' + ('' if equal else '<p class="empty">No column matches on every key.</p>') + '</section>')
+
+    out += ('<section class="block callout" id="scope"><h2>Ignored key containers — excluded from comparison</h2><p class="lede">Configured keys can overlap across containers or be absent from source files. Container counts are not additive; excluded-row counts reflect actual input rows.</p>'
+            + '<dl class="figures"><div><dt>File 1 excluded rows</dt><dd>' + f"{summary.get('left_excluded_rows', 0):,}" + '</dd></div><div><dt>File 2 excluded rows</dt><dd>' + f"{summary.get('right_excluded_rows', 0):,}" + '</dd></div></dl>')
+    for item in summary.get('ignore_key_containers', []):
+        out += '<div class="container"><h3>' + esc(item['name']) + '</h3><p>' + esc(item['reason']) + '</p><details><summary>View ' + f'{len(item["keys"]):,}' + ' configured keys</summary><div class="table-wrap"><table><thead>' + html_row(summary['keys'], True) + '</thead><tbody>' + ''.join(html_row(key) for key in item['keys']) + '</tbody></table></div></details></div>'
+    if not summary.get('ignore_key_containers'):
+        out += '<p class="empty">No ignored key containers configured.</p>'
+    out += '</section>'
+
+    unmatched = summary.get('unmatched_columns', {})
+    definitions = [('Ignored columns', ', '.join(summary.get('ignored_columns', [])) or 'None'),
+                   ('Columns only in File 1', ', '.join(unmatched.get('left', [])) or 'None'),
+                   ('Columns only in File 2', ', '.join(unmatched.get('right', [])) or 'None'),
+                   ('Comparison', summary.get('comparison', 'exact text')),
+                   ('Applied value rules', json.dumps(summary.get('comparison_rules', []), ensure_ascii=False)),
+                   ('Value overrides', json.dumps(summary.get('value_overrides', []), ensure_ascii=False)),
+                   ('Cells accepted by overrides', f"{summary.get('override_equivalent_cells', 0):,}"),
+                   ('Cells accepted by rules', f"{summary.get('rule_equivalent_cells', 0):,}")]
+    out += ('<section class="block scope-text" id="interpretation"><h2>Scope &amp; interpretation</h2><p>Match rate = matching cells ÷ compared cells for retained keys present in both files. One-sided keys, ignored rows, skipped duplicates, ignored columns and non-common headers are excluded. A perfect column match does not imply identical source files.</p>'
+            + '<p>Ignored columns: ' + esc(definitions[0][1]) + '</p><dl class="defs">' + ''.join(f'<dt>{label}</dt><dd>{esc(value)}</dd>' for label, value in definitions[1:]) + '</dl>'
+            + '<p>This single-file report includes every compared column and every configured ignored key. The Excel workbook contains the complete exported cell mismatches; use the application’s analysis drawer to inspect keys and their differences.</p></section>')
     if summary.get('analysis_notes'):
-        out += '<section><h2>Analysis classifications &amp; comments</h2><div class="table-wrap"><table>'+''.join(html_row(row,i==0) for i,row in enumerate(note_rows(summary)))+'</table></div></section>'
-    out += '''<footer>TransUnion · Data comparison report · Generated by the comparison tool</footer></main><script>
-const search=document.getElementById('columnSearch');search.addEventListener('input',()=>{document.querySelectorAll('#columnStats > tbody > tr').forEach(r=>r.hidden=!r.cells[0].textContent.toLowerCase().includes(search.value.toLowerCase()));});
-const main=document.querySelector('main'),panels=[...main.children].filter(e=>e.matches('.overview,section'));
-const tabs=document.createElement('nav');tabs.className='report-tabs';tabs.setAttribute('aria-label','Report sections');
-const area=document.createElement('div');area.className='report-panels';
-main.insertBefore(tabs,panels[0]);main.insertBefore(area,panels[0]);
-const buttons=panels.map((panel,i)=>{
-  const button=document.createElement('button');button.type='button';
-  button.textContent=panel.classList.contains('overview')?'Overview':panel.id==='statistics'?'Mismatching columns':panel.id==='matching'?'Matching columns':panel.id==='scope'?'Ignored keys & containers':panel.querySelector('h2').textContent;
-  if(!panel.id)panel.id='report-panel-'+i;button.setAttribute('aria-controls',panel.id);
-  button.addEventListener('click',()=>selectPanel(i));tabs.append(button);area.append(panel);return button;
+        out += '<section class="block" id="comments"><h2>Analysis classifications &amp; comments</h2><div class="table-wrap"><table>' + ''.join(html_row(row, i == 0) for i, row in enumerate(note_rows(summary))) + '</table></div></section>'
+    out += '</main><footer>TransUnion data comparison report, generated by the comparison tool.</footer>'
+    out += '''<script>
+(function(){
+const search=document.getElementById('columnSearch');
+search.addEventListener('input',()=>{const q=search.value.toLowerCase();document.querySelectorAll('#columnStats > tbody > tr').forEach(r=>r.hidden=!r.cells[0].textContent.toLowerCase().includes(q));});
+const chipSearch=document.getElementById('matchingSearch');
+if(chipSearch)chipSearch.addEventListener('input',()=>{const q=chipSearch.value.toLowerCase();document.querySelectorAll('#matching .chip').forEach(c=>c.hidden=!c.textContent.toLowerCase().includes(q));});
+for(const bar of document.querySelectorAll('.share'))bar.firstChild.style.width=Math.max(2,100*Number(bar.dataset.share))+'%';
+for(const part of document.querySelectorAll('.keybar span'))part.style.flexGrow=part.dataset.grow;
+// A mark on the column strip finds that column's row in the ranked table.
+for(const mark of document.querySelectorAll('.barcode rect[data-row]'))mark.addEventListener('click',()=>{
+ const row=document.getElementById('column-'+mark.dataset.row);if(!row)return;
+ search.value='';search.dispatchEvent(new Event('input'));
+ row.scrollIntoView({block:'center'});row.classList.remove('flash');void row.offsetWidth;row.classList.add('flash');row.focus({preventScroll:true});
 });
-function selectPanel(index){panels.forEach((panel,i)=>{panel.classList.toggle('report-inactive',i!==index);buttons[i].setAttribute('aria-pressed',String(i===index));});area.scrollTop=0;}
-document.body.classList.add('compact-report');selectPanel(0);
-let opened=[];window.addEventListener('beforeprint',()=>{opened=[...document.querySelectorAll('.container details:not([open])')];opened.forEach(d=>d.open=true);});window.addEventListener('afterprint',()=>opened.forEach(d=>d.open=false));
+// The section index follows the reader down the page.
+const links=[...document.querySelectorAll('.toc a')],targets=links.map(a=>document.querySelector(a.getAttribute('href')));
+function mark(){let current=0;targets.forEach((t,i)=>{if(t&&t.getBoundingClientRect().top<120)current=i;});links.forEach((a,i)=>a.setAttribute('aria-current',String(i===current)));}
+addEventListener('scroll',mark,{passive:true});mark();
+let opened=[];addEventListener('beforeprint',()=>{opened=[...document.querySelectorAll('.container details:not([open])')];opened.forEach(d=>d.open=true);});addEventListener('afterprint',()=>opened.forEach(d=>d.open=false));
+})();
 </script></body></html>'''
     return out
 
@@ -479,12 +705,11 @@ def export_html(report, destination, notify=lambda message: None):
     samples = mismatch_samples(report, summary, notify)
     notify('Rendering all columns, mismatch samples and ignored-key containers…')
     document = make_summary_html(summary, samples)
-    from report_patterns import pattern_drawer_chunks,leadership_dashboard
+    from report_patterns import pattern_drawer_chunks
     notify('Writing single-file HTML report…')
     with destination.open('w', encoding='utf-8') as output:
         head,_,tail=document.rpartition('</body>')
         for offset in range(0,len(head),1024*1024):
             notify('Writing single-file HTML report…');output.write(head[offset:offset+1024*1024])
         for chunk in pattern_drawer_chunks(report,summary,notify):output.write(chunk)
-        output.write(leadership_dashboard(summary))
         output.write('</body>'+tail)
