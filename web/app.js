@@ -630,7 +630,7 @@ async function renderPipeline(){
   let stage=job.state==='complete'?'complete':job.progress?.stage||'validate';
   if(automatic&&['index','sort','left','right'].includes(stage))stage='index';
   const index=stages.findIndex(([id])=>id===stage);
-  $('phase').textContent=job.state==='complete'?'Comparison complete':job.state==='error'?'Comparison failed':job.state==='queued'?'Queued':job.progress?.phase||'Starting worker';
+  $('phase').textContent=job.state==='complete'?'Comparison complete':job.state==='error'?'Comparison failed':job.state==='queued'?'Queued':(job.progress?.phase||'Starting worker')+(Number.isFinite(job.progress?.percent)&&job.state==='running'?` · ${job.progress.percent}%`:'');
   $('processed').textContent=job.state==='error'?job.error:job.progress?.rows!==undefined?`${number(job.progress.rows)} rows processed in the current phase`:job.state==='queued'?'Waiting for a server worker. Your files and results are kept in your own job.':'Stages update as the worker processes the files.';
   $('pipelineState').textContent=job.state;
   const signature=job.id+':'+stages.map(s=>s[0]).join(',');

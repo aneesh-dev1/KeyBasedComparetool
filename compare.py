@@ -38,7 +38,7 @@ def progress(args, phase, **values):
              else 'compare' if phase == 'Comparing keys' else 'reports' if phase == 'Writing reports'
              else 'validate')
     stage = values.pop('stage', stage)
-    print(f'{time.strftime("%H:%M:%S")}  {phase}' + ''.join(f' | {key}={value:,}' if isinstance(value, int) else f' | {key}={value}' for key, value in values.items()), flush=True)
+    print(f'{time.strftime("%H:%M:%S")}  {phase}' + ''.join(f' | {value}%' if key == 'percent' else f' | {key}={value:,}' if isinstance(value, int) else f' | {key}={value}' for key, value in values.items()), flush=True)
     if getattr(args, 'progress_file', None):
         target = Path(args.progress_file)
         try:
@@ -46,6 +46,46 @@ def progress(args, phase, **values):
         except PermissionError as error:
             print(f'Progress snapshot disabled: {error}; comparison continues, see console log.', flush=True)
             args.progress_file = None
+
+
+class ReadProgress:
+    """Share of the input read so far, so a long read phase never looks stuck in the console or the pipeline.
+
+    ``update(done)`` takes the amount read (bytes; Parquet is measured by rows and scaled to its file size)
+    out of ``total`` and logs a line each time the percentage moves 5 points, or after 3 seconds when it moves
+    more slowly. ``final=True`` logs the end of the phase.
+    """
+
+    def __init__(self, args, total, phase='Reading files', **fields):
+        self.args, self.total, self.phase, self.fields = args, max(1, int(total)), phase, fields
+        self.percent, self.when = -1, 0.0
+
+    def update(self, done, final=False):
+        percent = 100 if final else min(99, int(max(0, done) * 100 / self.total))
+        now = time.monotonic()
+        if percent <= self.percent or not (final or percent >= self.percent + 5 or now - self.when >= 3):
+            return
+        self.percent, self.when = percent, now
+        progress(self.args, self.phase, percent=percent, read_mb=round(min(done, self.total) / 2**20),
+                 total_mb=round(self.total / 2**20), status='completed' if final else 'ongoing', **self.fields)
+
+
+_PARQUET_ROWS = {}
+
+
+def input_fraction(path, source, rows):
+    """Fraction of one input read: byte position for text, rows for Parquet. None when it cannot be told."""
+    try:
+        if is_parquet(path):
+            if path not in _PARQUET_ROWS:
+                from parquet_input import open_file
+                with open_file(path) as file:
+                    _PARQUET_ROWS[path] = file.metadata.num_rows
+            return min(1.0, rows / _PARQUET_ROWS[path]) if _PARQUET_ROWS[path] else None
+        stream = getattr(source, 'stream', source)
+        return min(1.0, getattr(stream, 'buffer', stream).tell() / max(1, os.path.getsize(path)))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
 
 
 def normalize_headers(names):
@@ -267,6 +307,12 @@ def input_rows(path,args,position=0,indices=None,side=None):
 def _sort_csv(path, names, canonical, keys, temp, prefix, args):
     sort_started=time.monotonic()
     progress(args, f'Reading {prefix} file', rows=0)
+    file_size = os.path.getsize(path)
+    if getattr(args, 'sort_workers', 1) == 2:
+        reading, offset = ReadProgress(args, file_size, f'Reading {prefix} file', stage=prefix), 0
+    else:
+        reading = ReadProgress(args, os.path.getsize(args.left) + os.path.getsize(args.right), stage=prefix)
+        offset = os.path.getsize(args.left) if prefix == 'right' else 0
     projection=[names.index(name) for name in canonical] if is_parquet(path) else None
     if projection is not None: names=canonical
     order = [names.index(name) for name in canonical]
@@ -320,6 +366,10 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
         with source_rows() as (stream,reader):
             for row in reader:
                 count += 1
+                if count & 1023 == 0:
+                    fraction = input_fraction(path, stream, count)
+                    if fraction is not None:
+                        reading.update(offset + fraction * file_size)
                 if not native and len(row) != len(names):
                     raise ValueError(f'{path}: record {count}: expected {len(names)} fields, got {len(row)}')
                 key = row[0] if native else [row[i] for i in key_positions]
@@ -347,6 +397,7 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
                     flush()
             if checkpoint: position=stream.tell()
             if native_csv:progress(args, f'{prefix} CSV packing complete', direct_rows=stream.direct_rows, parsed_rows=stream.parsed_rows)
+        reading.update(offset + file_size, final=prefix == 'right' or getattr(args, 'sort_workers', 1) == 2)
         if chunk or not paths:
             flush()
         if checkpoint: checkpoint.save(paths,count,excluded,serial,position,True)

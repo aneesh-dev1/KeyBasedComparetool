@@ -7,6 +7,7 @@ earlier match. Only key references are ordered; full rows never enter sort runs.
 import contextlib
 import heapq
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -32,19 +33,19 @@ def _packed_source(path, names, canonical, keys, args, side=None):
         from parquet_input import PackedRows
         with PackedRows(path, projection, key_positions, 0,
                         getattr(args, 'read_batch_size', 100000), args.memory_mb, getattr(args,'native_batch_bytes',None)) as source:
-            yield iter(source)
+            yield source, iter(source)
     elif not parquet and not getattr(args, 'reference_csv_reader', False):
         from csv_input import PackedRows
         with PackedRows(path, source_names, order, key_positions, args, side=side) as source:
-            yield iter(source)
+            yield source, iter(source)
     else:
         def packed(reader):
             for number, row in enumerate(reader, 1):
                 if len(row) != len(source_names):
                     raise ValueError(f'{path}: record {number}: expected {len(source_names)} fields, got {len(row)}')
                 yield tuple(row[i] for i in key_positions), pack_values([row[i] for i in order])
-        with input_rows(path, args, 0, projection, side) as (_, reader):
-            yield packed(reader)
+        with input_rows(path, args, 0, projection, side) as (stream, reader):
+            yield stream, packed(reader)
 
 
 class HashJoin:
@@ -141,6 +142,9 @@ def _build(args, left_names, right_names, canonical, stats, progress):
     progress(args, 'Building in-memory key lookups', stage='index', engine='hash',
              memory_budget_mb=round(budget / (1024 * 1024), 2),
              retained_limit_mb=round(limit / (1024 * 1024), 2))
+    from compare import ReadProgress, input_fraction
+    sizes = {side: os.path.getsize(path) for side, path in (('left', args.left), ('right', args.right))}
+    reading, offset = ReadProgress(args, sum(sizes.values()), stage='index', engine='hash'), 0
     try:
         for side, path, names in (('left', args.left, left_names), ('right', args.right, right_names)):
             check_cancel(getattr(args, 'cancel_file', None))
@@ -148,11 +152,14 @@ def _build(args, left_names, right_names, canonical, stats, progress):
             count = excluded = 0
             file_started = time.monotonic()
             progress(args, f'Indexing {side} file', stage='index', engine='hash', rows=0, status='ongoing')
-            with _packed_source(path, names, canonical, args.keys, args, side) as reader:
+            with _packed_source(path, names, canonical, args.keys, args, side) as (source, reader):
                 for key_values, payload in reader:
                     count += 1
                     if count % 1000 == 0:
                         check_cancel(getattr(args, 'cancel_file', None))
+                        fraction = input_fraction(path, source, count)
+                        if fraction is not None:
+                            reading.update(offset + fraction * sizes[side])
                     key = encode(key_values)
                     if key in args.excluded_keys:
                         excluded += 1
@@ -188,6 +195,8 @@ def _build(args, left_names, right_names, canonical, stats, progress):
                                  retained_mb=round(retained / (1024 * 1024), 2), status='ongoing')
             counts[side + '_rows'] = count
             counts[side + '_excluded_rows'] = excluded
+            offset += sizes[side]
+            reading.update(offset, final=side == 'right')
             progress(args, f'Indexing {side} file complete', stage='index', engine='hash', rows=count,
                      excluded=excluded, unique_keys=len(rows), status='completed',
                      elapsed_seconds=round(time.monotonic() - file_started, 3))

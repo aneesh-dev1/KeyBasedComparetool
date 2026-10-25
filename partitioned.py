@@ -240,8 +240,20 @@ def choose_bounds(keys, partitions):
     return bounds
 
 
-def _init_worker(max_field_mb):
+# Bytes read so far by each running range, one slot per planned range, shared with the parent process so the
+# read percentage moves while ranges are still running (several large ranges often finish together).
+_PROGRESS = None
+
+
+def _init_worker(max_field_mb, progress=None):
+    global _PROGRESS
     csv.field_size_limit(max_field_mb * MIB)
+    _PROGRESS = progress
+
+
+def _report(task, done):
+    if _PROGRESS is not None and task.get('slot') is not None:
+        _PROGRESS[task['slot']] = int(done)
 
 
 def _write_spill(target, buffers):
@@ -381,8 +393,10 @@ def _read_fingerprints(task):
 
     for offset, line, newline in lines:
         count += 1
-        if count & 4095 == 0:
-            check_cancel(cancel_file)
+        if count & 127 == 0:
+            _report(task, offset - task['start'])
+            if count & 4095 == 0:
+                check_cancel(cancel_file)
         record = line[:-1] if line.endswith(b'\r') else line
         # Text mode ends a line at a lone carriage return; leave such files to the text reader.
         if b'\r' in record:
@@ -518,13 +532,18 @@ def _partition_range(task):
         pending = 0
         return _write_spill(target, buffers)
 
-    count = excluded_count = 0
+    count = excluded_count = consumed = 0
+    text = task['kind'] == 'text'
     bisect_right = bisect.bisect_right
     pack = FRAME.pack
     sample, sample_bytes = [], 0
     with reader as rows:
         for key_values, payload in rows:
             count += 1
+            if text:
+                consumed += len(payload) + 1
+                if count & 127 == 0:
+                    _report(task, consumed)
             if count & 4095 == 0:
                 check_cancel(cancel_file)
             key = encode_key(key_values)
@@ -634,7 +653,7 @@ class _Estimator:
                     changed_cells_by_column={name: count for name, count in self.columns.items() if count}) if compared else None
 
 
-def _watch_reads(futures, args, estimator, live):
+def _watch_reads(futures, args, estimator, live, on_read=None, on_tick=None):
     """While both files are read, feed finished ranges from either file into the estimate."""
     pending, done_count, total = set(futures), 0, len(futures)
     while pending:
@@ -644,6 +663,10 @@ def _watch_reads(futures, args, estimator, live):
             done_count += 1
             if future.exception() is None:
                 estimator.feed(future.result())
+                if on_read is not None:
+                    on_read(future.result())
+        if on_tick is not None:
+            on_tick()
         live.tick('reading', ranges_read=done_count, ranges_total=total, estimate=estimator.snapshot(), force=not pending)
 
 
@@ -726,7 +749,7 @@ def _range_tasks(source, common, whole=False):
     return [dict(base, index=index, whole=False, start=start, end=end) for index, (start, end) in enumerate(source['ranges'])]
 
 
-def _wait_all(pool, futures, args, on_done):
+def _wait_all(pool, futures, args, on_done, on_tick=None):
     """Wait for futures, checking cancellation; returns {future: (result, error)}."""
     outcome = {}
     pending = set(futures)
@@ -738,6 +761,8 @@ def _wait_all(pool, futures, args, on_done):
             outcome[future] = (None if error else future.result(), error)
             if error is None:
                 on_done(future.result())
+        if on_tick is not None:
+            on_tick()
     return outcome
 
 
@@ -746,7 +771,7 @@ def _submit_side(pool, source, common):
     return tasks, [pool.submit(_partition_range, task) for task in tasks]
 
 
-def _partition_side(pool, source, common, args, progress, totals, submitted):
+def _partition_side(pool, source, common, args, progress, totals, submitted, on_read=None, on_tick=None):
     """Wait for one side's ranges and accept them in file order.
 
     A range is accepted only when it starts where the previous accepted range ended. A range that
@@ -756,11 +781,13 @@ def _partition_side(pool, source, common, args, progress, totals, submitted):
     side = source['side']
 
     def reported(result):
+        if on_read is not None:
+            on_read(result)
         totals[side] += result['rows']
         progress(args, f'Indexing {side} file', stage='index', engine='partitioned', rows=totals[side], status='ongoing')
 
     tasks, futures = submitted
-    outcome = _wait_all(pool, futures, args, reported)
+    outcome = _wait_all(pool, futures, args, reported, on_tick)
     results = [outcome[future] for future in futures]
     if source['kind'] == 'parquet' or len(tasks) == 1:
         for index, (result, error) in enumerate(results):
@@ -781,7 +808,7 @@ def _partition_side(pool, source, common, args, progress, totals, submitted):
         last = index + 1 if error is not None else index
         while True:
             last = min(last, len(tasks) - 1)
-            task = dict(tasks[index], index=rerun, start=cursor, end=tasks[last]['end'])
+            task = dict(tasks[index], index=rerun, start=cursor, end=tasks[last]['end'], slot=None)
             rerun += 1
             progress(args, f'Re-reading part of {side} file (quoted line break at a range edge)', stage='index', engine='partitioned')
             result, error = _wait_all(pool, [pool.submit(_partition_range, task)], args, lambda _: None).popitem()[1]
@@ -962,13 +989,16 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                       memory_mb=max(16, int(budget / MIB / workers)), native_batch_bytes=getattr(args, 'native_batch_bytes', None))
         context = multiprocessing.get_context('spawn')
         totals = dict(left=0, right=0)
+        plans = {source['side']: _range_tasks(source, common) for source in sources}
+        slots = [task for tasks in plans.values() for task in tasks]
+        for slot, task in enumerate(slots):
+            task['slot'] = slot
+        shared = context.Array('q', max(1, len(slots)), lock=False)
         with ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_init_worker,
-                                 initargs=(getattr(args, 'max_field_mb', 64),)) as pool:
+                                 initargs=(getattr(args, 'max_field_mb', 64), shared)) as pool:
             phase = time.monotonic()
-            # Both files are read at the same time so no worker idles at the end of one file.
             # Both files are read side by side: ranges are queued alternately, in proportion to each file's size,
             # so the early estimate sees matching keys from the start.
-            plans = {source['side']: _range_tasks(source, common) for source in sources}
             order = sorted(((index / len(tasks), side, index) for side, tasks in plans.items() for index in range(len(tasks))))
             futures_by_side = {side: [None] * len(tasks) for side, tasks in plans.items()}
             finished = journal.sides if journal is not None else {}
@@ -985,6 +1015,35 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                     future.add_done_callback(lambda done, task=task: done.exception() is None and journal.record('read', _read_id(task), done.result()))
                 futures_by_side[side][index] = future
             submitted = {side: (plans[side], futures_by_side[side]) for side in plans}
+            # Read progress for the console and pipeline: each finished range counts with its share of the input
+            # (bytes for text; Parquet slices share their file's size equally).
+            weights = {}
+            for source in sources:
+                tasks = plans[source['side']]
+                for task in tasks:
+                    whole = task['kind'] != 'text' or task['whole']
+                    weights[(source['side'], task['index'])] = source['size'] / len(tasks) if whole else task['end'] - task['start']
+            from compare import ReadProgress
+            reading = ReadProgress(args, sum(weights.values()), 'Reading and indexing files', stage='index', engine='partitioned')
+            counted, read_bytes = set(), [0]
+
+            def read_done(result):
+                side = result.get('side')
+                keys = [key for key in weights if key[0] == side] if side in finished else [(side, result.get('index'))]
+                for key in keys:
+                    if key in weights and key not in counted:
+                        counted.add(key)
+                        read_bytes[0] += weights[key]
+                reading.update(read_bytes[0])
+
+            def read_tick():
+                # Finished ranges plus what the running ones have read so far.
+                partial = sum(min(shared[task['slot']], weights[key]) for side, tasks in plans.items() for task in tasks
+                              for key in [(side, task['index'])] if key not in counted)
+                reading.update(read_bytes[0] + partial)
+
+            for side in finished:
+                read_done(dict(side=side))  # files read before an interruption count from the start
             # Live view: an early estimate from sampled keys while the files are read, then exact counts per key range.
             live = None
             if getattr(args, 'live_file', None):
@@ -992,16 +1051,17 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                 live_stats, live_columns = {}, {}
                 live = LiveSnapshot(args.live_file, live_stats, live_columns)
                 estimator = _Estimator(len(canonical), policies, [name for name in canonical if name not in args.keys])
-                _watch_reads([future for _, futures in submitted.values() for future in futures], args, estimator, live)
+                _watch_reads([future for _, futures in submitted.values() for future in futures], args, estimator, live, read_done, read_tick)
             read = {}
             for source in sources:
                 side = source['side']
                 if side in finished:
                     read[side] = finished[side]
                     continue
-                read[side] = _partition_side(pool, source, common, args, progress, totals, submitted[side])
+                read[side] = _partition_side(pool, source, common, args, progress, totals, submitted[side], read_done, read_tick)
                 if journal is not None:
                     journal.record('side', side, read[side])
+            reading.update(read_bytes[0], final=True)
             reused_all = len(finished) == 2
             for side in ('left', 'right'):
                 stats[side + '_rows'] = sum(result['rows'] for result in read[side])

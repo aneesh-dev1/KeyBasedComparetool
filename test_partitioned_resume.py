@@ -44,14 +44,14 @@ class PartitionedResumeTests(unittest.TestCase):
     def run_compare(self, args, stop_after=None):
         original = partitioned._wait_all
 
-        def interrupted(pool, futures, run_args, on_done):
+        def interrupted(pool, futures, run_args, on_done, *rest):
             def counted(result):
                 on_done(result)
                 counted.calls += 1
                 if counted.calls == stop_after:
                     Path(run_args.cancel_file).write_text('cancel')
             counted.calls = 0
-            return original(pool, futures, run_args, counted if on_done.__name__ == 'compared' else on_done)
+            return original(pool, futures, run_args, counted if on_done.__name__ == 'compared' else on_done, *rest)
 
         CountingPool.submitted = []
         with patch.object(partitioned, 'RANGE_BYTES', 8192), patch.object(partitioned, 'ProcessPoolExecutor', CountingPool), \
@@ -80,9 +80,9 @@ class PartitionedResumeTests(unittest.TestCase):
     def test_interrupted_reads_resume(self):
         args = self.args('reads', 'checkpoints')
 
-        def stop(pool, futures, run_args, on_done):
+        def stop(pool, futures, run_args, on_done, *rest):
             Path(run_args.cancel_file).write_text('cancel')
-            return original(pool, futures, run_args, on_done)
+            return original(pool, futures, run_args, on_done, *rest)
 
         original = partitioned._wait_all
         CountingPool.submitted = []

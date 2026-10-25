@@ -55,9 +55,9 @@ function syncFilesStage(name){
   }
   const fileSettings=$('uploadFormatSettings');if(fileSettings)fileSettings.hidden=ready;
 
-  $('navPreview').hidden=!job||job.headers_reviewed===false||!['keysPanel','headersPanel'].includes(name);
+  $('navPreview').hidden=!job||job.headers_reviewed===false||name!=='keysPanel';
   if(name==='headersPanel'){$('navFiles').setAttribute('aria-current','step');$('navFiles').classList.add('active');}
-  if(!['keysPanel','headersPanel'].includes(name)&&previewExpanded)$('navPreview').click();
+  if(name!=='keysPanel'&&previewExpanded)$('navPreview').click();
 }
 // Top-right actions are stable across both setup cards.
 const scopeTitle=$('keysPanel').querySelector('.section-title'),scopeActions=document.createElement('div');scopeActions.className='stage-actions';scopeActions.append($('openComparisonRules'),$('scopeNext'));scopeTitle.append(scopeActions);
@@ -74,14 +74,15 @@ function compactScopeAction(button,label,icon){
  button.classList.add('scope-icon-action');button.setAttribute('aria-label',label);button.title=label;
  button.innerHTML=`<span class="scope-action-label">${label}</span><span class="scope-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></span>`;
 }
-compactScopeAction($('navPreview'),'Preview files','<path d="M2.1 12a10.8 10.8 0 0 1 19.8 0 10.8 10.8 0 0 1-19.8 0Z"/><circle cx="12" cy="12" r="3"/>');
+const previewIcons={open:'<path d="M2.1 12a10.8 10.8 0 0 1 19.8 0 10.8 10.8 0 0 1-19.8 0Z"/><circle cx="12" cy="12" r="3"/>',close:'<path d="M10.7 5.1a10.7 10.7 0 0 1 11.2 6.6 1 1 0 0 1 0 .7 10.7 10.7 0 0 1-1.4 2.5"/><path d="M14.1 14.2a3 3 0 0 1-4.2-4.2"/><path d="M17.5 17.5a10.8 10.8 0 0 1-15.4-5.2 1 1 0 0 1 0-.7 10.8 10.8 0 0 1 4.4-5.1"/><path d="m2 2 20 20"/>'};
+compactScopeAction($('navPreview'),'Preview files',previewIcons.open);
 compactScopeAction($('openComparisonRules'),'Comparison rules','<path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6"/>');
 for(const node of [...$('keysPanel').childNodes])if(node.nodeType===3&&node.textContent.trim()==='null')node.remove();
 $('keysPanel').querySelector('.panel-footer').hidden=true;
-$('headerContinue').before($('navPreview'));
-// Keep preview beside the current stage title after header application.
-const originalPanel=panel;panel=function(name){originalPanel(name);if(name==='keysPanel'){scopeActions.prepend($('navPreview'));$('keysPanel').append(preview);}else if(name==='headersPanel'){$('headerContinue').before($('navPreview'));$('headersPanel').append(preview);}const active=document.querySelector('#mainWorkspace>section:not([hidden]),#mainWorkspace>#results:not([hidden])');if(active&&!reducedWorkspaceMotion())active.animate([{opacity:.55,transform:'translateY(5px)'},{opacity:1,transform:'none'}],{duration:240,easing:'cubic-bezier(.22,1,.36,1)'});requestAnimationFrame(()=>{fitKeysWorkspace();finishWorkspaceTransition();});};
-$('navPreview').addEventListener('click',()=>{$('keysPanel').classList.toggle('preview-expanded',previewExpanded);});
+// Keep preview beside the Keys & scope title after header application.
+const originalPanel=panel;panel=function(name){originalPanel(name);if(name==='keysPanel'){scopeActions.prepend($('navPreview'));$('keysPanel').append(preview);}else if(name==='headersPanel'){$('headersPanel').append(preview);}const active=document.querySelector('#mainWorkspace>section:not([hidden]),#mainWorkspace>#results:not([hidden])');if(active&&!reducedWorkspaceMotion())active.animate([{opacity:.55,transform:'translateY(5px)'},{opacity:1,transform:'none'}],{duration:240,easing:'cubic-bezier(.22,1,.36,1)'});requestAnimationFrame(()=>{fitKeysWorkspace();finishWorkspaceTransition();});};
+// app.js writes plain text into the button on every toggle; put the icon and label back.
+$('navPreview').addEventListener('click',()=>{$('keysPanel').classList.toggle('preview-expanded',previewExpanded);compactScopeAction($('navPreview'),previewExpanded?'Close preview':'Preview files',previewExpanded?previewIcons.close:previewIcons.open);});
 
 // Read server files directly; browser transfers remain resumable and independent.
 uploadedSourcesBody.insertAdjacentHTML('afterbegin','<div class="source-mode" role="group" aria-label="File source"><button id="computerSource" class="subtle" aria-pressed="true">Upload from computer</button><button id="serverSource" class="subtle" aria-pressed="false">Use server paths</button></div><div id="serverSourceFields" class="server-source-workspace" hidden><div class="server-path-grid"><label class="server-path-card"><span class="file-top"><span class="label">CHAMPION DATASET</span><span class="file-symbol">A</span></span><span class="server-path-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="3" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg></span><span class="server-path-copy"><strong>Champion server path</strong><small>CSV, DAT, Excel, Parquet or JSON</small></span><input id="leftServerPath" aria-label="Champion server path" placeholder="/shared/input/champion.csv" autocomplete="off"></label><label class="server-path-card"><span class="file-top"><span class="label">CHALLENGER DATASET</span><span class="file-symbol">B</span></span><span class="server-path-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="3" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg></span><span class="server-path-copy"><strong>Challenger server path</strong><small>CSV, DAT, Excel, Parquet or JSON</small></span><input id="rightServerPath" aria-label="Challenger server path" placeholder="/shared/input/challenger.parquet" autocomplete="off"></label></div><div class="server-source-actions"><span class="server-source-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span id="serverSourceHelp" role="status"></span></span><button id="useServerSources" class="primary">Load server files →</button></div></div>');
@@ -623,12 +624,17 @@ window.addEventListener('DOMContentLoaded',()=>{
   const state=['done','active','failed'].find(name=>li.classList.contains(name))||'pending';
   return {kind,title:text[0],subtitle:text[1],state};
  }
+ const readPercent={job:null,value:null};
  const icons={validate:'shield-check',read:'arrow-down-narrow-wide',compare:'arrow-left-right',write:'file-text',complete:'flag',review:'refresh-cw'};
  function node(stage,column,extra=''){
-  const live=stage.kind==='compare'&&stage.state==='active'&&job?.progress?.rows!==undefined?`<b>${number(job.progress.rows)} keys</b>`:'';
+  const live=stage.kind==='compare'&&stage.state==='active'&&job?.progress?.rows!==undefined?`<b>${number(job.progress.rows)} keys</b>`
+   :stage.kind==='read'&&stage.state==='active'&&readPercent.value!==null?`<b>${readPercent.value}% read</b>`:'';
   return `<div class="pg-node is-${stage.state} ${extra}" data-col="${column}"><span class="pg-box"><span class="pg-port pg-port-in"></span>${lucide(icons[stage.kind]||'circle','pg-icon')}<span class="pg-port pg-port-out"></span></span><strong>${stage.title}</strong><small>${stage.subtitle}</small>${live}</div>`;
  }
  function render(){
+  // The read percentage stays on the Read box between progress lines that do not carry one.
+  if(readPercent.job!==job?.id)Object.assign(readPercent,{job:job?.id,value:null});
+  if(Number.isFinite(job?.progress?.percent))readPercent.value=job.progress.percent;
   const items=[...$('pipelineStages').children].map(describe);
   const review=items.find(stage=>stage.kind==='review');
   let main=items.filter(stage=>stage.kind!=='review');
@@ -662,16 +668,19 @@ window.addEventListener('DOMContentLoaded',()=>{
  fab.removeAttribute('title');
 }
 
-// Recompare dialog: macOS genie minimize/maximize. The dialog is drawn as thin horizontal slices; each slice is
+// Recompare dialog: macOS genie minimize/maximize. The dialog is drawn as thin horizontal strips; each strip is
 // squeezed to the width of a funnel that ends at the Recompare button, so the window warps into the button
-// (minimize) and pours back out of it (maximize). Slices are temporary visual copies in a top-layer overlay,
+// (minimize) and pours back out of it (maximize). Strips are temporary visual copies in a top-layer overlay,
 // hidden from assistive technology, and removed when the animation ends.
+// Smoothness on slower GPUs: each strip only holds its own band of the dialog (one dialog's worth of pixels in
+// total, not one per strip), and the motion is precomputed into Web Animations of transform and opacity, which
+// the browser runs on its compositor even while the page is busy.
 {
  const dialog=$('rerunDialog'),fab=$('recompareFab'),nativeShow=dialog.showModal.bind(dialog),nativeClose=dialog.close.bind(dialog);
  const reduced=()=>document.body.classList.contains('reduce-motion')||matchMedia('(prefers-reduced-motion: reduce)').matches;
  const smooth=u=>u<=0?0:u>=1?1:u*u*(3-2*u);
  const ease=u=>u<.5?4*u*u*u:1-Math.pow(-2*u+2,3)/2;
- const SLICES=64;
+ const SLICES=64,SAMPLES=48;
  let running=null;
  function build(){
   const d=dialog.getBoundingClientRect(),f=!fab.hidden&&fab.getClientRects().length?fab.getBoundingClientRect():null;
@@ -681,12 +690,16 @@ window.addEventListener('DOMContentLoaded',()=>{
   // The copy keeps its ids so every #rerunDialog style applies and it looks exactly like the dialog. It is
   // added after the dialog, so lookups by id still find the real elements first.
   const template=dialog.cloneNode(true);template.querySelector('.tu-request-loader')?.remove();
-  const slices=[];
+  const band=g.H/SLICES,slices=[];
   for(let i=0;i<SLICES;i++){
-   const slice=document.createElement('div');slice.className=dialog.className;slice.id=dialog.id;slice.setAttribute('open','');
-   for(const name of copy)slice.style[name]=computed[name];
-   Object.assign(slice.style,{position:'fixed',left:g.L+'px',top:g.T+'px',width:g.W+'px',height:g.H+'px',margin:'0',boxSizing:'border-box',transformOrigin:'0 0',clipPath:`inset(${(i*g.H/SLICES).toFixed(2)}px 0 ${(g.H-(i+1)*g.H/SLICES-.6).toFixed(2)}px 0)`,willChange:'transform'});
-   slice.append(...[...template.cloneNode(true).childNodes]);slices.push(slice);
+   // The strip clips its band; the copy inside is shifted up so the band shows the right part of the dialog.
+   const strip=document.createElement('div');
+   Object.assign(strip.style,{position:'fixed',left:g.L+'px',top:(g.T+i*band)+'px',width:g.W+'px',height:(band+1).toFixed(2)+'px',overflow:'hidden',transformOrigin:'0 0',willChange:'transform,opacity'});
+   const copyOf=document.createElement('div');copyOf.className=dialog.className;copyOf.id=dialog.id;copyOf.setAttribute('open','');
+   for(const name of copy)copyOf.style[name]=computed[name];
+   Object.assign(copyOf.style,{position:'absolute',left:'0',top:(-i*band).toFixed(2)+'px',width:g.W+'px',height:g.H+'px',margin:'0',boxSizing:'border-box'});
+   copyOf.append(...[...template.cloneNode(true).childNodes]);
+   strip.append(copyOf);slices.push(strip);
   }
   overlay.append(...slices);document.body.append(overlay);
   try{overlay.showPopover();}catch(error){}
@@ -697,27 +710,32 @@ window.addEventListener('DOMContentLoaded',()=>{
   const half=g.tw/2;if(y>=g.T+g.H)return [g.tx-half,g.tx+half];
   const u=smooth((y-g.T)/g.H)*q;return [g.L+(g.tx-half-g.L)*u,g.L+g.W+(g.tx+half-g.L-g.W)*u];
  }
- // p: 0 = window fully open, 1 = fully inside the button.
- function frame(state,p){
-  const {g,slices}=state,split=.4,q=ease(Math.min(1,p/split)),s=ease(Math.max(0,(p-split)/(1-split)));
-  const offset=s*(g.ty-g.T+8),h=g.H/SLICES;
-  slices.forEach((slice,i)=>{
+ // Each strip's transform and opacity at p (0 = window fully open, 1 = fully inside the button).
+ function pose(g,p){
+  const split=.4,q=ease(Math.min(1,p/split)),s=ease(Math.max(0,(p-split)/(1-split)));
+  const offset=s*(g.ty-g.T+8),h=g.H/SLICES,poses=[];
+  for(let i=0;i<SLICES;i++){
    const y=g.T+(i+.5)*h+offset;
-   if(y>g.ty){slice.style.opacity='0';return;}
+   if(y>g.ty){poses.push({opacity:0,transform:poses.at(-1)?.transform||`translate(0px,${offset.toFixed(2)}px) scaleX(0.001)`});continue;}
    const [a,b]=edges(g,y,q),scale=Math.max(.001,(b-a)/g.W);
-   slice.style.opacity='1';
-   slice.style.transform=`translate(${(a-g.L).toFixed(2)}px,${offset.toFixed(2)}px) scaleX(${scale.toFixed(4)})`;
-  });
+   poses.push({opacity:1,transform:`translate(${(a-g.L).toFixed(2)}px,${offset.toFixed(2)}px) scaleX(${scale.toFixed(4)})`});
+  }
+  return poses;
  }
  function play(from,to,duration){
   if(running)running.cancel();
   const state=build();let stopped=false,done;
   const finished=new Promise(resolve=>{done=resolve;});
-  const end=()=>{if(stopped)return;stopped=true;clearTimeout(fallback);try{state.overlay.hidePopover();}catch(error){}state.overlay.remove();running=null;done();};
-  // A hidden tab stops animation frames; never leave the dialog stuck mid-genie.
-  const fallback=setTimeout(end,duration+300),start=performance.now();
-  const tick=now=>{if(stopped)return;const u=Math.min(1,(now-start)/duration);frame(state,from+(to-from)*u);if(u<1)requestAnimationFrame(tick);else end();};
-  frame(state,from);requestAnimationFrame(tick);
+  // Keyframes are sampled along the path and played linearly between samples, so the shape stays exact.
+  const frames=state.slices.map(()=>[]);
+  for(let k=0;k<=SAMPLES;k++){
+   pose(state.g,from+(to-from)*k/SAMPLES).forEach((frame,i)=>frames[i].push(frame));
+  }
+  const animations=state.slices.map((slice,i)=>slice.animate(frames[i],{duration,easing:'linear',fill:'forwards'}));
+  const end=()=>{if(stopped)return;stopped=true;clearTimeout(fallback);animations.forEach(item=>item.cancel());try{state.overlay.hidePopover();}catch(error){}state.overlay.remove();running=null;done();};
+  // A hidden tab may never finish its animations; never leave the dialog stuck mid-genie.
+  const fallback=setTimeout(end,duration+400);
+  animations[0].finished.then(end,end);
   running={cancel:end,finished,state};
   return running;
  }
@@ -1707,8 +1725,10 @@ function redesignAnalysis(){
  const liveButton=document.createElement('button');liveButton.type='button';liveButton.id='openLiveResults';liveButton.className='ds-live-open';liveButton.hidden=true;
  liveButton.append(Object.assign(document.createElement('i'),{className:'ds-live-dot'}),Object.assign(document.createElement('span'),{textContent:'View live results'}),lucideNode('arrow-right'));
  liveButton.addEventListener('click',()=>goView('results').catch(showError));
- $('runningPanel').querySelector('#pipelineErrorCard')?.after(liveButton);
- setInterval(()=>{liveButton.hidden=!isLive()||currentView!=='runningPanel';if(!view.hidden&&!isLive()&&job?.state==='complete'&&currentView==='results'){show(false);renderSummary();renderExports();}},1000);
+ // The card's action group is built on DOMContentLoaded, after this script runs.
+ const placeLive=()=>{const actions=$('runningPanel').querySelector('.pipeline-actions');if(actions)actions.append(liveButton);else $('runningPanel').querySelector('#pipelineErrorCard')?.after(liveButton);};
+ if($('runningPanel').querySelector('.pipeline-actions'))placeLive();else window.addEventListener('DOMContentLoaded',placeLive,{once:true});
+ setInterval(()=>{liveButton.hidden=!isLive()||currentView!=='runningPanel';if(!view.hidden&&!isLive()&&job?.state==='complete'&&currentView==='results'){panel('results');renderSummary();renderExports();}},1000);
 }
 
 // Excel options in the Export menu: rows per column sheet, and whether values longer than an Excel cell are
