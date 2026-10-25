@@ -4,6 +4,7 @@ Quoted, projected and unusually large records retain Python's strict CSV parser.
 Text-stream positions are unchanged, including multiline checkpoint boundaries.
 """
 import csv
+import csv_nul  # noqa: F401  (Python 3.9/3.10 read NUL characters like 3.11)
 import itertools
 from operator import itemgetter
 

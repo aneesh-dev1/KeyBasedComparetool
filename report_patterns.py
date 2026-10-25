@@ -1,5 +1,6 @@
 """Disk-backed exact-pair aggregation and offline HTML pattern drawers."""
 import csv,hashlib,json,sqlite3,tempfile,html
+import csv_nul  # noqa: F401  (Python 3.9/3.10 read NUL characters like 3.11)
 from collections import Counter
 from pathlib import Path
 from contextlib import closing

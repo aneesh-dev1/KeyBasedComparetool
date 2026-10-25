@@ -29,7 +29,9 @@ Files & headers step. Values are always compared as **exact text** whichever dia
 
 `compare.py` chooses one of these engines at run time. The partitioned engine is chosen automatically
 when both inputs together are at least 64 MiB, at least two CPU workers are available, and free scratch
-space is more than 1.2 × the input size plus 512 MiB.
+space is more than 1.2 × the input size plus 512 MiB. When the fingerprint lookup applies (below), one
+worker and free space of 0.1 × the input size plus 512 MiB are enough, because it beats the disk sort even
+on a single CPU and spills only fingerprints.
 
 | Engine | When | How |
 | --- | --- | --- |
@@ -97,6 +99,42 @@ UTF-8 and Windows-1252. These files are not split into ranges:
 
 Each such file is read as a single range, and the join phase is still parallel.
 
+### Fingerprint lookup (wide text files)
+
+Measured on two 3.1 GB files (400,000 rows × 1,000 columns), the read phase was mostly spent writing a full
+copy of every row to spill files and reading it back: one range took 0.11 s alone but 1.8 s when ten ran at
+once, all waiting on the disk. When both files are UTF-8 delimited text with rows of 512 bytes or more on
+average, the partitioned engine therefore spills a 30-byte reference per row instead of the row:
+
+```
+reference = 0x7f · kind (unquoted / fully quoted) · SHA-256 of the row (first 16 bytes) · byte offset · length
+```
+
+1. **Read** both files in parallel byte ranges, at the byte level (no text decoding of unchanged rows), and
+   spill (key, reference) by key range. Rows that need the full CSV parser (embedded quotes, line breaks
+   inside values) are spilled as packed rows exactly as before; a range with a lone carriage return or
+   invalid UTF-8 is handed back to the text reader so its result and errors are unchanged.
+2. **Join** each key range by looking every key up in the other file's references. Equal fingerprints mean
+   equal rows, so the pair is passed to the comparison loop as one shared placeholder and never decoded.
+3. **Read again only rows that differ**, in file order, from their byte offsets. Each row is checked
+   against its fingerprint (a changed source file stops the run) and compared value by value as before.
+
+What is fingerprinted: when both files share one delimiter and column order, the raw line (`raw` mode);
+otherwise the packed row of compared values (`canonical` mode), so files with different delimiters,
+column orders, ignored columns or quoting still match. A raw fingerprint is only compared with one of the
+same kind, so a quoted and an unquoted copy of a row are compared by value. Outputs are byte-identical to
+copying full rows (`test_fingerprint.py`). Equality of unchanged rows rests on a 128-bit SHA-256
+fingerprint; differences are always reported from the actual values.
+
+| 6.2 GB (2 × 3.1 GB, 1,000 columns), 10 CPUs, back to back | Read phase | Comparing keys | Total |
+| --- | --- | --- | --- |
+| Full rows in the spill (`--fingerprint off`) | 6.3–8.1 s | 2.1–2.3 s | 8.7–10.6 s |
+| Fingerprint lookup (default) | 2.0–2.1 s | 1.6–1.8 s | 4.3–4.5 s |
+| One worker: disk sort / full rows / fingerprints | | | 23.6 s / 21.5 s / 17.4 s |
+
+Rows under about 500 bytes are cheaper to copy than to fingerprint and read again (10 M × 57-byte rows:
+15.4 s copied, 18.7 s fingerprinted), so narrow files keep full rows in the spill.
+
 ## Sizing for 10 GB × 2,000 columns × 10 M rows per file
 
 | Resource | Requirement |
@@ -135,6 +173,7 @@ Add `--workers N` to choose the worker count.
 | --- | --- |
 | `--engine {auto,sort,partitioned}` | `auto` chooses as described above. |
 | `--workers N` | Partitioned worker processes. Defaults to the CPU count, up to 16. |
+| `--fingerprint {auto,on,off}` | Fingerprint lookup in the partitioned engine. `auto` uses it for wide UTF-8 text files. |
 | `--delimiter X` / `--right-delimiter X` | Delimiter for both files, or a different delimiter for the right file. |
 | `--no-header` | Treat the first row as data. Columns are named `column1…columnN`. |
 

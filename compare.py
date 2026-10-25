@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import csv
+import csv_nul  # noqa: F401  (Python 3.9/3.10 read NUL characters like 3.11)
 import heapq
 import io
 import json
@@ -728,6 +729,7 @@ def parser():
     p.add_argument('--memory-mb', type=int, default=0, help='Optional comparison budget in MB; 0 selects from available system RAM')
     p.add_argument('--engine', dest='comparison_engine', choices=('auto','sort','partitioned'), default='auto', help='auto: parallel partitioned engine for large inputs, else in-memory hash join with disk-sort fallback')
     p.add_argument('--workers', dest='parallel_workers', type=int, default=0, help='Parallel worker processes for the partitioned engine; 0 uses the CPU count (max 16)')
+    p.add_argument('--fingerprint', choices=('auto', 'on', 'off'), default='auto', help='Partitioned engine: match rows by key and a 128-bit fingerprint instead of copying full rows (auto: wide UTF-8 text files)')
     p.add_argument('--sort-workers', type=int, choices=(1,2), default=1, help='Parallel file-sorting processes; memory-mb is split between them')
     p.add_argument('--read-batch-size', type=int, default=100000)
     p.add_argument('--compare-batch-size', type=int, default=10000)

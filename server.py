@@ -5,6 +5,7 @@ from http.cookies import SimpleCookie
 import signal
 from concurrent.futures import ThreadPoolExecutor
 import csv
+import csv_nul  # noqa: F401  (Python 3.9/3.10 read NUL characters like 3.11)
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import itertools
 import json

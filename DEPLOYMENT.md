@@ -16,18 +16,36 @@ are not configured; keep this no-login service inside the intended team network.
 
 ## Install and start
 
-Requirements: Linux, 64-bit Python 3.10+, Bash, `nohup`, and `flock` (util-linux).
-CSV, Excel and JSON use the standard library. Parquet requires PyArrow: create `.venv` with `python3 -m venv .venv`, then run `.venv/bin/python -m pip install -r requirements.txt`. `deploy.sh` prefers that environment. Run under an ordinary account with read access to the
-application and write access to the data/run directories. Use a local SSD.
+Requirements: Linux, 64-bit Python 3.9 or newer, Bash, `nohup` and `flock` (util-linux). CSV, DAT, Excel
+and JSON use the standard library; Parquet needs PyArrow, which `setup` installs. Run under an ordinary
+account with read access to the application and write access to the data/run directories. Use a local SSD.
 
 ```bash
 git clone https://github.com/aneesh-dev1/KeyBasedComparetool.git
 cd KeyBasedComparetool
-cp deploy.env.example deploy.env
-chmod 600 deploy.env
+./deploy.sh setup
+./deploy.sh start
 ```
 
-Edit `deploy.env` with your hostname or server IP and real port:
+`setup` finds Python 3.9+ (the newest `python3.x` on the PATH, or `PYTHON_BIN`), creates `.venv`, installs
+PyArrow into it, and writes `deploy.env` (private to your account) with `PUBLIC_URL` set to this server's
+hostname. Check `PUBLIC_URL`: users must open exactly that address, so change it if they reach the server
+by IP or another DNS name. Without internet access, set `PIP_INDEX_URL` to your internal package mirror
+and run `setup` again; everything except Parquet works without PyArrow. On Debian/Ubuntu, `python3 -m venv`
+needs the venv package for your Python (for example `sudo apt install python3.9-venv`).
+
+| Command | What it does |
+| --- | --- |
+| `./deploy.sh setup` | Check Python, create `.venv` with PyArrow, write `deploy.env` |
+| `./deploy.sh start` | Start in the background and wait until the server answers |
+| `./deploy.sh status` | Running or not, healthy or not, URL, log and data paths |
+| `./deploy.sh logs` | Follow the server log |
+| `./deploy.sh stop` | Stop accepting work; active comparisons finish first |
+| `./deploy.sh restart` | Stop (waiting for active comparisons) and start again |
+| `./deploy.sh install-service` | Run as a systemd service: starts at boot, restarts after a crash |
+| `./deploy.sh uninstall-service` | Remove the service again |
+
+The main settings in `deploy.env` (see `deploy.env.example`):
 
 ```bash
 PUBLIC_URL="http://10.0.0.25:8765"
@@ -35,27 +53,29 @@ BIND_HOST="0.0.0.0"
 PORT=8765
 DATA_DIR="/srv/key-compare/data"
 RUN_DIR="/srv/key-compare/run"
-PYTHON_BIN="python3"
-MAX_JOBS=1
+MAX_JOBS=            # empty: 2 to 4 comparisons at once, from the CPU count
 MAX_SORT_MB=0
 ```
 
-Create the data/run folders with ownership for the account running the app.
-Use the actual server address; `0.0.0.0` is a bind address, not a browser URL.
-Allow the port only from your team's internal network according to your network
-policy. Then:
+Use the actual server address; `0.0.0.0` is a bind address, not a browser URL. Allow the port only from
+your team's internal network according to your network policy.
+
+Without a service, `start` uses `nohup`, disconnects stdin, writes a PID file and a private log
+(`run/server.log`), and waits for its own process to return a successful health response. It prevents
+simultaneous launcher commands. The Python server locks the data directory to prevent a second server
+from changing the same jobs. `deploy.env`, runtime files, and uploaded data are git-ignored.
+
+### Start at boot (systemd)
 
 ```bash
-./deploy.sh start
-./deploy.sh status
-tail -f /srv/key-compare/run/server.log
+./deploy.sh install-service          # a user service for your account
+sudo ./deploy.sh install-service     # or a system service, run as SERVICE_USER (default: the folder owner)
 ```
 
-The launcher uses `nohup`, disconnects stdin, writes a PID file and a private log,
-and waits for its own process to return a successful health response. It prevents
-simultaneous launcher commands. The Python server locks the data directory to
-prevent a second server from changing the same jobs. `deploy.env`, runtime files,
-and uploaded data are git-ignored.
+Once installed, `start`, `stop`, `restart`, `status` and `logs` go through systemd and its journal. A user
+service starts at boot only if an administrator enables lingering once: `sudo loginctl enable-linger <account>`.
+On stop, only the server receives SIGTERM so active comparisons can finish; after `STOP_TIMEOUT_SECONDS`
+(default 900) systemd ends the rest, and an interrupted parallel comparison can be resumed from Job history.
 
 Users open `PUBLIC_URL`. HTTPS through your existing internal reverse proxy is
 recommended when the inputs contain sensitive data. Set `BIND_HOST=127.0.0.1` and
@@ -131,22 +151,21 @@ disk quota and cannot guarantee enough free space for a new comparison.
 
 ```bash
 ./deploy.sh stop
-./deploy.sh status
-# Once the server has exited:
 git pull --ff-only
+./deploy.sh setup      # picks up new requirements; leaves deploy.env unchanged
 ./deploy.sh start
 ```
 
-Stop sends SIGTERM after verifying the PID belongs to this app and data directory.
-The server stops accepting new requests and drains queued/active heavy work.
-The stop command waits up to 30 seconds and reports if draining continues. A
-large comparison can take much longer; do not start a replacement until it exits.
-If forcibly killed or the machine reboots, unfinished jobs become Error on next
-startup, and affected comparisons must be started again. Completed jobs remain.
-After restart, refresh browser tabs to obtain the new request token.
+Stop sends SIGTERM after verifying the PID belongs to this app and data directory. The server stops
+accepting new requests and drains queued/active heavy work. Without a service, `stop` waits up to 30 seconds
+and reports if draining continues; `restart` waits up to `STOP_TIMEOUT_SECONDS` before starting again. Do
+not start a replacement until the old server has exited. If forcibly killed or the machine reboots,
+unfinished jobs become Error on next startup; large parallel comparisons can be resumed from their saved key
+ranges, others are started again. Completed jobs remain. After restart, refresh browser tabs to obtain the
+new request token.
 
 `nohup` survives a disconnected terminal; it does **not** restart after a crash or
-machine reboot. Rotate `run/server.log` and manage retained files according to
+machine reboot (use `./deploy.sh install-service` for that). Rotate `run/server.log` and manage retained files according to
 your team's storage policy. Back up the entire data directory with the service
 stopped if you need to retain jobs and browser-workspace associations.
 

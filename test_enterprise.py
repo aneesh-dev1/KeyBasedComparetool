@@ -63,6 +63,8 @@ class EnterpriseTests(unittest.TestCase):
         result=self.complete(path)
         self.assertEqual(self.b.request('/api/jobs')['jobs'][0]['id'],job['id'])
         self.assertFalse(self.b.request(path)['can_manage'])
+        # The HTML report is built in the background after the comparison completes.
+        self.a.wait(path,lambda j:j['exports'].get('html',{}).get('state') in ('complete','error'))
         self.assertTrue(self.b.request(path+'/download/comparison-report.html').startswith(b'<!doctype html>'))
         with self.assertRaises(HTTPError) as error:self.b.request(path,method='DELETE')
         self.assertEqual(error.exception.code,403)

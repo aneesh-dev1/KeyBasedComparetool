@@ -1,5 +1,6 @@
 """Bounded CSV evidence package; no model calls or external transfers."""
 import csv,io,json,sqlite3,zipfile
+import csv_nul  # noqa: F401  (Python 3.9/3.10 read NUL characters like 3.11)
 from contextlib import closing
 from analysis import classify_pattern
 

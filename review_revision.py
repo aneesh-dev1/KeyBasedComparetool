@@ -1,5 +1,6 @@
 """Re-evaluate retained comparison evidence without opening source files."""
 import csv,json,sqlite3,time,shutil
+import csv_nul  # noqa: F401  (Python 3.9/3.10 read NUL characters like 3.11)
 from pathlib import Path
 from contextlib import ExitStack,closing
 from compare import validate_scope,validate_overrides,encode

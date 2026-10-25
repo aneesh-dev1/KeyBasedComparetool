@@ -19,7 +19,10 @@ number as the sequential engines.
 import base64
 import bisect
 import csv
+import csv_nul  # noqa: F401  (Python 3.9/3.10 read NUL characters like 3.11)
+import hashlib
 import io
+import itertools
 import json
 import multiprocessing
 import os
@@ -63,18 +66,40 @@ def worker_count(args):
     return max(1, explicit or min(16, os.cpu_count() or 1))
 
 
+def _wide_text(args):
+    """True when both inputs are wide UTF-8 delimited text, so the fingerprint lookup will be used."""
+    from compare import dialect, is_parquet
+    if getattr(args, 'fingerprint', 'auto') == 'off':
+        return False
+    for side, path in (('left', args.left), ('right', args.right)):
+        if is_parquet(path):
+            return False
+        delimiter, encoding, _ = dialect(args, side)
+        if encoding not in ('utf-8', 'utf-8-sig') or len(delimiter) != 1 or not delimiter.isascii() or delimiter in '"\r\n':
+            return False
+        with open(path, 'rb') as stream:
+            sample = stream.read(4 * MIB)
+        if sample.count(b'\n') < 2 or len(sample) / sample.count(b'\n') < FINGERPRINT_MIN_ROW_BYTES:
+            return False
+    return True
+
+
 def should_use(args):
     engine = getattr(args, 'comparison_engine', 'auto')
     if engine == 'partitioned':
         return True
-    if engine != 'auto' or worker_count(args) < 2:
+    if engine != 'auto':
         return False
     total = sum(os.path.getsize(path) for path in (args.left, args.right))
     if total < AUTO_MIN_BYTES:
         return False
-    # Spill files hold one packed copy of the compared columns; keep a margin for outputs.
+    wide = _wide_text(args)
+    # With fingerprints even one worker beats the disk sort; otherwise the parallel read needs two or more.
+    if worker_count(args) < 2 and not wide:
+        return False
+    # Spill files hold one packed copy of the compared columns, or only fingerprints; keep a margin for outputs.
     free = shutil.disk_usage(args.temp_dir or Path(args.left).parent).free
-    return free > total * 1.2 + 512 * MIB
+    return free > total * (0.1 if wide else 1.2) + 512 * MIB
 
 
 class _Range(io.RawIOBase):
@@ -219,8 +244,255 @@ def _init_worker(max_field_mb):
     csv.field_size_limit(max_field_mb * MIB)
 
 
+def _write_spill(target, buffers):
+    """Write buffered frames grouped by key range; returns (path, [(key range, offset, length)])."""
+    segments = []
+    offset = 0
+    with open(target, 'wb', buffering=8 * MIB) as stream:
+        for part, items in enumerate(buffers):
+            if not items:
+                continue
+            data = b''.join(items)
+            stream.write(data)
+            segments.append((part, offset, len(data)))
+            offset += len(data)
+            items.clear()
+    return str(target), segments
+
+
+# Fingerprint mode: the hash lookup for wide delimited-text files. Copying every row into spill files and
+# reading it back was most of the read phase. Instead each row becomes a 30-byte reference: a 128-bit
+# SHA-256 fingerprint of the row plus its byte position in the source. Key ranges are joined by looking each
+# key up in the other file's references. Rows whose fingerprints match are equal; only rows that differ are
+# read again from the source and compared value by value, so reported differences stay exact.
+REF = b'\x7f'
+REF_TAIL = struct.Struct('<QI')  # record offset and length in the source file
+SAME = b'\x00'  # one shared placeholder for both rows of an equal pair; identical payloads are never decoded
+# Measured crossover: below about 500 bytes a row is cheaper to copy than to fingerprint and read again.
+FINGERPRINT_MIN_ROW_BYTES = 512
+
+
+class _NotSimple(Exception):
+    """This range needs the full text parser (for example a lone carriage return or invalid UTF-8)."""
+
+
+def _layout(source):
+    order = source['order']
+    return dict(path=source['path'], delimiter=source['dialect']['delimiter'], width=len(source['names']),
+                order=order, full=order == list(range(len(source['names']))))
+
+
+def _ref_payload(record, kind, layout):
+    """The packed row of a fast-path record; byte-identical to csv_input.PackedRows for the same line."""
+    delimiter = layout['delimiter'].encode('ascii')
+    if kind == b'U':
+        if layout['full']:
+            return b'\x00' + record.replace(delimiter, b'\x1f')
+        cells = record.split(delimiter)
+    else:
+        cells = record[1:-1].split(b'"' + delimiter + b'"')
+    return b'\x00' + b'\x1f'.join(cells if layout['full'] else [cells[i] for i in layout['order']])
+
+
+def _fingerprint(record, kind, layout, mode):
+    # "raw": both files share one delimiter and column order, so equal raw lines of the same kind are equal rows.
+    return hashlib.sha256(record if mode == 'raw' else _ref_payload(record, kind, layout)).digest()[:16]
+
+
+def fingerprint_mode(args, sources):
+    """'raw' or 'canonical' when both files are wide UTF-8 delimited text; None keeps full rows in the spill."""
+    if getattr(args, 'fingerprint', 'auto') == 'off':
+        return None
+    for source in sources:
+        dialect = source.get('dialect') or {}
+        delimiter = dialect.get('delimiter', '')
+        if (source['kind'] != 'text' or source['ranges'] is None or dialect.get('encoding') not in ('utf-8', 'utf-8-sig')
+                or len(delimiter) != 1 or not delimiter.isascii() or delimiter in '"\r\n'):
+            return None
+    if getattr(args, 'fingerprint', 'auto') != 'on':
+        # Narrow rows are cheap to copy; the fingerprint only pays off when rows are wide.
+        for source in sources:
+            with open(source['path'], 'rb') as stream:
+                stream.seek(source['start'])
+                sample = stream.read(4 * MIB)
+            if sample.count(b'\n') and len(sample) / sample.count(b'\n') < FINGERPRINT_MIN_ROW_BYTES:
+                return None
+    layouts = [_layout(source) for source in sources]
+    same = all(layout['full'] for layout in layouts) and layouts[0]['delimiter'] == layouts[1]['delimiter']
+    return 'raw' if same else 'canonical'
+
+
+def _byte_lines(path, start, end):
+    """(offset, line without its newline, had a newline) for the lines in [start, end)."""
+    with open(path, 'rb') as stream:
+        stream.seek(start)
+        remaining, offset, tail = end - start, start, b''
+        while remaining > 0:
+            chunk = stream.read(min(8 * MIB, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            lines = (tail + chunk if tail else chunk).split(b'\n')
+            tail = lines.pop()
+            for line in lines:
+                yield offset, line, True
+                offset += len(line) + 1
+        if tail:
+            yield offset, tail, False
+
+
+def _read_fingerprints(task):
+    """Phase 2 in fingerprint mode: one reference per row, spilled by key range. Mirrors csv_input.PackedRows."""
+    from compare import pack_values
+    side, path = task['side'], task['path']
+    bounds, excluded = task['bounds'], task['excluded']
+    allow_empty, cancel_file, mode = task['allow_empty'], task['cancel_file'], task['fingerprint']
+    layout = _layout(task)
+    delimiter, width, full, order = layout['delimiter'], layout['width'], layout['full'], layout['order']
+    separator = delimiter.encode('ascii')
+    quoted_separator = b'"' + separator + b'"'
+    direct = delimiter not in ('"', '\r', '\n')
+    separator_safe = delimiter == '\x1f'
+    limit = csv.field_size_limit()
+    key_positions = task['key_positions']
+    largest_key, first_key = max(key_positions), min(key_positions)
+    from_end = width - first_key < largest_key + 1
+    if task['start'] == 0 and task['dialect']['encoding'] == 'utf-8-sig':
+        raise _NotSimple  # a byte-order mark belongs to the text reader
+    buffers = [[] for _ in range(len(bounds) + 1)]
+    spills, pending, sequence = [], 0, 0
+    spill_dir = Path(task['spill_dir'])
+    count = excluded_count = 0
+    bisect_right, pack, sha256, crc32 = bisect.bisect_right, FRAME.pack, hashlib.sha256, zlib.crc32
+    sample, sample_bytes = [], 0
+    lines = _byte_lines(path, task['start'], task['end'])
+
+    def text(line, newline):
+        try:
+            return line.decode('utf-8') + ('\n' if newline else '')
+        except UnicodeDecodeError:
+            raise _NotSimple from None
+
+    def continuation():
+        for _, extra, newline in lines:
+            if b'\r' in (extra[:-1] if extra.endswith(b'\r') else extra):
+                raise _NotSimple
+            yield text(extra, newline)
+
+    for offset, line, newline in lines:
+        count += 1
+        if count & 4095 == 0:
+            check_cancel(cancel_file)
+        record = line[:-1] if line.endswith(b'\r') else line
+        # Text mode ends a line at a lone carriage return; leave such files to the text reader.
+        if b'\r' in record:
+            raise _NotSimple
+        if not line.isascii():
+            text(line, False)
+        kind = None
+        fits = len(line) < limit and (separator_safe or b'\x1f' not in record)
+        if direct and fits and record and b'"' not in record and record.count(separator) == width - 1:
+            kind = b'U'
+            if full:
+                if from_end:
+                    suffix = record.rsplit(separator, width - first_key)[1:]
+                    parts = [suffix[i - first_key] for i in key_positions]
+                else:
+                    prefix = record.split(separator, largest_key + 1)
+                    parts = [prefix[i] for i in key_positions]
+            else:
+                cells = record.split(separator)
+                parts = [cells[i] for i in key_positions]
+        elif direct and fits and record.startswith(b'"') and len(record) > 1 and record.endswith(b'"') and record.count(b'"') == 2 * width:
+            cells = record[1:-1].split(quoted_separator)
+            if len(cells) == width:
+                kind = b'Q'
+                parts = [cells[i] for i in key_positions]
+        if kind is not None:
+            key_values = tuple(part.decode('utf-8') for part in parts)
+        else:
+            # Quoted fields, embedded quotes or line breaks: the strict CSV parser, exactly as the text reader.
+            row = next(csv.reader(itertools.chain((text(line, newline),), continuation()), delimiter=delimiter, strict=True))
+            if len(row) != width:
+                raise ValueError(f'{path}: record {count}: expected {width} fields, got {len(row)}')
+            key_values = tuple(row[i] for i in key_positions)
+            payload = pack_values(row if full else [row[i] for i in order])
+        key = encode_key(key_values)
+        if key in excluded:
+            excluded_count += 1
+            continue
+        if not allow_empty and any(value == '' for value in key_values):
+            raise ValueError(f'{path}: record {count}: empty key component')
+        if kind is not None:
+            stored = REF + kind + sha256(record if mode == 'raw' else _ref_payload(record, kind, layout)).digest()[:16] + REF_TAIL.pack(offset, len(record))
+        else:
+            stored = payload
+        if len(sample) < ESTIMATE_PER_RANGE and crc32(key) % ESTIMATE_BUCKETS == 0 and sample_bytes < 4 * MIB:
+            real = stored if kind is None else _ref_payload(record, kind, layout)
+            sample.append((key, real))
+            sample_bytes += len(key) + len(real)
+        buffers[bisect_right(bounds, key)].append(pack(len(key), len(stored)) + key + stored)
+        pending += len(key) + len(stored) + 16
+        if pending >= SPILL_BYTES:
+            spills.append(_write_spill(spill_dir / f"{side}-{task['index']:05d}-{sequence:04d}.spill", buffers))
+            sequence += 1
+            pending = 0
+    spills.append(_write_spill(spill_dir / f"{side}-{task['index']:05d}-{sequence:04d}.spill", buffers))
+    return dict(side=side, index=task['index'], rows=count, excluded=excluded_count, spills=spills, estimate_sample=sample)
+
+
+def _fetch(layout, mode, refs):
+    """Read referenced rows again from the source, in file order, and check each against its fingerprint."""
+    rows = {}
+    with open(layout['path'], 'rb') as stream:
+        for ref in sorted(set(refs), key=lambda ref: REF_TAIL.unpack_from(ref, 18)[0]):
+            offset, length = REF_TAIL.unpack_from(ref, 18)
+            stream.seek(offset)
+            record = stream.read(length)
+            kind = ref[1:2]
+            if len(record) != length or _fingerprint(record, kind, layout, mode) != ref[2:18]:
+                raise ValueError(f"{layout['path']} changed during the comparison. Start a new comparison.")
+            rows[ref] = _ref_payload(record, kind, layout)
+    return rows
+
+
+def _resolve(left, right, samples, task):
+    """Equal fingerprints become one shared placeholder; rows that differ get their packed values back."""
+    layouts, mode = task.get('sources'), task.get('fingerprint')
+    if not layouts:
+        return
+    wanted = {'left': [], 'right': []}
+    for key, entry in left.items():
+        other = right.get(key)
+        if other is None:
+            continue
+        a, b = entry[0], other[0]
+        if a[:1] == REF and b[:1] == REF and a[2:18] == b[2:18] and (mode == 'canonical' or a[1:2] == b[1:2]):
+            entry[0] = other[0] = SAME
+            continue
+        if a[:1] == REF:
+            wanted['left'].append(entry)
+        if b[:1] == REF:
+            wanted['right'].append(other)
+    for side in ('left', 'right'):
+        sample = samples.get(side)
+        refs = [entry[0] for entry in wanted[side]] + [payload for payload in (sample[1] if sample else ()) if payload[:1] == REF]
+        if not refs:
+            continue
+        rows = _fetch(layouts[side], mode, refs)
+        for entry in wanted[side]:
+            entry[0] = rows[entry[0]]
+        if sample:
+            sample[1][:] = [rows.get(payload, payload) for payload in sample[1]]
+
+
 def _partition_range(task):
     """Phase 2: pack one byte or row-group range and spill its rows grouped by key range."""
+    if task.get('fingerprint') and task['kind'] == 'text' and not task['whole']:
+        try:
+            return _read_fingerprints(task)
+        except _NotSimple:
+            pass  # spill files from the attempt are overwritten or left unused; the text reader takes over
     side, path = task['side'], task['path']
     bounds, excluded = task['bounds'], task['excluded']
     allow_empty, cancel_file = task['allow_empty'], task['cancel_file']
@@ -243,19 +515,8 @@ def _partition_range(task):
         nonlocal sequence, pending
         target = spill_dir / f"{side}-{task['index']:05d}-{sequence:04d}.spill"
         sequence += 1
-        segments = []
-        offset = 0
-        with open(target, 'wb', buffering=8 * MIB) as stream:
-            for part, items in enumerate(buffers):
-                if not items:
-                    continue
-                data = b''.join(items)
-                stream.write(data)
-                segments.append((part, offset, len(data)))
-                offset += len(data)
-                items.clear()
         pending = 0
-        return str(target), segments
+        return _write_spill(target, buffers)
 
     count = excluded_count = 0
     bisect_right = bisect.bisect_right
@@ -393,6 +654,7 @@ def _join_partition(task):
     left, left_sample = _load_partition(task['left'], policy, task['capture'])
     right, right_sample = _load_partition(task['right'], policy, task['capture'])
     check_cancel(task['cancel_file'])
+    _resolve(left, right, dict(left=left_sample, right=right_sample), task)
     out = Path(task['out'])
     stats = dict(matched_keys=0, equal_rows=0, changed_rows=0, changed_cells=0, left_only=0, right_only=0,
                  override_equivalent_cells=0, rule_equivalent_cells=0, left_duplicate_keys=0,
@@ -666,6 +928,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
         if journal is not None and journal.plan is not None:
             # The saved plan is reused as is, so recorded ranges line up even if workers or memory changed.
             sources, bounds = journal.plan['sources'], journal.plan['bounds']
+            mode = journal.plan.get('fingerprint')
             total_bytes = sum(source['size'] for source in sources)
             progress(args, 'Resuming parallel comparison', stage='index', engine='partitioned', workers=workers,
                      key_ranges=len(bounds) + 1, reused_reads=len(journal.reads), reused_key_ranges=len(journal.joins))
@@ -687,9 +950,13 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                                              source['dialect']['delimiter'], source['dialect']['encoding'],
                                              source['start'], sample_count // 2)
             bounds = choose_bounds(keys, partitions)
+            mode = fingerprint_mode(args, sources)
             if journal is not None:
-                journal.start(dict(sources=sources, bounds=bounds))
-        common = dict(bounds=bounds, excluded=args.excluded_keys, allow_empty=args.allow_empty_keys,
+                journal.start(dict(sources=sources, bounds=bounds, fingerprint=mode))
+        if mode:
+            progress(args, 'Fingerprint lookup: equal rows are matched by key and fingerprint; only rows that differ are read again',
+                     stage='index', engine='partitioned', fingerprint=mode)
+        common = dict(fingerprint=mode, bounds=bounds, excluded=args.excluded_keys, allow_empty=args.allow_empty_keys,
                       cancel_file=getattr(args, 'cancel_file', None), spill_dir=str(work / 'spill'),
                       batch_rows=getattr(args, 'read_batch_size', 100000),
                       memory_mb=max(16, int(budget / MIB / workers)), native_batch_bytes=getattr(args, 'native_batch_bytes', None))
@@ -763,7 +1030,8 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                 future = pool.submit(_join_partition, dict(part=part, left=segments['left'][part], right=segments['right'][part],
                                                            policy=args.duplicate_policy, capture=capture, out=str(work / 'parts'),
                                                            columns=names, column_count=len(canonical), policies=policies,
-                                                           cancel_file=common['cancel_file']))
+                                                           cancel_file=common['cancel_file'], fingerprint=mode,
+                                                           sources={source['side']: _layout(source) for source in sources} if mode else None))
                 if journal is not None:
                     future.add_done_callback(lambda done: done.exception() is None and journal.record('join', done.result()['part'], done.result()))
                 futures.append(future)

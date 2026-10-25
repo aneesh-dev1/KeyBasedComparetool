@@ -2,20 +2,22 @@
 
 ## On-premises team deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the Linux `nohup` launcher, five-browser
-independent active comparisons without login, shared completed history and Projects,
-server-path inputs, resource limits, and rollout checks.
+On a Linux server with Python 3.9 or newer:
 
-## On-premises team deployment
+```bash
+./deploy.sh setup     # Python check, .venv with PyArrow, deploy.env with this server's address
+./deploy.sh start     # also: status, logs, stop, restart, install-service (start at boot)
+```
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the Linux `nohup` launcher, five-browser
-workspace separation without login, resource limits, and rollout checks.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for settings, the systemd service, independent browser
+workspaces without login, shared completed history and Projects, server-path inputs, resource
+limits, and rollout checks.
 
 ## Web UI
 
 On macOS, double-click **Start CSV Compare.command**. It uses the bundled Codex
-Python runtime when available, otherwise your installed Python 3.10+.
-On Windows, install **64-bit Python 3.10+**, extract the complete ZIP, then
+Python runtime when available, otherwise your installed Python 3.9+.
+On Windows, install **64-bit Python 3.9+**, extract the complete ZIP, then
 double-click **Start CSV Compare.bat**. The launcher tries `py -3` first and
 falls back to `python`. Keep its console window open while work is running.
 On other platforms, or from a terminal in this folder:
@@ -174,7 +176,7 @@ input directories the whole trusted team is permitted to read. See
 
 ## Command-line usage
 
-Python 3.10+ command-line tool, with no third-party dependencies.
+Python 3.9+ command-line tool, with no third-party dependencies.
 
 ```bash
 python3 compare.py left.csv right.csv \
@@ -781,7 +783,7 @@ The shared Files picker detects CSV, Excel, Parquet and JSON by file extension a
 
 ## Parquet comparisons
 
-The shared Files picker accepts `.parquet` alongside CSV, Excel and JSON. Install Parquet support with the server's 64-bit Python (Python 3.10+):
+The shared Files picker accepts `.parquet` alongside CSV, Excel and JSON. Install Parquet support with the server's 64-bit Python (Python 3.9+; `./deploy.sh setup` does this on Linux):
 
 ```sh
 python3 -m venv .venv

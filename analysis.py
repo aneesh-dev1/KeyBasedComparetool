@@ -1,6 +1,7 @@
 """On-demand, disk-backed indexes for exact key/column mismatch analysis."""
 from contextlib import closing
 import csv
+import csv_nul  # noqa: F401  (Python 3.9/3.10 read NUL characters like 3.11)
 import json
 import sqlite3
 import re

@@ -4,6 +4,7 @@ Detection reads only the first megabyte. It chooses a starting point the user ca
 before comparing; values are always compared as exact text whichever dialect is chosen.
 """
 import csv
+import csv_nul  # noqa: F401  (Python 3.9/3.10 read NUL characters like 3.11)
 import io
 import re
 

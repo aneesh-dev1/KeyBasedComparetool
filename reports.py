@@ -1,5 +1,6 @@
 """Streaming report exporters used by the application; no third-party dependencies."""
 import csv
+import csv_nul  # noqa: F401  (Python 3.9/3.10 read NUL characters like 3.11)
 import base64
 import contextlib
 import html
