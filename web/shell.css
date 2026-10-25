@@ -332,11 +332,11 @@ body:not(.sidebar-collapsed) #workspaceSidebar #comparisonMenu.is-closing>.ds-me
 
 /* ───────────── Pipeline & logs: stage graph (Console view off) ───────────── */
 #pipelineGraph{display:none}
-.enterprise-ui #runningPanel:is([data-live-tab=graph],[data-live-tab=console])>#pipelineStages{position:absolute!important;width:1px!important;height:1px!important;min-height:0!important;margin:0!important;padding:0!important;border:0!important;overflow:hidden!important;clip-path:inset(50%);white-space:nowrap}
-.enterprise-ui #runningPanel:is([data-live-tab=graph],[data-live-tab=console])>#pipelineGraph{--pg-terminal:40px;--pg-node-col:164px;--pg-box-w:96px;--pg-box-h:64px;--pg-drop:72px;--pg-on:var(--tu-cyan-600);--pg-off:var(--n-300);
+.enterprise-ui #runningPanel[data-live-tab=graph]>#pipelineStages{position:absolute!important;width:1px!important;height:1px!important;min-height:0!important;margin:0!important;padding:0!important;border:0!important;overflow:hidden!important;clip-path:inset(50%);white-space:nowrap}
+.enterprise-ui #runningPanel[data-live-tab=graph]>#pipelineGraph{--pg-terminal:40px;--pg-node-col:164px;--pg-box-w:96px;--pg-box-h:64px;--pg-drop:72px;--pg-on:var(--tu-cyan-600);--pg-off:var(--n-300);
   position:relative;display:grid;grid-template-rows:auto var(--pg-drop);align-items:start;align-content:start;margin:var(--space-4) 0 0;padding:72px var(--space-8) 112px;min-height:440px;overflow-x:auto}
 /* As in the reference design, the dotted canvas fills the whole Pipeline panel in graph view. */
-.enterprise-ui #runningPanel:is([data-live-tab=graph],[data-live-tab=console]){background-color:color-mix(in srgb,var(--surface-sunken) 60%,#fff);background-image:radial-gradient(circle,color-mix(in srgb,var(--n-300) 80%,transparent) 1px,transparent 1.3px);background-size:16px 16px;background-position:8px 8px}
+.enterprise-ui #runningPanel[data-live-tab=graph]{background-color:color-mix(in srgb,var(--surface-sunken) 60%,#fff);background-image:radial-gradient(circle,color-mix(in srgb,var(--n-300) 80%,transparent) 1px,transparent 1.3px);background-size:16px 16px;background-position:8px 8px}
 #pipelineGraph>*{grid-row:1}
 /* Connectors run behind the nodes from box edge to box edge. */
 #pipelineGraph .pg-link{position:relative;z-index:0;align-self:start;height:0;margin:calc(var(--pg-box-h) / 2 - 1.5px) calc((var(--pg-box-w) - var(--pg-node-col)) / 2) 0;border-top:3px dotted var(--pg-off);transition:border-color var(--dur-3) ease}
@@ -1273,11 +1273,12 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .ds-notify-menu .ds-notify-empty{padding:var(--space-8) var(--space-4)}
 @media (prefers-reduced-motion:reduce){.ds-notify-menu{animation:none}}
 
-/* Console view keeps the pipeline card's structure: the same stage graph and canvas, with the console added
-   below it, instead of re-laying the card out as a stage rail beside the console. */
-.enterprise-ui #runningPanel[data-live-tab=console]{display:flex;flex-direction:column;gap:12px;height:auto;min-height:0}
-.enterprise-ui #runningPanel[data-live-tab=console]>#pipelineTerminal{display:flex;flex-direction:column;flex:none;height:clamp(320px,48vh,560px);min-height:0}
-@media(max-width:800px){.enterprise-ui #runningPanel[data-live-tab=console]>#pipelineTerminal{height:420px}}
+/* Pipeline card: the same fixed height in both views. Console off shows the stage graph across the card; console
+   on shows the stage rail on the left and the console on the right (enterprise.css), filling that same height. */
+.enterprise-ui #runningPanel:is([data-live-tab=graph],[data-live-tab=console]){height:max(540px,calc(100dvh - 250px));min-height:0}
+.enterprise-ui #runningPanel[data-live-tab=graph]{display:flex;flex-direction:column;gap:12px;overflow:hidden}
+.enterprise-ui #runningPanel[data-live-tab=graph]>#pipelineGraph{flex:1 1 auto;min-height:0;align-content:center}
+@media(max-width:800px){.enterprise-ui #runningPanel:is([data-live-tab=graph],[data-live-tab=console]){height:auto;overflow:visible}}
 
 /* "View live results" sits with the other pipeline card actions, top right, at the same size. */
 .pipeline-actions .ds-live-open{height:34px;margin:0;padding:0 var(--space-3);align-self:center;font-size:var(--text-xs)}
@@ -1286,3 +1287,11 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .enterprise-ui .ds-topbar-refresh{margin-right:0}
 .ds-notify-anchor{margin-right:0;z-index:2}
 .ds-topbar-bell .ds-notification-badge{z-index:3}
+/* Narrower windows: tighter stage columns so the whole graph (start to end) fits the card without scrolling. */
+@media (max-width:1240px){
+ .enterprise-ui #runningPanel[data-live-tab=graph]>#pipelineGraph{--pg-node-col:118px;padding-left:var(--space-4);padding-right:var(--space-4)}
+ #pipelineGraph .pg-node :is(strong,small){max-width:112px}
+}
+
+/* Console view switch: stage icons travelling between the horizontal graph and the vertical rail. */
+.ds-console-flight{position:fixed;inset:0;z-index:40;pointer-events:none}

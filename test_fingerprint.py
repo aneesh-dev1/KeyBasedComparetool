@@ -1,4 +1,5 @@
 """Fingerprint lookup in the partitioned engine: the same bytes as copying full rows, for every text layout."""
+import collections
 import csv
 import json
 import random
@@ -14,8 +15,8 @@ from compare import compare, parser
 OUTPUTS = ('differences', 'raw_differences', 'matched_keys', 'left_only', 'right_only', 'duplicate_keys')
 
 
-def write(path, header, rows, delimiter=',', quoting=csv.QUOTE_MINIMAL, newline='\n'):
-    with open(path, 'w', encoding='utf-8', newline='') as stream:
+def write(path, header, rows, delimiter=',', quoting=csv.QUOTE_MINIMAL, newline='\n', encoding='utf-8'):
+    with open(path, 'w', encoding=encoding, newline='') as stream:
         writer = csv.writer(stream, delimiter=delimiter, quoting=quoting, lineterminator=newline)
         writer.writerow(header)
         writer.writerows(rows)
@@ -53,9 +54,13 @@ class FingerprintTests(unittest.TestCase):
         for key, value in settings.items():
             setattr(args, key, value)
         modes = []
-        original = partitioned.fingerprint_mode
-        with patch.object(partitioned, 'RANGE_BYTES', 2048), \
-                patch.object(partitioned, 'fingerprint_mode', lambda *a: modes.append(original(*a)) or modes[-1]):
+        original = partitioned.fingerprint_choice
+
+        def recorded(*arguments):
+            choice = original(*arguments)
+            modes.append(choice[0])
+            return choice
+        with patch.object(partitioned, 'RANGE_BYTES', 2048), patch.object(partitioned, 'fingerprint_choice', recorded):
             summary = compare(args)
         return out, summary, modes
 
@@ -150,9 +155,75 @@ class FingerprintTests(unittest.TestCase):
         parquet = sources(900)
         parquet[1] = dict(kind='parquet', path='x.parquet')
         self.assertIsNone(partitioned.fingerprint_mode(args, parquet))
+        # Windows-1252 is split by bytes like UTF-8; raw fingerprints need the same encoding on both sides.
         cp1252 = sources(900)
         cp1252[0]['dialect']['encoding'] = 'cp1252'
-        self.assertIsNone(partitioned.fingerprint_mode(args, cp1252))
+        self.assertEqual(partitioned.fingerprint_mode(args, cp1252), 'canonical')
+        cp1252[1]['dialect']['encoding'] = 'cp1252'
+        self.assertEqual(partitioned.fingerprint_mode(args, cp1252), 'raw')
+        utf16 = sources(900)
+        utf16[0]['dialect']['encoding'] = 'utf-16'
+        self.assertEqual(partitioned.fingerprint_choice(args, utf16)[0], None)
+        self.assertIn('utf-16', partitioned.fingerprint_choice(args, utf16)[1])
+
+    def awkward_dataset(self, seed):
+        """Accented text, quoted values with commas, a quoted key and escaped quotes, in many rows."""
+        header, left, right = self.dataset(seed=seed, awkward=False)
+        for rows in (left, right):
+            for i, row in enumerate(rows):
+                if i % 3 == 0:
+                    row[2] = f'José, Müller {i}'          # quoted, Windows-1252 friendly
+                if i % 11 == 0:
+                    row[5] = 'say "hi"'                    # escaped quotes: parsed by the CSV parser
+                if i % 29 == 0 and row[0].startswith('K'):
+                    row[0] = row[0] + ', branch'           # a quoted key
+        return header, left, right
+
+    def test_windows_1252_files(self):
+        header, left, right = self.awkward_dataset(31)
+        write(self.root / 'left.csv', header, left, encoding='cp1252')
+        write(self.root / 'right.csv', header, right, encoding='cp1252')
+        dialects = {side: {'encoding': 'cp1252'} for side in ('left', 'right')}
+        self.assert_same('cp1252', 'raw', dialects=dialects)
+        # Against a UTF-8 copy the raw bytes differ, so fingerprints of the packed values are compared.
+        write(self.root / 'right-utf8.csv', header, right)
+        self.assert_same('mixed', 'canonical', right='right-utf8.csv', dialects={'left': {'encoding': 'cp1252'}})
+
+    def test_undecodable_windows_1252_byte_gives_the_same_error(self):
+        header, left, right = self.dataset(seed=4, awkward=False)
+        write(self.root / 'left.csv', header, left, encoding='cp1252')
+        write(self.root / 'right.csv', header, right, encoding='cp1252')
+        with open(self.root / 'right.csv', 'ab') as stream:
+            stream.write(b'R9998,bad \x81 byte,1,2,3,4,5,6,7,8,9,10,11\n')
+        dialects = {side: {'encoding': 'cp1252'} for side in ('left', 'right')}
+        errors = []
+        for fingerprint in ('off', 'on'):
+            with self.assertRaises(ValueError) as caught:
+                self.run_engine('bad-byte', fingerprint=fingerprint, dialects=dialects)
+            errors.append(type(caught.exception))
+        self.assertEqual(errors[0], errors[1])
+
+    def test_quoted_rows_are_references_not_copies(self):
+        header, left, right = self.awkward_dataset(37)
+        write(self.root / 'left.csv', header, left)
+        write(self.root / 'right.csv', header, right)
+        self.assert_same('quoted-refs', 'raw')
+        # Read one file in this process and look at what reached the spill: references only, never full rows.
+        args = parser().parse_args([str(self.root / 'left.csv'), str(self.root / 'right.csv'), '--keys', 'id', '--output', str(self.root / 'x')])
+        source = partitioned._describe(args, 'left', args.left, header, header)
+        spill = self.root / 'inspect'
+        spill.mkdir()
+        task = dict(partitioned._range_tasks(source, dict(bounds=[], excluded=set(), allow_empty=False, cancel_file=None,
+                                                           spill_dir=str(spill), batch_rows=1, memory_mb=1, native_batch_bytes=None,
+                                                           fingerprint='raw', digest='sha256'))[0])
+        result = partitioned._read_fingerprints(task)
+        kinds = collections.Counter()
+        for path, segments in result['spills']:
+            for _, offset, length in segments:
+                rows, _ = partitioned._load_partition([(path, offset, length)], 'first', False)
+                kinds.update(entry[0][:2] for entry in rows.values())
+        self.assertTrue(all(kind[:1] == partitioned.REF for kind in kinds), kinds)
+        self.assertTrue({b'\x7fU', b'\x7fM', b'\x7fP'} <= set(kinds), kinds)
 
 
 if __name__ == '__main__':

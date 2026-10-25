@@ -103,17 +103,22 @@ Each such file is read as a single range, and the join phase is still parallel.
 
 Measured on two 3.1 GB files (400,000 rows × 1,000 columns), the read phase was mostly spent writing a full
 copy of every row to spill files and reading it back: one range took 0.11 s alone but 1.8 s when ten ran at
-once, all waiting on the disk. When both files are UTF-8 delimited text with rows of 512 bytes or more on
-average, the partitioned engine therefore spills a 30-byte reference per row instead of the row:
+once, all waiting on the disk. On Windows the copy is far more expensive still: antivirus scanning, and OneDrive
+syncing when the data folder is synced, slow every scratch-file write. When both files are delimited text in
+UTF-8 or Windows-1252 with rows of 512 bytes or more on average, the partitioned engine therefore spills a
+30-byte reference per row instead of the row, whatever the quoting:
 
 ```
-reference = 0x7f · kind (unquoted / fully quoted) · SHA-256 of the row (first 16 bytes) · byte offset · length
+reference = 0x7f · kind · 128-bit fingerprint · byte offset · length
+kind: U unquoted line · Q every field quoted · M some fields quoted · P parsed by the CSV parser
 ```
 
 1. **Read** both files in parallel byte ranges, at the byte level (no text decoding of unchanged rows), and
-   spill (key, reference) by key range. Rows that need the full CSV parser (embedded quotes, line breaks
-   inside values) are spilled as packed rows exactly as before; a range with a lone carriage return or
-   invalid UTF-8 is handed back to the text reader so its result and errors are unchanged.
+   spill (key, reference) by key range. A line with some quoted fields (M) is checked by counting the
+   delimiters outside its quotes, without splitting its values; only escaped quotes or line breaks inside
+   values need the strict CSV parser (P), and even then only the reference is kept. A range with a lone
+   carriage return or an undecodable byte is handed back to the text reader so its result and errors are
+   unchanged.
 2. **Join** each key range by looking every key up in the other file's references. Equal fingerprints mean
    equal rows, so the pair is passed to the comparison loop as one shared placeholder and never decoded.
 3. **Read again only rows that differ**, in file order, from their byte offsets. Each row is checked
@@ -123,8 +128,19 @@ What is fingerprinted: when both files share one delimiter and column order, the
 otherwise the packed row of compared values (`canonical` mode), so files with different delimiters,
 column orders, ignored columns or quoting still match. A raw fingerprint is only compared with one of the
 same kind, so a quoted and an unquoted copy of a row are compared by value. Outputs are byte-identical to
-copying full rows (`test_fingerprint.py`). Equality of unchanged rows rests on a 128-bit SHA-256
-fingerprint; differences are always reported from the actual values.
+copying full rows (`test_fingerprint.py`). Equality of unchanged rows rests on a 128-bit fingerprint;
+differences are always reported from the actual values. The fingerprint is SHA-256 where the CPU has SHA
+instructions, otherwise BLAKE2b (about twice as fast on such CPUs); each run times both once and keeps its
+choice for a resume.
+
+When the lookup is not used, the run log says why (for example a UTF-16 file or narrow rows), and the
+completion line of the read phase reports its throughput in MB/s, so a slow disk is visible.
+
+| 2 × 0.75 GB slices (100,000 rows × 1,000 columns), 4 workers | Read before | Read now | Copied to scratch before | Now |
+| --- | --- | --- | --- | --- |
+| UTF-8, unquoted | 0.7 s | 0.8 s | 11 MB | 11 MB |
+| Windows-1252 (one accented value per row) | 1.7 s | 0.9 s | 1,491 MB | 11 MB |
+| A quoted value with a comma in every row | 5.6 s | 1.2 s | 1,491 MB | 11 MB |
 
 | 6.2 GB (2 × 3.1 GB, 1,000 columns), 10 CPUs, back to back | Read phase | Comparing keys | Total |
 | --- | --- | --- | --- |
@@ -173,7 +189,7 @@ Add `--workers N` to choose the worker count.
 | --- | --- |
 | `--engine {auto,sort,partitioned}` | `auto` chooses as described above. |
 | `--workers N` | Partitioned worker processes. Defaults to the CPU count, up to 16. |
-| `--fingerprint {auto,on,off}` | Fingerprint lookup in the partitioned engine. `auto` uses it for wide UTF-8 text files. |
+| `--fingerprint {auto,on,off}` | Fingerprint lookup in the partitioned engine. `auto` uses it for wide UTF-8 or Windows-1252 text files. |
 | `--delimiter X` / `--right-delimiter X` | Delimiter for both files, or a different delimiter for the right file. |
 | `--no-header` | Treat the first row as data. Columns are named `column1…columnN`. |
 

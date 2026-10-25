@@ -598,16 +598,96 @@ new MutationObserver(syncStepProgress).observe($('comparisonFlow'),{subtree:true
  new MutationObserver(syncServerNote).observe(serverNote,{childList:true,characterData:true,subtree:true});syncServerNote();
 }
 
-// Pipeline & logs: "Console view" switch, off by default. On shows the stage rail beside the live console;
-// off shows the stage graph across the full panel. The choice is remembered in this browser.
+// Pipeline & logs: "Console view" switch, off whenever the page opens. On shows the stage rail beside the live
+// console; off shows the stage graph across the full panel. Switching animates between the two: each stage icon
+// travels from the horizontal graph to its place in the vertical rail while the console slides in from the right,
+// and back again when the console is switched off.
 window.addEventListener('DOMContentLoaded',()=>{
  const pipelinePanel=$('runningPanel'),actions=pipelinePanel.querySelector('.pipeline-actions');if(!actions)return;
- const key='compare-console-view';let stored=null;try{stored=localStorage.getItem(key);}catch(error){}
+ try{localStorage.removeItem('compare-console-view');}catch(error){}
  const toggle=document.createElement('button');toggle.type='button';toggle.id='consoleViewToggle';toggle.className='ds-switch';toggle.setAttribute('role','switch');
  toggle.innerHTML='<span class="ds-switch-label">Console view</span><span class="ds-switch-track" aria-hidden="true"><span class="ds-switch-thumb"></span></span>';
  const apply=on=>{pipelinePanel.dataset.liveTab=on?'console':'graph';toggle.setAttribute('aria-checked',String(on));};
- toggle.addEventListener('click',()=>{const on=toggle.getAttribute('aria-checked')!=='true';apply(on);try{localStorage.setItem(key,on?'on':'off');}catch(error){}});
- actions.prepend(toggle);apply(stored==='on');
+ const graphIcons=()=>new Map([...document.querySelectorAll('#pipelineGraph .pg-node[data-kind]')].map(node=>[node.dataset.kind,node.querySelector('.pg-icon')]).filter(([,icon])=>icon));
+ const railIcons=()=>new Map([...$('pipelineStages').children].map(li=>[li.dataset.kind,li.querySelector('.pipeline-icon')]).filter(([kind,icon])=>kind&&icon));
+ // A travelling copy keeps the icon's look outside its stylesheet context: computed styles are copied over (CSSOM,
+ // which the Content-Security-Policy allows).
+ const copied=['boxSizing','display','alignItems','justifyContent','paddingTop','paddingRight','paddingBottom','paddingLeft','backgroundColor','backgroundImage','color','borderTopLeftRadius','borderTopRightRadius','borderBottomLeftRadius','borderBottomRightRadius','borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth','borderTopStyle','borderRightStyle','borderBottomStyle','borderLeftStyle','borderTopColor','borderRightColor','borderBottomColor','borderLeftColor','boxShadow','fill','stroke','strokeWidth'];
+ function ghostOf(element){
+  const copy=element.cloneNode(true),sources=[element,...element.querySelectorAll('*')],targets=[copy,...copy.querySelectorAll('*')];
+  sources.forEach((source,index)=>{const computed=getComputedStyle(source),style=targets[index].style;for(const name of copied)style[name]=computed[name];if(index){style.width=computed.width;style.height=computed.height;}});
+  copy.removeAttribute('id');return copy;
+ }
+ // The flight in progress, if any. Settling it shows every icon in place and removes the travelling copies, so a
+ // new switch (or a page that stops drawing frames while hidden) never leaves icons hidden or copies behind.
+ let flight=null,generation=0;
+ // Connector lines are ::after pseudo-elements; where those cannot be animated the lines simply appear.
+ const pseudoAnimations=(()=>{try{const probe=document.body.animate([{opacity:1},{opacity:1}],{duration:1,pseudoElement:'::after'});const supported=probe.effect?.pseudoElement==='::after';probe.cancel();return supported;}catch(error){return false;}})();
+ function settle(){
+  if(!flight)return;
+  const current=flight;flight=null;clearTimeout(current.timer);
+  current.animations.forEach(animation=>animation.cancel());
+  current.targets.forEach(target=>{target.style.visibility='';});
+  current.layer.remove();current.resolve();
+ }
+ function fly(pairs,extra=[]){
+  settle();
+  const layer=document.createElement('div');layer.className='ds-console-flight';layer.setAttribute('aria-hidden','true');document.body.append(layer);
+  let resolve;const done=new Promise(next=>{resolve=next;});
+  // extra: the slide and fade of the same switch, settled together with the icons.
+  const animations=[...extra],targets=[];
+  pairs.forEach(({ghost,from,to,target},index)=>{
+   Object.assign(ghost.style,{position:'fixed',left:from.left+'px',top:from.top+'px',width:from.width+'px',height:from.height+'px',margin:'0',transformOrigin:'0 0'});
+   layer.append(ghost);target.style.visibility='hidden';targets.push(target);
+   const move=`translate(${(to.left-from.left).toFixed(1)}px,${(to.top-from.top).toFixed(1)}px) scale(${(to.width/from.width).toFixed(3)},${(to.height/from.height).toFixed(3)})`;
+   const animation=ghost.animate([{transform:'none'},{transform:move}],{duration:900,delay:index*100,easing:'cubic-bezier(.45,0,.15,1)',fill:'forwards'});
+   animation.finished.then(()=>{target.style.visibility='';ghost.remove();},()=>{});
+   animations.push(animation);
+  });
+  const extraEnd=Math.max(0,...extra.map(animation=>{const timing=animation.effect.getTiming();return (timing.delay||0)+(Number(timing.duration)||0);}));
+  const current={layer,animations,targets,resolve,timer:setTimeout(()=>{if(flight===current)settle();},Math.max(900+pairs.length*100,extraEnd)+500)};
+  flight=current;
+  Promise.all(animations.map(animation=>animation.finished.catch(()=>{}))).then(()=>{if(flight===current)settle();});
+  return done;
+ }
+ const pairsFor=(starts,ends)=>starts.filter(([kind])=>ends.has(kind)).map(([kind,ghost,from])=>({ghost,from,to:ends.get(kind).getBoundingClientRect(),target:ends.get(kind)}));
+ // Every switch starts from a settled card: earlier flights, slides and fades are finished at once.
+ function settleAll(){
+  settle();
+  for(const element of [$('pipelineTerminal'),$('pipelineGraph'),...$('pipelineStages').children])element.getAnimations({subtree:true}).forEach(animation=>animation.cancel());
+ }
+ function turnOn(){
+  const starts=[...graphIcons()].map(([kind,icon])=>[kind,ghostOf(icon),icon.getBoundingClientRect()]).filter(([,,rect])=>rect.width);
+  apply(true);
+  const pairs=pairsFor(starts,railIcons()).sort((a,b)=>a.to.top-b.to.top);
+  const labels=[...$('pipelineStages').children].map((li,index)=>li.animate([{opacity:0,transform:'translateX(-12px)'},{opacity:1,transform:'none'}],{duration:480,delay:420+index*100,easing:'ease-out',fill:'backwards'}));
+  const slide=$('pipelineTerminal').animate([{opacity:0,transform:'translateX(64px)'},{opacity:1,transform:'none'}],{duration:800,delay:200,easing:'cubic-bezier(.22,1,.36,1)',fill:'backwards'});
+  // The rail's connector lines then flow downward one after another, at one steady speed, from the first stage to
+  // the last, starting as the first icon lands.
+  const lines=pseudoAnimations?[...$('pipelineStages').children].slice(0,-1).map((li,index)=>li.animate([{clipPath:'inset(0 0 100% 0)'},{clipPath:'inset(0 0 0 0)'}],{pseudoElement:'::after',duration:280,delay:900+index*280,easing:'linear',fill:'backwards'})):[];
+  fly(pairs,[...labels,slide,...lines]);
+ }
+ async function turnOff(run){
+  const terminal=$('pipelineTerminal');
+  const slide=terminal.animate([{opacity:1,transform:'none'},{opacity:0,transform:'translateX(64px)'}],{duration:340,easing:'ease-in',fill:'forwards'});
+  // Continue when the console has slid out, or after its duration if the page is not drawing frames.
+  await Promise.race([slide.finished.catch(()=>{}),new Promise(next=>setTimeout(next,400))]);
+  if(run!==generation)return;  // a newer switch took over
+  const starts=[...railIcons()].map(([kind,icon])=>[kind,ghostOf(icon),icon.getBoundingClientRect()]).filter(([,,rect])=>rect.width);
+  apply(false);
+  slide.cancel();
+  const pairs=pairsFor(starts,graphIcons()).sort((a,b)=>a.to.left-b.to.left);
+  const fade=$('pipelineGraph').animate([{opacity:0},{opacity:1}],{duration:620,delay:150,easing:'ease-out',fill:'backwards'});
+  fly(pairs,[fade]);
+ }
+ toggle.addEventListener('click',()=>{
+  const on=toggle.getAttribute('aria-checked')!=='true',run=++generation;
+  settleAll();
+  if(reducedWorkspaceMotion()||pipelinePanel.hidden){apply(on);return;}
+  toggle.setAttribute('aria-checked',String(on));
+  if(on)turnOn();else turnOff(run);
+ });
+ actions.prepend(toggle);apply(false);
 });
 
 // Pipeline graph (Console view off): start → stages → end on one line, with the Re-evaluate branch
@@ -629,7 +709,7 @@ window.addEventListener('DOMContentLoaded',()=>{
  function node(stage,column,extra=''){
   const live=stage.kind==='compare'&&stage.state==='active'&&job?.progress?.rows!==undefined?`<b>${number(job.progress.rows)} keys</b>`
    :stage.kind==='read'&&stage.state==='active'&&readPercent.value!==null?`<b>${readPercent.value}% read</b>`:'';
-  return `<div class="pg-node is-${stage.state} ${extra}" data-col="${column}"><span class="pg-box"><span class="pg-port pg-port-in"></span>${lucide(icons[stage.kind]||'circle','pg-icon')}<span class="pg-port pg-port-out"></span></span><strong>${stage.title}</strong><small>${stage.subtitle}</small>${live}</div>`;
+  return `<div class="pg-node is-${stage.state} ${extra}" data-col="${column}" data-kind="${stage.kind}"><span class="pg-box"><span class="pg-port pg-port-in"></span>${lucide(icons[stage.kind]||'circle','pg-icon')}<span class="pg-port pg-port-out"></span></span><strong>${stage.title}</strong><small>${stage.subtitle}</small>${live}</div>`;
  }
  function render(){
   // The read percentage stays on the Read box between progress lines that do not carry one.
@@ -1710,8 +1790,13 @@ function redesignAnalysis(){
   try{paint(await api(endpoint('/live')));}catch{}finally{polling=false;if(!view.hidden&&isLive())timer=setTimeout(poll,1000);}
  }
  function show(on){
+  const wasLive=!view.hidden;
   view.hidden=!on;results.classList.toggle('is-live',on);
   if(on){paint(last);poll();}else clearTimeout(timer);
+  // The comparison finished while its live results were open: open the final results the way a refresh does,
+  // in review mode, so the columns and the Match Mismatch Overview sit side by side. Whichever code notices
+  // the completion first (the page's refresh or the check below) ends up here.
+  if(wasLive&&!on&&job?.state==='complete'&&currentView==='results')setTimeout(()=>{if(currentView==='results'&&job?.state==='complete'&&!$('mainWorkspace').classList.contains('review-rail')){panel('results');renderSummary();renderExports();}},0);
  }
  const syncNavigationBeforeLive=syncNavigation;
  syncNavigation=function(){syncNavigationBeforeLive();if(isLive())$('navResults').disabled=false;};
@@ -1728,7 +1813,7 @@ function redesignAnalysis(){
  // The card's action group is built on DOMContentLoaded, after this script runs.
  const placeLive=()=>{const actions=$('runningPanel').querySelector('.pipeline-actions');if(actions)actions.append(liveButton);else $('runningPanel').querySelector('#pipelineErrorCard')?.after(liveButton);};
  if($('runningPanel').querySelector('.pipeline-actions'))placeLive();else window.addEventListener('DOMContentLoaded',placeLive,{once:true});
- setInterval(()=>{liveButton.hidden=!isLive()||currentView!=='runningPanel';if(!view.hidden&&!isLive()&&job?.state==='complete'&&currentView==='results'){panel('results');renderSummary();renderExports();}},1000);
+ setInterval(()=>{liveButton.hidden=!isLive()||currentView!=='runningPanel';if(!view.hidden&&!isLive()&&job?.state==='complete'&&currentView==='results')show(false);},1000);
 }
 
 // Excel options in the Export menu: rows per column sheet, and whether values longer than an Excel cell are

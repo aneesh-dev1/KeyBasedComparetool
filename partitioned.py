@@ -75,7 +75,7 @@ def _wide_text(args):
         if is_parquet(path):
             return False
         delimiter, encoding, _ = dialect(args, side)
-        if encoding not in ('utf-8', 'utf-8-sig') or len(delimiter) != 1 or not delimiter.isascii() or delimiter in '"\r\n':
+        if encoding not in SPLITTABLE_ENCODINGS or len(delimiter) != 1 or not delimiter.isascii() or delimiter in '"\r\n':
             return False
         with open(path, 'rb') as stream:
             sample = stream.read(4 * MIB)
@@ -273,54 +273,136 @@ def _write_spill(target, buffers):
 
 
 # Fingerprint mode: the hash lookup for wide delimited-text files. Copying every row into spill files and
-# reading it back was most of the read phase. Instead each row becomes a 30-byte reference: a 128-bit
-# SHA-256 fingerprint of the row plus its byte position in the source. Key ranges are joined by looking each
-# key up in the other file's references. Rows whose fingerprints match are equal; only rows that differ are
-# read again from the source and compared value by value, so reported differences stay exact.
+# reading it back was most of the read phase (and on Windows, antivirus scanning and OneDrive syncing of those
+# writes made it far slower). Instead each row becomes a 30-byte reference: a 128-bit fingerprint of the row
+# plus its byte position in the source, whatever the encoding (UTF-8 or Windows-1252) or quoting. Key ranges
+# are joined by looking each key up in the other file's references. Rows whose fingerprints match are equal;
+# only rows that differ are read again from the source and compared value by value, so differences stay exact.
+#
+# Reference kinds: U unquoted line, Q every field quoted, M some fields quoted (no "" escapes, no line breaks),
+# P anything else, parsed by the strict CSV parser (escaped quotes, line breaks inside values).
 REF = b'\x7f'
 REF_TAIL = struct.Struct('<QI')  # record offset and length in the source file
 SAME = b'\x00'  # one shared placeholder for both rows of an equal pair; identical payloads are never decoded
 # Measured crossover: below about 500 bytes a row is cheaper to copy than to fingerprint and read again.
 FINGERPRINT_MIN_ROW_BYTES = 512
+UTF8 = ('utf-8', 'utf-8-sig')
+_DIGESTS = {'sha256': lambda data: hashlib.sha256(data).digest()[:16],
+            'blake2b': lambda data: hashlib.blake2b(data, digest_size=16).digest()}
+_CHOSEN_DIGEST = []
+
+
+def choose_digest():
+    """The faster 128-bit fingerprint on this CPU: SHA-256 where it has hardware support, otherwise BLAKE2b."""
+    if not _CHOSEN_DIGEST:
+        data = os.urandom(2 * MIB)
+        timings = {}
+        for name, function in _DIGESTS.items():
+            started = time.perf_counter()
+            for _ in range(4):
+                function(data)
+            timings[name] = time.perf_counter() - started
+        _CHOSEN_DIGEST.append(min(timings, key=timings.get))
+    return _CHOSEN_DIGEST[0]
 
 
 class _NotSimple(Exception):
-    """This range needs the full text parser (for example a lone carriage return or invalid UTF-8)."""
+    """This range needs the full text parser (for example a lone carriage return or an undecodable byte)."""
 
 
-def _layout(source):
-    order = source['order']
-    return dict(path=source['path'], delimiter=source['dialect']['delimiter'], width=len(source['names']),
-                order=order, full=order == list(range(len(source['names']))))
+def _layout(source, digest='sha256'):
+    order, dialect = source['order'], source.get('dialect') or {}
+    return dict(path=source['path'], delimiter=dialect['delimiter'], width=len(source['names']), order=order,
+                full=order == list(range(len(source['names']))), encoding=dialect.get('encoding', 'utf-8'), digest=digest)
+
+
+def _quotes_wrap_fields(parts, separator):
+    """True when every quote pair of a line split on '"' wraps a whole field: it opens at a field start and the
+    closing quote is followed by the delimiter or the end of the line. Then the strict CSV parser reads exactly
+    the text between the quotes."""
+    last = len(parts) - 1
+    if parts[0] and not parts[0].endswith(separator):
+        return False
+    for i in range(2, last, 2):
+        if not (parts[i].startswith(separator) and parts[i].endswith(separator)):
+            return False
+    return not parts[last] or parts[last].startswith(separator)
+
+
+def _split_quoted(parts, separator):
+    """Fields of a line whose quotes all wrap whole fields (see _quotes_wrap_fields), as bytes."""
+    cells, current, last = [], None, len(parts) - 1
+    for i, part in enumerate(parts):
+        if i % 2:
+            current = part
+            continue
+        pieces = part.split(separator)
+        if i:
+            cells.append(current)
+            pieces = pieces[1:]
+            if not part:
+                continue
+        if i < last:
+            cells.extend(pieces[:-1])
+        else:
+            cells.extend(pieces)
+    return cells
+
+
+def _cells(record, kind, layout):
+    separator = layout['delimiter'].encode('ascii')
+    if kind == b'U':
+        return record.split(separator)
+    if kind == b'Q':
+        return record[1:-1].split(b'"' + separator + b'"')
+    return _split_quoted(record.split(b'"'), separator)
 
 
 def _ref_payload(record, kind, layout):
-    """The packed row of a fast-path record; byte-identical to csv_input.PackedRows for the same line."""
-    delimiter = layout['delimiter'].encode('ascii')
-    if kind == b'U':
-        if layout['full']:
-            return b'\x00' + record.replace(delimiter, b'\x1f')
-        cells = record.split(delimiter)
-    else:
-        cells = record[1:-1].split(b'"' + delimiter + b'"')
-    return b'\x00' + b'\x1f'.join(cells if layout['full'] else [cells[i] for i in layout['order']])
+    """The packed row of a U, Q or M record; byte-identical to csv_input.PackedRows for the same line."""
+    full, encoding = layout['full'], layout['encoding']
+    if kind == b'U' and full:
+        if encoding in UTF8:
+            return b'\x00' + record.replace(layout['delimiter'].encode('ascii'), b'\x1f')
+        return b'\x00' + record.decode(encoding).replace(layout['delimiter'], '\x1f').encode('utf-8')
+    cells = _cells(record, kind, layout)
+    chosen = cells if full else [cells[i] for i in layout['order']]
+    if encoding in UTF8:
+        return b'\x00' + b'\x1f'.join(chosen)
+    return b'\x00' + '\x1f'.join(cell.decode(encoding) for cell in chosen).encode('utf-8')
+
+
+def _parse_record(record, layout):
+    """Packed row of a P record: the strict CSV parser over the record's own lines, as the text reader reads it."""
+    from compare import pack_values
+    text = record.decode(layout['encoding']) + '\n'
+    row = next(csv.reader(io.StringIO(text, newline=''), delimiter=layout['delimiter'], strict=True))
+    return pack_values(row if layout['full'] else [row[i] for i in layout['order']])
 
 
 def _fingerprint(record, kind, layout, mode):
-    # "raw": both files share one delimiter and column order, so equal raw lines of the same kind are equal rows.
-    return hashlib.sha256(record if mode == 'raw' else _ref_payload(record, kind, layout)).digest()[:16]
+    # "raw": both files share delimiter, encoding and column order, so equal raw lines of the same kind are equal
+    # rows. P records always use the packed row, so they also match across files and modes.
+    digest = _DIGESTS[layout['digest']]
+    if kind == b'P':
+        return digest(_parse_record(record, layout))
+    return digest(record if mode == 'raw' else _ref_payload(record, kind, layout))
 
 
-def fingerprint_mode(args, sources):
-    """'raw' or 'canonical' when both files are wide UTF-8 delimited text; None keeps full rows in the spill."""
+def fingerprint_choice(args, sources):
+    """('raw' or 'canonical', None) when both files are wide delimited text in a byte-splittable encoding;
+    otherwise (None, the reason), and full rows are kept in the spill."""
     if getattr(args, 'fingerprint', 'auto') == 'off':
-        return None
+        return None, 'turned off'
     for source in sources:
         dialect = source.get('dialect') or {}
         delimiter = dialect.get('delimiter', '')
-        if (source['kind'] != 'text' or source['ranges'] is None or dialect.get('encoding') not in ('utf-8', 'utf-8-sig')
-                or len(delimiter) != 1 or not delimiter.isascii() or delimiter in '"\r\n'):
-            return None
+        if source['kind'] != 'text':
+            return None, 'one file is Parquet'
+        if source['ranges'] is None or dialect.get('encoding') not in SPLITTABLE_ENCODINGS:
+            return None, f"{Path(source['path']).name} is {dialect.get('encoding')}, which cannot be split by bytes"
+        if len(delimiter) != 1 or not delimiter.isascii() or delimiter in '"\r\n':
+            return None, 'the delimiter is not a single ASCII character'
     if getattr(args, 'fingerprint', 'auto') != 'on':
         # Narrow rows are cheap to copy; the fingerprint only pays off when rows are wide.
         for source in sources:
@@ -328,10 +410,15 @@ def fingerprint_mode(args, sources):
                 stream.seek(source['start'])
                 sample = stream.read(4 * MIB)
             if sample.count(b'\n') and len(sample) / sample.count(b'\n') < FINGERPRINT_MIN_ROW_BYTES:
-                return None
+                return None, f"rows of {Path(source['path']).name} average under {FINGERPRINT_MIN_ROW_BYTES} bytes"
     layouts = [_layout(source) for source in sources]
-    same = all(layout['full'] for layout in layouts) and layouts[0]['delimiter'] == layouts[1]['delimiter']
-    return 'raw' if same else 'canonical'
+    family = {('utf-8' if layout['encoding'] in UTF8 else layout['encoding']) for layout in layouts}
+    same = all(layout['full'] for layout in layouts) and layouts[0]['delimiter'] == layouts[1]['delimiter'] and len(family) == 1
+    return ('raw' if same else 'canonical'), None
+
+
+def fingerprint_mode(args, sources):
+    return fingerprint_choice(args, sources)[0]
 
 
 def _byte_lines(path, start, end):
@@ -359,8 +446,10 @@ def _read_fingerprints(task):
     side, path = task['side'], task['path']
     bounds, excluded = task['bounds'], task['excluded']
     allow_empty, cancel_file, mode = task['allow_empty'], task['cancel_file'], task['fingerprint']
-    layout = _layout(task)
-    delimiter, width, full, order = layout['delimiter'], layout['width'], layout['full'], layout['order']
+    layout = _layout(task, task.get('digest') or 'sha256')
+    delimiter, width, full, order, encoding = layout['delimiter'], layout['width'], layout['full'], layout['order'], layout['encoding']
+    utf8 = encoding in UTF8
+    digest = _DIGESTS[layout['digest']]
     separator = delimiter.encode('ascii')
     quoted_separator = b'"' + separator + b'"'
     direct = delimiter not in ('"', '\r', '\n')
@@ -369,26 +458,28 @@ def _read_fingerprints(task):
     key_positions = task['key_positions']
     largest_key, first_key = max(key_positions), min(key_positions)
     from_end = width - first_key < largest_key + 1
-    if task['start'] == 0 and task['dialect']['encoding'] == 'utf-8-sig':
+    if task['start'] == 0 and encoding == 'utf-8-sig':
         raise _NotSimple  # a byte-order mark belongs to the text reader
     buffers = [[] for _ in range(len(bounds) + 1)]
     spills, pending, sequence = [], 0, 0
     spill_dir = Path(task['spill_dir'])
     count = excluded_count = 0
-    bisect_right, pack, sha256, crc32 = bisect.bisect_right, FRAME.pack, hashlib.sha256, zlib.crc32
+    bisect_right, pack, crc32 = bisect.bisect_right, FRAME.pack, zlib.crc32
     sample, sample_bytes = [], 0
     lines = _byte_lines(path, task['start'], task['end'])
+    span_end = [0]
 
     def text(line, newline):
         try:
-            return line.decode('utf-8') + ('\n' if newline else '')
+            return line.decode(encoding) + ('\n' if newline else '')
         except UnicodeDecodeError:
             raise _NotSimple from None
 
     def continuation():
-        for _, extra, newline in lines:
+        for extra_offset, extra, newline in lines:
             if b'\r' in (extra[:-1] if extra.endswith(b'\r') else extra):
                 raise _NotSimple
+            span_end[0] = extra_offset + len(extra)
             yield text(extra, newline)
 
     for offset, line, newline in lines:
@@ -402,7 +493,7 @@ def _read_fingerprints(task):
         if b'\r' in record:
             raise _NotSimple
         if not line.isascii():
-            text(line, False)
+            text(line, False)  # the text reader would fail on a byte this encoding cannot decode
         kind = None
         fits = len(line) < limit and (separator_safe or b'\x1f' not in record)
         if direct and fits and record and b'"' not in record and record.count(separator) == width - 1:
@@ -422,10 +513,23 @@ def _read_fingerprints(task):
             if len(cells) == width:
                 kind = b'Q'
                 parts = [cells[i] for i in key_positions]
+        if kind is None and direct and fits and b'"' in record and b'""' not in record:
+            # Some fields quoted: count the delimiters outside the quotes instead of splitting every value.
+            quoted = record.split(b'"')
+            if (len(quoted) % 2 and _quotes_wrap_fields(quoted, separator)
+                    and record.count(separator) - sum(part.count(separator) for part in quoted[1::2]) == width - 1):
+                kind = b'M'
+                if quoted[0].count(separator) > largest_key:
+                    prefix = quoted[0].split(separator, largest_key + 1)
+                    parts = [prefix[i] for i in key_positions]
+                else:
+                    cells = _split_quoted(quoted, separator)
+                    parts = [cells[i] for i in key_positions]
         if kind is not None:
-            key_values = tuple(part.decode('utf-8') for part in parts)
+            key_values = tuple(part.decode(encoding) for part in parts) if not utf8 else tuple(part.decode('utf-8') for part in parts)
         else:
-            # Quoted fields, embedded quotes or line breaks: the strict CSV parser, exactly as the text reader.
+            # Escaped quotes or line breaks inside values: the strict CSV parser, exactly as the text reader.
+            span_end[0] = offset + len(line)
             row = next(csv.reader(itertools.chain((text(line, newline),), continuation()), delimiter=delimiter, strict=True))
             if len(row) != width:
                 raise ValueError(f'{path}: record {count}: expected {width} fields, got {len(row)}')
@@ -438,11 +542,12 @@ def _read_fingerprints(task):
         if not allow_empty and any(value == '' for value in key_values):
             raise ValueError(f'{path}: record {count}: empty key component')
         if kind is not None:
-            stored = REF + kind + sha256(record if mode == 'raw' else _ref_payload(record, kind, layout)).digest()[:16] + REF_TAIL.pack(offset, len(record))
+            stored = REF + kind + digest(record if mode == 'raw' else _ref_payload(record, kind, layout)) + REF_TAIL.pack(offset, len(record))
         else:
-            stored = payload
+            # The record's whole span (all its lines) is referenced; only its fingerprint is kept.
+            stored = REF + b'P' + digest(payload) + REF_TAIL.pack(offset, span_end[0] - offset)
         if len(sample) < ESTIMATE_PER_RANGE and crc32(key) % ESTIMATE_BUCKETS == 0 and sample_bytes < 4 * MIB:
-            real = stored if kind is None else _ref_payload(record, kind, layout)
+            real = payload if kind is None else _ref_payload(record, kind, layout)
             sample.append((key, real))
             sample_bytes += len(key) + len(real)
         buffers[bisect_right(bounds, key)].append(pack(len(key), len(stored)) + key + stored)
@@ -464,9 +569,12 @@ def _fetch(layout, mode, refs):
             stream.seek(offset)
             record = stream.read(length)
             kind = ref[1:2]
-            if len(record) != length or _fingerprint(record, kind, layout, mode) != ref[2:18]:
+            payload = _parse_record(record, layout) if kind == b'P' and len(record) == length else None
+            check = _DIGESTS[layout['digest']](payload) if payload is not None else (
+                _fingerprint(record, kind, layout, mode) if len(record) == length else None)
+            if check != ref[2:18]:
                 raise ValueError(f"{layout['path']} changed during the comparison. Start a new comparison.")
-            rows[ref] = _ref_payload(record, kind, layout)
+            rows[ref] = payload if payload is not None else _ref_payload(record, kind, layout)
     return rows
 
 
@@ -955,7 +1063,8 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
         if journal is not None and journal.plan is not None:
             # The saved plan is reused as is, so recorded ranges line up even if workers or memory changed.
             sources, bounds = journal.plan['sources'], journal.plan['bounds']
-            mode = journal.plan.get('fingerprint')
+            mode, reason = journal.plan.get('fingerprint'), None
+            digest = journal.plan.get('digest', 'sha256')
             total_bytes = sum(source['size'] for source in sources)
             progress(args, 'Resuming parallel comparison', stage='index', engine='partitioned', workers=workers,
                      key_ranges=len(bounds) + 1, reused_reads=len(journal.reads), reused_key_ranges=len(journal.joins))
@@ -977,13 +1086,17 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                                              source['dialect']['delimiter'], source['dialect']['encoding'],
                                              source['start'], sample_count // 2)
             bounds = choose_bounds(keys, partitions)
-            mode = fingerprint_mode(args, sources)
+            mode, reason = fingerprint_choice(args, sources)
+            digest = choose_digest() if mode else 'sha256'
             if journal is not None:
-                journal.start(dict(sources=sources, bounds=bounds, fingerprint=mode))
+                journal.start(dict(sources=sources, bounds=bounds, fingerprint=mode, digest=digest))
         if mode:
             progress(args, 'Fingerprint lookup: equal rows are matched by key and fingerprint; only rows that differ are read again',
-                     stage='index', engine='partitioned', fingerprint=mode)
-        common = dict(fingerprint=mode, bounds=bounds, excluded=args.excluded_keys, allow_empty=args.allow_empty_keys,
+                     stage='index', engine='partitioned', fingerprint=mode, hash=digest)
+        elif reason:
+            progress(args, f'Fingerprint lookup not used ({reason}); full rows are copied to scratch files',
+                     stage='index', engine='partitioned')
+        common = dict(fingerprint=mode, digest=digest, bounds=bounds, excluded=args.excluded_keys, allow_empty=args.allow_empty_keys,
                       cancel_file=getattr(args, 'cancel_file', None), spill_dir=str(work / 'spill'),
                       batch_rows=getattr(args, 'read_batch_size', 100000),
                       memory_mb=max(16, int(budget / MIB / workers)), native_batch_bytes=getattr(args, 'native_batch_bytes', None))
@@ -1068,8 +1181,9 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                 stats[side + '_excluded_rows'] = sum(result['excluded'] for result in read[side])
                 progress(args, f'Indexing {side} file complete', stage='index', engine='partitioned',
                          rows=stats[side + '_rows'], excluded=stats[side + '_excluded_rows'], status='completed')
+            seconds = time.monotonic() - phase
             progress(args, 'Read and partition complete', stage='index', engine='partitioned', status='completed',
-                     elapsed_seconds=round(time.monotonic() - phase, 3))
+                     elapsed_seconds=round(seconds, 3), mb_per_second=round(total_bytes / MIB / max(seconds, 1e-3)))
             segments = {side: [[] for _ in range(len(bounds) + 1)] for side in ('left', 'right')}
             for side in ('left', 'right'):
                 for result in read[side]:
@@ -1091,7 +1205,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                                                            policy=args.duplicate_policy, capture=capture, out=str(work / 'parts'),
                                                            columns=names, column_count=len(canonical), policies=policies,
                                                            cancel_file=common['cancel_file'], fingerprint=mode,
-                                                           sources={source['side']: _layout(source) for source in sources} if mode else None))
+                                                           sources={source['side']: _layout(source, digest) for source in sources} if mode else None))
                 if journal is not None:
                     future.add_done_callback(lambda done: done.exception() is None and journal.record('join', done.result()['part'], done.result()))
                 futures.append(future)

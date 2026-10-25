@@ -627,6 +627,11 @@ def _compare(args):
     settings = execution_settings(vars(args))
     for name, value in settings.items(): setattr(args, name, value)
     progress(args, 'Validating configuration')
+    # A synced folder uploads every scratch file it sees, which slows large comparisons a great deal.
+    for label, location in (('Data folder', getattr(args, 'checkpoint_dir', None) or args.temp_dir), ('File 1', args.left), ('File 2', args.right)):
+        if location and 'onedrive' in str(Path(location).resolve()).lower():
+            progress(args, f'WARNING: {label} is inside OneDrive; syncing slows large comparisons. Use a local, unsynced folder (DATA_DIR) and exclude it from antivirus scanning.')
+            break
     # CSV cells can exceed Python's small default field limit.
     csv.field_size_limit(args.max_field_mb * 1024 * 1024)
     left_names, left_header_changes = read_header(args.left, *dialect(args, 'left'))

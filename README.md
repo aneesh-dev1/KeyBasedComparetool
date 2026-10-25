@@ -20,6 +20,9 @@ Python runtime when available, otherwise your installed Python 3.9+.
 On Windows, install **64-bit Python 3.9+**, extract the complete ZIP, then
 double-click **Start CSV Compare.bat**. The launcher tries `py -3` first and
 falls back to `python`. Keep its console window open while work is running.
+If the folder is synced by OneDrive, the launcher keeps comparison data in
+`%LOCALAPPDATA%\DataCompare\data` instead, because syncing scratch files slows large comparisons.
+For files of several GB, also exclude the data folder from real-time antivirus scanning.
 On other platforms, or from a terminal in this folder:
 
 ```bash
