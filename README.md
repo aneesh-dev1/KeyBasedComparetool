@@ -136,7 +136,7 @@ the complete mismatch report into memory. A very large workbook may still be
 slow to open in Excel, even when generation succeeds.
 
 Keep the server running while processing. Upload offsets persist across restarts.
-Interrupted comparisons can reuse validated completed external-sort checkpoints;
+Interrupted partitioned comparisons reuse validated completed hash buckets;
 an interrupted in-memory hash run rebuilds its lookup. Open an eligible job's
 **Resume comparison** action in Job history. See the resume section below for
 source validation and limits. Completed jobs and reports survive restarts.
@@ -215,37 +215,33 @@ Exit codes: **0** identical, **1** differences, **2** error. A summary is writte
 only after successful completion. Failed/interrupted runs retain partial reports
 marked `INCOMPLETE`; use a new output directory to retry. Temporary runs are
 cleaned on ordinary completion or exceptions; forcibly killed processes can leave
-scratch files behind. Duplicate detection can occur late during the merge.
+scratch files behind. Duplicate detection can occur during bucket loading.
 
 ## Large-file design and sizing
 
-Large inputs (64 MiB or more in total, on a machine with at least two CPU cores) use the **partitioned
-engine**. It reads both files in parallel byte ranges, splits the key space into ranges and compares
-those ranges on every core. Its outputs are byte-identical to the engines described below. Two 3.1 GB
-files with 2,000 columns compared in 16.2 s, against 39.8 s before. See
-[docs/ENGINE.md](docs/ENGINE.md) for the design, the exactness argument and sizing for
-10 GB × 2,000 columns × 10 million rows.
+The tabular engine uses exact hash matching in resident or parallel partitioned
+mode. It does **not sort rows or keys**. Large inputs use stable hash buckets;
+small inputs avoid scratch files while they fit memory. Memory overflow spills
+already-read data and continues the open reader, rather than restarting a sort.
+Oversized buckets are recursively partitioned within the worker's budget.
 
-For smaller inputs, the default engine builds exact key lookups from both sources, retaining packed rows within a measured memory budget. Key order and different row counts do not need to match. First/last duplicate handling is preserved. Only key references are ordered for deterministic output; full row payloads avoid sort files when the lookups fit. If the budget is exceeded, the lookups are released and comparison restarts using compressed external sorting. Saved sort checkpoints select that fallback directly. Inputs still must be read; checkpoint fingerprint validation also reads source files.
+CSV, Excel imports, Parquet and fixed-width imports share the comparison loop.
+Full keys and values determine equality; hashes never replace exact comparisons.
+First/last duplicates, missing keys, exclusions and rules retain their semantics.
+CSV output order is bucket/insertion order, not sorted-key order. Report schemas
+are unchanged. See [docs/ENGINE.md](docs/ENGINE.md) for design and compatibility.
 
-The application measures currently available RAM, CPU capacity and free workspace storage at worker launch. There is **no fixed default memory ceiling**. It keeps 25% of available RAM (at least 2 GB where possible) outside the comparison budget, accounts for configured concurrent workers, and adapts read batches and buffers to column width. Hash objects use at most 80% of that budget, reserving more space for transient decoding and ordering. These are allocation targets, not a hard process RSS limit. A single exceptionally large row can exceed a target. An administrator can optionally impose an explicit deployment ceiling with `MAX_SORT_MB`; its default is `0` (automatic).
+The application measures available RAM, CPU capacity and workspace storage at
+worker launch. It keeps a system reserve and distributes the budget among workers.
+There is no fixed default memory ceiling; `MAX_SORT_MB` remains the legacy name
+for an optional administrator limit. Budgets are allocation targets, not hard RSS
+caps. Chosen resources are logged in `runtime-settings.json`.
 
-Source reads and disk fallback use one sorting worker to avoid HDD seek contention. The server defaults to one heavy job at a time; other users queue independent comparisons. The chosen resources appear in the console and `runtime-settings.json`. Settings has been removed from the sidebar. Browser display preferences are under Docs & FAQ; comparison rules remain in Keys & scope.
-
-Use local SSD storage for uploads, scratch and reports. For two 6 GB inputs,
-starting with 40–60 GB free **in addition to the uploaded copies** is a planning
-estimate, not a guaranteed upper bound. Merge passes temporarily retain both
-old and new runs. Compact runs reduce scratch size for typical wide tables,
-but content and encodings affect the result. Measure scratch growth on a
-representative subset first. Reports need additional space: if nearly every
-cell differs, the long-format report can be much larger than the source files
-(up to roughly 2 billion cell records at 1 million rows × 2,000 columns).
-
-CSV parsing and cell-level comparison are CPU-bound. The partitioned engine
-parallelises reading, matching keys and writing partial outputs. The sort
-fallback parallelises only file preparation. Benchmark on the target hardware
-before relying on a runtime figure. For repeated comparisons, upstream sorted data or a reusable
-indexed/columnar representation would avoid rebuilding the sort on every run.
+Source reads are unavoidable. Checkpoint source fingerprints also read the files.
+Use SSD storage where possible. Dense differences can generate evidence much
+larger than the source data: 55% of 1 million × 1,780 cells is approximately
+979 million differences. Benchmark complete workflows on the target machine;
+no fixed runtime or scratch-space upper bound is promised.
 
 ## Validation
 
@@ -295,7 +291,7 @@ For composite keys, use a JSON list of tuples in the selected key order:
 Exclusion matches the entire tuple; excluding `["001","A"]` does not exclude
 `["001","B"]`. Duplicate filter entries are deduplicated.
 
-Rows are filtered during the existing streaming read, before sorting, joining,
+Rows are filtered during the existing streaming read, before hash matching,
 and duplicate-key detection. All occurrences of an excluded key are skipped.
 CSV syntax and row width are still validated. CSV fields must still be parsed
 to locate the selected values; ignored columns cannot eliminate that sequential
@@ -360,7 +356,7 @@ returned per page, with 500 displayed characters per cell and a 2 MB response
 cap per file. Fewer displayed rows may indicate end of file or the response cap.
 Applied comparison header names are shown. Preview never changes source values.
 
-**Pipeline & logs** reflects actual validation, read/index or sort, comparison,
+**Pipeline & logs** reflects actual validation, read/index, comparison,
 report writing and completion stages, not simulated progress. Review revisions
 show their retained-evidence stages instead of pretending to reread sources.
 The console keeps the latest 1,000 lines, with search, category filters/counts,
@@ -416,7 +412,7 @@ into a local UTF-8 CSV for the disk-backed comparison engine; shared strings
 are indexed in a temporary SQLite database with a bounded cache. Only one heavy
 import/comparison/export runs at a time. Import progress appears below the sheet
 selectors and is retained in the job log. Reserve disk space for the original
-workbooks, imported CSVs, sorting scratch, and reports. Large Excel imports have
+workbooks, imported CSVs, comparison scratch, and reports. Large Excel imports have
 not been benchmarked at 6 GB. The CLI remains CSV-only; Excel selection is in
 the web app. No additional Python packages are required for Excel.
 
@@ -467,40 +463,25 @@ concurrent request receives a retry message.
 
 ## Batch console updates
 
-New comparisons log each memory-bounded sorting batch as started, sorting, and
-completed, including batch row count and elapsed sort/write time. Intermediate
-merge passes report each merge batch and its total batches for that pass.
-Comparison remains streaming: progress checkpoints start and complete every
-10,000 processed keys, including the final partial checkpoint. These messages
-include cumulative processed keys and changed cells; they do not imply loading
-10,000 wide rows into memory. Total sorting batches are not guessed in advance.
-The comparison console and downloadable run.log contain these messages. Existing
-completed job logs are unchanged.
+The pipeline displays **Read & index**. Logs report source records, hash-bucket
+progress and comparisons. Resident comparisons report the final partial batch;
+partitioned comparisons report completed buckets. These progress units do not
+imply loading that many wide rows simultaneously. Existing job logs are unchanged.
 
 ## Reproducible performance check
 
-A synthetic local check used 100,000 shuffled rows × 2,000 columns per file
-(about 580 MB each), with one changed field in 10% of rows. The earlier engine
-with 256 MB sequential sorting took 23.820 s; the compact engine at the same
-256 MB took 12.921 s; the compact engine with 4 GB total and two sorters took
-7.238 s. All three produced byte-identical CSV result files (10,000 changed
-cells). These are single-run measurements on the development macOS machine,
-not Windows or full-size measurements. They exclude upload and report export;
-input caching, CPU, storage, data shape, and mismatch frequency affect timing.
+See [docs/HASH_ENGINE_VALIDATION.md](docs/HASH_ENGINE_VALIDATION.md) for measured
+before/after results. Run the same reproducible warm-cache benchmark against both
+checkouts:
 
-Run the included benchmark on the target Windows machine from this folder:
-
-```bat
-py -3 benchmark.py --output benchmark-100k --rows 100000 --columns 2000 --memory-mb 4096 --sort-workers 2
+```sh
+python benchmarks/adaptive_hash.py --checkout /path/to/checkout --output timings.json
 ```
 
-It creates synthetic inputs in a new output directory, validates known
-mismatches, and writes `benchmark.json` with elapsed time and sampled scratch
-usage. It does not overwrite user data or measure RAM. Choose a new directory
-for each run. Compare `--sort-workers 1` and `2` on the same hardware.
-`--rows 1000000` generates approximately 5.8 GB per file for a full-scale
-synthetic test; reserve storage first. No full-scale or native Windows test
-was performed during this change.
+It checks expected counts and complete order-independent report digests. It does
+not measure upload, HTML/Excel export, analysis-index generation, full-size HDD
+performance or native Windows performance. Use representative deployment inputs
+before setting a latency target.
 
 ## Windows upload and header fixes
 
@@ -654,7 +635,7 @@ Comparison Summary.
   this is not a quota, reservation, or worst-case guarantee.
 - **Cancellation:** queued work is removed immediately. Active comparisons,
   worksheet imports, exports and analysis stop at safe checkpoints, so large
-  sorts or ZIP operations may take time to finish their current operation.
+  reads or ZIP operations may take time to finish their current operation.
   Comparison/import cancellation requires a new comparison; cancelled exports
   and analysis can be generated again. Uploaded files remain until job cleanup.
 - **Profiles:** save/apply/delete named profiles in the Profiles page; select one on the file-upload page. They include
@@ -688,7 +669,11 @@ Windows/on-prem deployment still need a representative pilot.
 
 ### Batch settings and duplicate handling
 
-The application automatically chooses read/sort and comparison batch sizes; Keys & scope retains first/last source occurrence for duplicates. CLI equivalents: `--read-batch-size`, `--compare-batch-size`, `--duplicate-policy`. Batch sizes accept integers from 1 to 1,000,000. Sorting flushes at the row cap or memory budget, whichever comes first. Comparison remains streaming; its batch setting controls progress reporting. Duplicate counts and skipped rows are shown in Results and exports. Match percentages use only retained rows.
+The application automatically chooses read and comparison batch sizes and worker
+budgets. First/last duplicate policies preserve source occurrence order. CLI
+batch options control decoding and progress; they never request sorting.
+Duplicate counts and skipped rows are included in results and exports. Match
+percentages use only retained rows.
 
 ### Column analysis and comments
 
@@ -710,22 +695,17 @@ rendering test.
 
 ### Resume interrupted comparisons
 
-New comparisons keep durable, job-local sort checkpoints. After a restart, open
-the job in Job history and choose **Resume from saved sort batches** in Pipeline
-& logs. SHA-256 checks validate both full source files and saved runs before reuse;
-this requires sequential disk reads, but avoids reparsing and sorting completed
-records. UTF-8/CSV multiline record boundaries are preserved using text-stream
-seek positions. An incomplete sort batch or merge pass is repeated. The final
-comparison is restarted from sorted data and partial result CSVs are replaced,
-never appended. Changed sources/settings or corrupt/missing runs reject resume.
-Worker and sorter locks prevent concurrent reuse, including surviving child
-processes after a forced restart. Keep the same Python runtime when resuming.
+Partitioned comparisons retain completed read ranges and hash buckets. Choose
+**Resume from saved hash buckets** in Pipeline & logs. Full source SHA-256 checks
+and saved spill checksums reject changed source data or corrupted spill content;
+metadata checksums protect the plan and journal. Incomplete work is repeated.
+Completed recorded buckets are reused and final report CSVs are rebuilt, never
+appended to partial results. Small resident jobs rebuild their lookup on resume.
 
-Checkpoints consume disk until success, job deletion, or normal retention cleanup.
-During merge, a completed checkpoint remains until the next merge pass commits,
-so allow additional scratch space. Successful server jobs remove their checkpoints.
-Jobs started before this feature have no resumable checkpoints. Source validation
-and checkpoint creation add I/O; 6 GB performance has not been benchmarked.
+Worker locks prevent concurrent reuse. Old partition plans are rebuilt using the
+new hash-plan format. Keep the same Python runtime and comparison settings when
+resuming. Checkpoints consume disk until success, deletion or retention cleanup.
+Source validation adds I/O; benchmark it as part of the server workflow.
 
 ### Mismatch patterns and numeric formatting
 
@@ -790,11 +770,11 @@ python3 -m venv .venv
 
 On Windows use `.venv\Scripts\python.exe -m pip install -r requirements.txt`. The launchers prefer this environment when it exists. Restart a running server after installing or updating dependencies. Tested with PyArrow 25.0.1.
 
-Parquet headers come from schema metadata. The comparison worker reads only selected key/value columns using Arrow batches, then feeds the existing bounded external sort and merge engine directly. It never converts the whole file to CSV or loads a full dataframe. CSV/Parquet and Excel/Parquet pairs are supported too. Native batch rows adapt to the selected columns' uncompressed metadata estimate and share the configured read/sort limit. File sorting concurrency, cancellation, duplicate handling, rules, reports and restart checkpoints still apply. Resuming skips completed row groups and resumes inside the next group; existing source fingerprint validation is retained.
+Parquet headers come from schema metadata. The comparison worker reads only selected key/value columns using Arrow batches, then feeds the bounded hash comparison engine directly. It never converts the whole file to CSV or loads a full dataframe. CSV/Parquet and Excel/Parquet pairs are supported too. Native batch rows adapt to the selected columns' uncompressed metadata estimate and share the allocated reader budget. Worker concurrency, cancellation, duplicate handling, rules, reports and restart checkpoints still apply. Resuming skips completed row groups and resumes inside the next group; existing source fingerprint validation is retained.
 
 Parquet values are rendered deterministically as text: booleans `true`/`false`, dates/times in ISO form, binary in base64, nested values as JSON (object fields sorted, array order preserved). Physical numeric widths are not treated as differences; numeric-format rules are optional as with CSV. Null is distinct from empty text and is displayed as `[NULL]` in reports; a literal string `[NULL]` is marked `[NULL] (text)` in mismatches. Null keys are rejected. Duplicate Parquet field names must be fixed before upload; ordinary blank/case-colliding headers use the existing header normalization.
 
-The sort budget is not a process-wide RAM cap: Arrow buffers, schema metadata, decompression and unusually large individual cells add overhead. Compressed inputs may expand substantially in scratch storage. Use a fast local SSD, keep server concurrency conservative, and benchmark representative files before committing to a 6 GB SLA.
+The comparison budget is not a process-wide RAM cap: Arrow buffers, schema metadata, decompression and unusually large individual cells add overhead. Compressed inputs may expand substantially in scratch storage. Use a fast local SSD, keep server concurrency conservative, and benchmark representative files before committing to a 6 GB SLA.
 
 ```sh
 .venv/bin/python benchmark.py --format parquet --output benchmark-parquet --rows 10000 --columns 2000 --memory-mb 64 --sort-workers 1
@@ -838,7 +818,7 @@ package functionality is not part of this workflow.
 
 ## Wide-file performance validation
 
-The Parquet reader caches the Arrow schema and packs string, integer and boolean columns with native Arrow kernels, materializing only keys and packed rows in Python. Other types retain the existing text conversion to preserve comparison semantics. Nulls and embedded separators remain distinct. CSV, Excel and Parquet share a cheaper null check and sort-run checksums calculated during writes, avoiding a second scratch-file read. Resume still verifies saved checksums. Reading and external key sorting remain necessary in this implementation; it does not assume row order or equal row counts.
+The Parquet reader caches the Arrow schema and packs string, integer and boolean columns with native Arrow kernels, materializing only keys and packed rows in Python. Other types retain the existing text conversion to preserve comparison semantics. Nulls and embedded separators remain distinct. CSV, Excel and Parquet share exact null handling and packed values. The current engine uses hash matching without sorting; spill checksums are calculated during writes and verified on resume. The measurements below describe earlier releases, not the current hash implementation.
 
 Measured on local Mac storage with synthetic integer Parquet data (not a server SLA):
 
@@ -851,7 +831,7 @@ The larger fixture used two approximately 2.35 GB files, a 512 MB sort budget an
 
 Run `python benchmark_wide_parquet.py --output <new-directory>` to reproduce the larger fixture, comparison and report timings. This consumes several GB of disk space. Scratch files using the new null bitmap format require this version or newer to resume; when rolling back, start a fresh comparison.
 
-### Additional Parquet read/sort tuning
+### Historical Parquet reader tuning
 
 Native packing now allows a working-set target of up to 64 MiB (still capped at one quarter of the file worker's sort budget, with the same eightfold metadata expansion allowance and configured read-row limit). This amortizes per-column kernel setup for wide inputs. Decimals with nonnegative scale use Arrow string conversion; float conversion retains Python formatting with less dispatch overhead. Negative-scale decimals retain the reference conversion. Exact-format tests cover decimal scales through 38, nulls, signed zero, NaN/infinity and float32/float64.
 
@@ -859,7 +839,7 @@ Compared with commit `84d59d0`, local read-and-pack microbenchmarks improved fro
 
 ## CSV and HDD performance
 
-Ordinary unquoted CSV rows with the same selected column order are now packed directly: delimiter counting and replacement run without creating a Python object for every cell. Keys remain exact text. Quoted/multiline records, embedded payload separators, projected/reordered columns and large records use the existing strict CSV parsing semantics. UTF encodings, field limits and text-stream checkpoint positions are preserved. Logs report direct/parsed record counts and each file's total read/sort duration plus retained scratch bytes. Excel's imported CSV also benefits when eligible.
+Ordinary unquoted CSV rows with the same selected column order are now packed directly: delimiter counting and replacement run without creating a Python object for every cell. Keys remain exact text. Quoted/multiline records, embedded payload separators, projected/reordered columns and large records use the existing strict CSV parsing semantics. UTF encodings, field limits and text-stream checkpoint positions are preserved. Logs report direct/parsed record counts and each file's read/index duration plus retained scratch bytes. Excel's imported CSV also benefits when eligible.
 
 All tabular formats now write losslessly compressed temporary sort runs in bounded 4 MiB blocks. PyArrow LZ4 is preferred when installed, with standard-library zlib as fallback. Blocks without useful compression stay raw. Merge reads decompress one block at a time, and checkpoint hashes cover the actual stored bytes. Existing uncompressed checkpoints remain readable. Rolling back to an older app requires fresh comparisons if saved runs use the new format. Compression adds bounded buffers (up to 4 MiB decoded data per open merge run, plus transient compression/decompression buffers); the sort budget remains distinct from a process-wide RAM cap.
 

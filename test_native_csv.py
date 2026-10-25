@@ -198,14 +198,14 @@ class NativeCSVTests(unittest.TestCase):
 
         def interrupt_after_plain_batch(args, message, **values):
             original_progress(args, message, **values)
-            if message == 'left sort batch complete':
+            if message == 'Read and partition complete':
                 raise RuntimeError('simulated interruption')
 
         with contextlib.redirect_stdout(io.StringIO()):
             with patch('compare.progress', side_effect=interrupt_after_plain_batch):
                 with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
                     compare(args)
-            self.assertEqual(json.loads((self.root / 'saved/left.json').read_text())['count'], 2)
+            self.assertTrue((self.root / 'saved/partitioned/manifest.json').exists())
             result = compare(args)
             reference_args = parser().parse_args([str(left), str(right), '--keys', 'id', '--output',
                                                  str(self.root / 'reference'), '--encoding', 'utf-16', '--engine', 'sort'])

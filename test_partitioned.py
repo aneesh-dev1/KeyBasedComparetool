@@ -1,5 +1,11 @@
-"""The partitioned engine must produce byte-identical outputs to the in-memory and disk-sort engines."""
+"""Resident and partitioned hash modes must produce identical report records."""
 import csv
+
+def report_rows(path):
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.reader(stream))
+    return rows[:1], sorted(rows[1:])
+
 import json
 import random
 import tempfile
@@ -67,7 +73,7 @@ class PartitionedEngineTests(unittest.TestCase):
         result, actual, actual_diag = self.run_engine('partitioned', name, extra, **settings)
         self.assertEqual(actual['execution_engine'], 'partitioned')
         for output in OUTPUTS:
-            self.assertEqual((result / f'{output}.csv').read_bytes(), (reference / f'{output}.csv').read_bytes(), output)
+            self.assertEqual(report_rows(result / f'{output}.csv'), report_rows(reference / f'{output}.csv'), output)
         self.assertEqual({k: v for k, v in actual.items() if k not in VOLATILE},
                          {k: v for k, v in expected.items() if k not in VOLATILE})
         self.assertEqual(actual_diag.exists(), expected_diag.exists())
@@ -106,7 +112,7 @@ class PartitionedEngineTests(unittest.TestCase):
                                                  dialects={'left': dict(delimiter='|', header=False), 'right': dict(delimiter='|', header=False)},
                                                  keys=['column1'])
         for output in OUTPUTS:
-            self.assertEqual((out / f'{output}.csv').read_bytes(), (reference / f'{output}.csv').read_bytes(), output)
+            self.assertEqual(report_rows(out / f'{output}.csv'), report_rows(reference / f'{output}.csv'), output)
         self.assertEqual(summary['left_rows'], len(left))
 
     def test_errors_report_the_same_global_record_number(self):

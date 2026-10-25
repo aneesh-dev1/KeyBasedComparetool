@@ -4,6 +4,12 @@ The two files name every column differently. The header layout renames them, and
 column, comparison rule and value override all use the new names.
 """
 import csv
+
+def report_rows(path):
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.reader(stream))
+    return rows[:1], sorted(rows[1:])
+
 import importlib.util
 import itertools
 import json
@@ -80,7 +86,7 @@ class RenamedHeaderEngineTests(unittest.TestCase):
                         with patch.object(partitioned, 'RANGE_BYTES', 16):
                             summary = compare(args)
                         self.assertEqual(picked(summary), EXPECTED)
-                        outputs = {name: (out / f'{name}.csv').read_bytes() for name in OUTPUTS}
+                        outputs = {name: report_rows(out / f'{name}.csv') for name in OUTPUTS}
                         if reference is None:
                             reference = outputs
                         self.assertEqual(outputs, reference)

@@ -96,14 +96,11 @@ def resume_strategy(directory,job):
     checkpoints=Path(directory)/'checkpoints'
     if not (checkpoints/'identity.json').exists():return None
     if (checkpoints/'partitioned'/'manifest.json').exists():return 'partitioned'
-    if job.get('comparison_engine','sort')=='sort' or any((checkpoints/(side+'.json')).exists() for side in ('left','right')):
-        return 'sort'
     return 'hash'
 
 
 def resume_message(directory,job):
     strategy=resume_strategy(directory,job)
-    if strategy=='sort':return 'Resume this job to reuse validated sort batches.'
     if strategy=='partitioned':return 'Resume this job to continue from the key ranges that already finished; sources will be validated again.'
     if strategy=='hash':return 'Resume this job to rebuild its in-memory key lookup; sources will be validated again.'
     return 'Start a new comparison.'
@@ -950,7 +947,7 @@ class Handler(BaseHTTPRequestHandler):
                 config=self.body();size=config.get('bytes')
                 if type(size) is not int or size<0 or size>200*1024**3:raise ValueError('Invalid combined upload size')
                 free=shutil.disk_usage(self.app.root).free
-                return self.json_response(dict(free=free,upload_bytes=size,suggested_free_bytes=size*3,can_upload=free>=size+128*1024**2,message='Plan for at least 3× combined input size for uploads, sorting and reports. This estimate is not a reservation or upper bound; many mismatches and analysis indexes need more.'))
+                return self.json_response(dict(free=free,upload_bytes=size,suggested_free_bytes=size*3,can_upload=free>=size+128*1024**2,message='Plan for at least 3× combined input size for uploads, comparison scratch and reports. This estimate is not a reservation or upper bound; many mismatches and analysis indexes need more.'))
             if path == '/api/settings' and self.command in ('GET','POST'):
                 target=self.container_path().with_name('settings.json')
                 with self.app.lock:

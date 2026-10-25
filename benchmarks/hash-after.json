@@ -1,0 +1,213 @@
+{
+  "python": "3.12.14",
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "cases": [
+    {
+      "case": "wide_equal",
+      "rows_per_side": 1200,
+      "columns": 1780,
+      "mismatch_percent": 0,
+      "engine": "auto",
+      "input_bytes": 29930336,
+      "seconds": [
+        0.1601327089992992,
+        0.09077525000247988,
+        0.0911597089980205
+      ],
+      "median_seconds": 0.0911597089980205,
+      "changed_cells": 0,
+      "report_digests": {
+        "matched_keys.csv": "a73f979c09ccbe9e308ea717ef2202aea761431cbec5566dffaf8fd6b95eb972",
+        "differences.csv": "8ae3a40426bbf785c3af1a0ea3235b3b7d59a080dcaa05260b75c1a892e42e2a",
+        "right_only.csv": "7e8f728ac9d728a1d7897d091ca267d96feace0bf8de3a023f26914f765340b4",
+        "left_only.csv": "c32a74e42ac48ed29371ae90ee97d05a4d3c30cffc2e2377dba227bad0496669",
+        "duplicate_keys.csv": "9a5a9269f253e41dc4dc397f2bfc06ce8f4f75cb8343d8bcf2131d3a9bc29ffa",
+        "raw_differences.csv": "fc9bc4b70584f2f92d5ca0002d509375ddc9b6994a7d7386d0ee1e2cc56c6955"
+      }
+    },
+    {
+      "case": "wide_equal",
+      "rows_per_side": 1200,
+      "columns": 1780,
+      "mismatch_percent": 0,
+      "engine": "partitioned",
+      "input_bytes": 29930336,
+      "seconds": [
+        0.19961308399797417,
+        0.1933674579995568,
+        0.19392816699837567
+      ],
+      "median_seconds": 0.19392816699837567,
+      "changed_cells": 0,
+      "report_digests": {
+        "matched_keys.csv": "a73f979c09ccbe9e308ea717ef2202aea761431cbec5566dffaf8fd6b95eb972",
+        "differences.csv": "8ae3a40426bbf785c3af1a0ea3235b3b7d59a080dcaa05260b75c1a892e42e2a",
+        "right_only.csv": "7e8f728ac9d728a1d7897d091ca267d96feace0bf8de3a023f26914f765340b4",
+        "left_only.csv": "c32a74e42ac48ed29371ae90ee97d05a4d3c30cffc2e2377dba227bad0496669",
+        "duplicate_keys.csv": "9a5a9269f253e41dc4dc397f2bfc06ce8f4f75cb8343d8bcf2131d3a9bc29ffa",
+        "raw_differences.csv": "fc9bc4b70584f2f92d5ca0002d509375ddc9b6994a7d7386d0ee1e2cc56c6955"
+      }
+    },
+    {
+      "case": "wide_equal",
+      "rows_per_side": 1200,
+      "columns": 1780,
+      "mismatch_percent": 0,
+      "engine": "sort",
+      "input_bytes": 29930336,
+      "seconds": [
+        0.19354037499942933,
+        0.19478645900017,
+        0.19515129199862713
+      ],
+      "median_seconds": 0.19478645900017,
+      "changed_cells": 0,
+      "report_digests": {
+        "matched_keys.csv": "a73f979c09ccbe9e308ea717ef2202aea761431cbec5566dffaf8fd6b95eb972",
+        "differences.csv": "8ae3a40426bbf785c3af1a0ea3235b3b7d59a080dcaa05260b75c1a892e42e2a",
+        "right_only.csv": "7e8f728ac9d728a1d7897d091ca267d96feace0bf8de3a023f26914f765340b4",
+        "left_only.csv": "c32a74e42ac48ed29371ae90ee97d05a4d3c30cffc2e2377dba227bad0496669",
+        "duplicate_keys.csv": "9a5a9269f253e41dc4dc397f2bfc06ce8f4f75cb8343d8bcf2131d3a9bc29ffa",
+        "raw_differences.csv": "fc9bc4b70584f2f92d5ca0002d509375ddc9b6994a7d7386d0ee1e2cc56c6955"
+      }
+    },
+    {
+      "case": "wide_dense",
+      "rows_per_side": 1200,
+      "columns": 1780,
+      "mismatch_percent": 55,
+      "engine": "auto",
+      "input_bytes": 29930336,
+      "seconds": [
+        1.1426313329975528,
+        1.131928416001756,
+        1.134454499999265
+      ],
+      "median_seconds": 1.134454499999265,
+      "changed_cells": 1166309,
+      "report_digests": {
+        "matched_keys.csv": "a73f979c09ccbe9e308ea717ef2202aea761431cbec5566dffaf8fd6b95eb972",
+        "differences.csv": "cbfcc594ca679d5b2fecbfe079cfb75b93bf7a093b27ec97e73a4e94deb5156f",
+        "right_only.csv": "7e8f728ac9d728a1d7897d091ca267d96feace0bf8de3a023f26914f765340b4",
+        "left_only.csv": "c32a74e42ac48ed29371ae90ee97d05a4d3c30cffc2e2377dba227bad0496669",
+        "duplicate_keys.csv": "9a5a9269f253e41dc4dc397f2bfc06ce8f4f75cb8343d8bcf2131d3a9bc29ffa",
+        "raw_differences.csv": "f1b27fde8361f653a7faf6e8dde96a53f2f8c81e5b22288089961ed706c46f4c"
+      }
+    },
+    {
+      "case": "wide_dense",
+      "rows_per_side": 1200,
+      "columns": 1780,
+      "mismatch_percent": 55,
+      "engine": "partitioned",
+      "input_bytes": 29930336,
+      "seconds": [
+        0.7601069580014155,
+        0.7638101669981552,
+        0.7573240419987997
+      ],
+      "median_seconds": 0.7601069580014155,
+      "changed_cells": 1166309,
+      "report_digests": {
+        "matched_keys.csv": "a73f979c09ccbe9e308ea717ef2202aea761431cbec5566dffaf8fd6b95eb972",
+        "differences.csv": "cbfcc594ca679d5b2fecbfe079cfb75b93bf7a093b27ec97e73a4e94deb5156f",
+        "right_only.csv": "7e8f728ac9d728a1d7897d091ca267d96feace0bf8de3a023f26914f765340b4",
+        "left_only.csv": "c32a74e42ac48ed29371ae90ee97d05a4d3c30cffc2e2377dba227bad0496669",
+        "duplicate_keys.csv": "9a5a9269f253e41dc4dc397f2bfc06ce8f4f75cb8343d8bcf2131d3a9bc29ffa",
+        "raw_differences.csv": "f1b27fde8361f653a7faf6e8dde96a53f2f8c81e5b22288089961ed706c46f4c"
+      }
+    },
+    {
+      "case": "wide_dense",
+      "rows_per_side": 1200,
+      "columns": 1780,
+      "mismatch_percent": 55,
+      "engine": "sort",
+      "input_bytes": 29930336,
+      "seconds": [
+        0.7590526249987306,
+        0.756341500000417,
+        0.758415916996455
+      ],
+      "median_seconds": 0.758415916996455,
+      "changed_cells": 1166309,
+      "report_digests": {
+        "matched_keys.csv": "a73f979c09ccbe9e308ea717ef2202aea761431cbec5566dffaf8fd6b95eb972",
+        "differences.csv": "cbfcc594ca679d5b2fecbfe079cfb75b93bf7a093b27ec97e73a4e94deb5156f",
+        "right_only.csv": "7e8f728ac9d728a1d7897d091ca267d96feace0bf8de3a023f26914f765340b4",
+        "left_only.csv": "c32a74e42ac48ed29371ae90ee97d05a4d3c30cffc2e2377dba227bad0496669",
+        "duplicate_keys.csv": "9a5a9269f253e41dc4dc397f2bfc06ce8f4f75cb8343d8bcf2131d3a9bc29ffa",
+        "raw_differences.csv": "f1b27fde8361f653a7faf6e8dde96a53f2f8c81e5b22288089961ed706c46f4c"
+      }
+    },
+    {
+      "case": "many_keys",
+      "rows_per_side": 150000,
+      "columns": 12,
+      "mismatch_percent": 1,
+      "engine": "auto",
+      "input_bytes": 26100076,
+      "seconds": [
+        0.9847101669984113,
+        0.9695949579981971,
+        0.97180333399956
+      ],
+      "median_seconds": 0.97180333399956,
+      "changed_cells": 16498,
+      "report_digests": {
+        "matched_keys.csv": "2de5cf22a5124ebbbc92177d28ce3b77c2594a2ca623b3973a238ca44b593588",
+        "differences.csv": "358cd8c9faee77a85d849c30dd3e7d2ce92c0aaf3ece30a7b8199abae5141e6e",
+        "right_only.csv": "150e0dc554e98be5287d82bcbe99dda43cff2a41d2a431b66bfa391c358481ee",
+        "left_only.csv": "c32a74e42ac48ed29371ae90ee97d05a4d3c30cffc2e2377dba227bad0496669",
+        "duplicate_keys.csv": "9a5a9269f253e41dc4dc397f2bfc06ce8f4f75cb8343d8bcf2131d3a9bc29ffa",
+        "raw_differences.csv": "e1b3b10ccef72f33896786ab7e1df543b67f3e175fa0fcb0917083052a8de1bb"
+      }
+    },
+    {
+      "case": "many_keys",
+      "rows_per_side": 150000,
+      "columns": 12,
+      "mismatch_percent": 1,
+      "engine": "partitioned",
+      "input_bytes": 26100076,
+      "seconds": [
+        0.5457320419991447,
+        0.5423944579997624,
+        0.5454168329997628
+      ],
+      "median_seconds": 0.5454168329997628,
+      "changed_cells": 16498,
+      "report_digests": {
+        "matched_keys.csv": "2de5cf22a5124ebbbc92177d28ce3b77c2594a2ca623b3973a238ca44b593588",
+        "differences.csv": "358cd8c9faee77a85d849c30dd3e7d2ce92c0aaf3ece30a7b8199abae5141e6e",
+        "right_only.csv": "150e0dc554e98be5287d82bcbe99dda43cff2a41d2a431b66bfa391c358481ee",
+        "left_only.csv": "c32a74e42ac48ed29371ae90ee97d05a4d3c30cffc2e2377dba227bad0496669",
+        "duplicate_keys.csv": "9a5a9269f253e41dc4dc397f2bfc06ce8f4f75cb8343d8bcf2131d3a9bc29ffa",
+        "raw_differences.csv": "e1b3b10ccef72f33896786ab7e1df543b67f3e175fa0fcb0917083052a8de1bb"
+      }
+    },
+    {
+      "case": "many_keys",
+      "rows_per_side": 150000,
+      "columns": 12,
+      "mismatch_percent": 1,
+      "engine": "sort",
+      "input_bytes": 26100076,
+      "seconds": [
+        0.5419169580018206,
+        0.539062207997631,
+        0.5408213330010767
+      ],
+      "median_seconds": 0.5408213330010767,
+      "changed_cells": 16498,
+      "report_digests": {
+        "matched_keys.csv": "2de5cf22a5124ebbbc92177d28ce3b77c2594a2ca623b3973a238ca44b593588",
+        "differences.csv": "358cd8c9faee77a85d849c30dd3e7d2ce92c0aaf3ece30a7b8199abae5141e6e",
+        "right_only.csv": "150e0dc554e98be5287d82bcbe99dda43cff2a41d2a431b66bfa391c358481ee",
+        "left_only.csv": "c32a74e42ac48ed29371ae90ee97d05a4d3c30cffc2e2377dba227bad0496669",
+        "duplicate_keys.csv": "9a5a9269f253e41dc4dc397f2bfc06ce8f4f75cb8343d8bcf2131d3a9bc29ffa",
+        "raw_differences.csv": "e1b3b10ccef72f33896786ab7e1df543b67f3e175fa0fcb0917083052a8de1bb"
+      }
+    }
+  ]
+}

@@ -1,11 +1,11 @@
-"""Memory-bounded exact key lookup, with the external sorter as a fallback.
+"""Memory-bounded exact key lookup with adaptive hash spilling.
 
 Both selected-row maps are retained before writing any results. This is necessary
 for the last-occurrence duplicate policy: a later source row can replace an
-earlier match. Only key references are ordered; full rows never enter sort runs.
+earlier match. Keys and rows are never sorted.
 """
 import contextlib
-import heapq
+import itertools
 import json
 import sys
 import time
@@ -69,8 +69,10 @@ class HashJoin:
         diagnostics = getattr(args, 'diagnostics_file', None)
         policy = getattr(args, 'duplicate_policy', 'first')
         for side, rows in (('left', self.left), ('right', self.right)):
-            # Only duplicate keys need ordering for this small audit.
-            for index, key in enumerate(sorted(k for k, entry in rows.items() if entry[1] > 1)):
+            # Audit duplicate groups in insertion order; diagnostics keep the smallest key.
+            for index, (key, entry) in enumerate(rows.items()):
+                if entry[1] <= 1:
+                    continue
                 if index % 1000 == 0:
                     check_cancel(getattr(args, 'cancel_file', None))
                 count = rows[key][1]
@@ -78,7 +80,7 @@ class HashJoin:
                 stats[side + '_duplicate_rows_skipped'] = stats.get(side + '_duplicate_rows_skipped', 0) + count - 1
                 if audit is not None:
                     audit.writerow([side, key.decode('utf-8'), count, count - 1, policy])
-                if diagnostics and not Path(diagnostics).exists():
+                if diagnostics and not Path(diagnostics).exists() and self.samples.get(side, (None,))[0] == key:
                     sample_key, payloads = self.samples[side]
                     assert sample_key == key
                     samples = [unpack_values(payload) for payload in payloads]
@@ -89,29 +91,26 @@ class HashJoin:
                         note=f'Comparison continues using the {policy} source occurrence per key. Extra rows are skipped. This is the first duplicate group; download the duplicate audit for all keys.')))
 
     def iter_pairs(self, stats, audit, args):
-        """Yield exact pairs in legacy key order, without sorting row payloads."""
+        """Yield exact pairs in source insertion order, without sorting keys or rows."""
         self._audit(stats, audit, args)
-        previous = None
-        for index, key in enumerate(heapq.merge(sorted(self.left), sorted(self.right))):
+        keys = itertools.chain(self.left, (key for key in self.right if key not in self.left))
+        for index, key in enumerate(keys):
             if index % 1000 == 0:
                 check_cancel(getattr(args, 'cancel_file', None))
-            if key == previous:
-                continue
-            previous = key
             left, right = self.left.get(key), self.right.get(key)
             yield ((key, left[0]) if left is not None else None,
                    (key, right[0]) if right is not None else None)
 
 
-def try_build(args, left_names, right_names, canonical, temp, stats, progress):
+def try_build(args, left_names, right_names, canonical, temp, stats, progress, adaptive=False):
     """Build exact maps or return None, leaving stats untouched on fallback.
 
     Twenty percent of the requested budget is reserved for reader buffers,
-    transient dictionary growth, key ordering and native comparison batches.
+    transient dictionary growth and native comparison batches.
     The estimate covers owned Python objects rather than claiming an OS RSS cap.
     """
     temp = Path(temp)
-    if any((temp / (side + '.json')).exists() for side in ('left', 'right')):
+    if not adaptive and any((temp / (side + '.json')).exists() for side in ('left', 'right')):
         progress(args, 'Reusing saved sort batches; using compressed sorting', stage='sort', engine='sort')
         return None
     with contextlib.ExitStack() as stack:
@@ -121,10 +120,10 @@ def try_build(args, left_names, right_names, canonical, temp, stats, progress):
             # no manifest yet. It must finish before this job can change engines.
             for side in ('left', 'right'):
                 stack.enter_context(lock(temp / ('lock-' + side)))
-        return _build(args, left_names, right_names, canonical, stats, progress)
+        return _build(args, left_names, right_names, canonical, stats, progress, temp if adaptive else None)
 
 
-def _build(args, left_names, right_names, canonical, stats, progress):
+def _build(args, left_names, right_names, canonical, stats, progress, spill_dir=None):
     from compare import encode
 
     budget = int(args.memory_mb * 1024 * 1024)
@@ -133,6 +132,7 @@ def _build(args, left_names, right_names, canonical, stats, progress):
     samples = {}
     counts = {}
     retained = 0
+    spilled = None
     entry_overhead = sys.getsizeof((b'', 1)) + sys.getsizeof(1)
     policy = getattr(args, 'duplicate_policy', 'first')
     diagnostics = getattr(args, 'diagnostics_file', None)
@@ -159,6 +159,9 @@ def _build(args, left_names, right_names, canonical, stats, progress):
                     else:
                         if not args.allow_empty_keys and any(value is None or value == '' for value in key_values):
                             raise ValueError(f'{path}: record {count}: empty key component')
+                        if spilled is not None:
+                            spilled.add(side, key, payload)
+                            continue
                         previous = rows.get(key)
                         if previous is None:
                             rows[key] = (payload, 1)
@@ -181,7 +184,17 @@ def _build(args, left_names, right_names, canonical, stats, progress):
                         used = retained + sum(sys.getsizeof(table) for table in maps.values())
                         used += sum(sys.getsizeof(p) for _, values in samples.values() for p in values)
                         if used > limit:
-                            raise _BudgetExceeded
+                            if spill_dir is None:
+                                raise _BudgetExceeded
+                            from hash_spill import DiskJoin
+                            spilled = DiskJoin(spill_dir, limit)
+                            spilled.samples = dict(samples)
+                            for saved_side, table in maps.items():
+                                for saved_key, (saved_payload, occurrences) in table.items():
+                                    spilled.add(saved_side, saved_key, saved_payload, occurrences)
+                                table.clear()
+                            retained = 0
+                            progress(args, 'Memory lookup budget reached; continuing in hash buckets', stage='index', engine='hash', status='ongoing')
                     if count % 50000 == 0:
                         progress(args, f'Indexing {side} file', stage='index', engine='hash', rows=count,
                                  excluded=excluded, unique_keys=len(rows),
@@ -195,9 +208,17 @@ def _build(args, left_names, right_names, canonical, stats, progress):
         for table in maps.values():
             table.clear()
         samples.clear()
-        progress(args, 'Memory lookup budget reached; falling back to compressed sorting',
-                 stage='sort', engine='sort', memory_budget_mb=round(budget / (1024 * 1024), 2))
+        progress(args, 'Memory lookup budget reached; caller must select hash spilling',
+                 stage='index', engine='hash', memory_budget_mb=round(budget / (1024 * 1024), 2))
         return None
+    except BaseException:
+        if spilled is not None:
+            spilled.close()
+        raise
+    if spilled is not None:
+        spilled.finish()
+        stats.update(counts)
+        return spilled
     retained += sum(sys.getsizeof(table) for table in maps.values())
     retained += sum(sys.getsizeof(p) for _, values in samples.values() for p in values)
     stats.update(counts)

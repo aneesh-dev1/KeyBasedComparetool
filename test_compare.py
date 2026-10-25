@@ -144,8 +144,9 @@ class DuplicateBatchTests(unittest.TestCase):
                 import contextlib, io
                 log=io.StringIO()
                 with contextlib.redirect_stdout(log): result=compare(args)
-                self.assertEqual(log.getvalue().count('Comparison batch complete'),2)
-                self.assertIn('left sort batch complete | batch=6 | batch_rows=1',log.getvalue())
+                self.assertIn('Comparing keys',log.getvalue())
+                self.assertIn('Indexing left file complete',log.getvalue())
+                self.assertNotIn('sort batch',log.getvalue())
                 self.assertEqual(result['changed_cells'],int(policy=='first'))
                 self.assertEqual(result['matched_keys'],3)
                 self.assertEqual(result['left_compared_rows'],3)

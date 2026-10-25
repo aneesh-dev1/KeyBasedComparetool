@@ -8,7 +8,7 @@ from unittest.mock import patch
 from compare import compare, parser, pack_values, unpack_values, write_run, records
 
 class CompactRunTests(unittest.TestCase):
-    def test_100k_sort_batch_has_two_read_updates_and_one_sort_per_file(self):
+    def test_100k_hash_comparison_has_read_updates_without_sorting(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             body='id,v\n'+''.join(f'{i},value\n' for i in range(100000))
@@ -19,11 +19,9 @@ class CompactRunTests(unittest.TestCase):
                 summary=compare(args)
             self.assertEqual(summary['equal_rows'],100000)
             for side in ('left','right'):
-                reads=[v for phase,v in events if phase==f'{side} read progress']
-                sorts=[v for phase,v in events if phase==f'{side} sort batch sorting']
-                self.assertEqual([v['rows'] for v in reads],[50000,100000])
-                self.assertEqual([v['batch_rows'] for v in reads],[50000,100000])
-                self.assertEqual([v['batch_rows'] for v in sorts],[100000])
+                reads=[v for phase,v in events if phase==f'Indexing {side} file complete']
+                self.assertEqual([v['rows'] for v in reads],[100000])
+            self.assertFalse(any('sort batch' in phase for phase,_ in events))
 
     def test_all_texts_round_trip(self):
         cases=[[''],['',''],['001','1','雪','😀','\r\n','\x00','\t','"', '\\'],['x\x1fy',''],['\x1f','\x1f']]

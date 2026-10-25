@@ -7,7 +7,7 @@ import unittest
 from compare import compare, parser
 
 class BatchProgressTests(unittest.TestCase):
-    def test_partial_final_batch_and_sort_merge_logs(self):
+    def test_partial_final_batch_and_hash_spill_logs(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
             for side in ('left','right'):
@@ -18,10 +18,9 @@ class BatchProgressTests(unittest.TestCase):
             with contextlib.redirect_stdout(log):result=compare(args)
             text=log.getvalue()
             for side in ('left','right'):
-                self.assertIn(f'{side} sort batch started',text)
-                self.assertIn(f'{side} sort batch complete',text)
-                self.assertIn(f'{side} merge batch started',text)
-                self.assertIn(f'{side} merge batch complete',text)
+                self.assertIn(f'Indexing {side} file complete',text)
+            self.assertIn('continuing in hash buckets',text)
+            self.assertNotIn('sort batch',text)
             self.assertEqual(text.count('Comparison batch started'),2)
             self.assertEqual(text.count('Comparison batch complete'),2)
             self.assertIn('batch=2 | batch_keys=1 | rows=10,001',text)

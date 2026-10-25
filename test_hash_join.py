@@ -52,17 +52,17 @@ class HashJoinTests(unittest.TestCase):
                 result = self.build(args, right=['v', 'id'])
                 audit = io.StringIO()
                 pairs = list(result.iter_pairs(self.stats, csv.writer(audit), args))
-                self.assertEqual([json.loads((a or b)[0])[0] for a,b in pairs], ['a','left','right','z'])
-                self.assertEqual(unpack_values(pairs[0][0][1]), ['a', 'first-a' if policy=='first' else 'last-a'])
-                self.assertEqual(unpack_values(pairs[0][1][1]), ['a', 'first-r' if policy=='first' else 'last-r'])
-                self.assertIsNone(pairs[1][1])
-                self.assertIsNone(pairs[2][0])
+                self.assertEqual([json.loads((a or b)[0])[0] for a,b in pairs], ['z','a','left','right'])
+                self.assertEqual(unpack_values(pairs[1][0][1]), ['a', 'first-a' if policy=='first' else 'last-a'])
+                self.assertEqual(unpack_values(pairs[1][1][1]), ['a', 'first-r' if policy=='first' else 'last-r'])
+                self.assertIsNone(pairs[2][1])
+                self.assertIsNone(pairs[3][0])
                 self.assertEqual(self.stats['left_rows'], 6)
                 self.assertEqual(self.stats['right_rows'], 4)
                 self.assertEqual(self.stats['left_duplicate_keys'], 2)
                 self.assertEqual(self.stats['left_duplicate_rows_skipped'], 3)
                 self.assertEqual(list(csv.reader(io.StringIO(audit.getvalue()))), [
-                    ['left','["a"]','3','2',policy], ['left','["z"]','2','1',policy], ['right','["a"]','2','1',policy]])
+                    ['left','["z"]','2','1',policy], ['left','["a"]','3','2',policy], ['right','["a"]','2','1',policy]])
                 sample = json.loads(diagnostics.read_text())
                 self.assertEqual(sample['key'], ['a'])
                 self.assertEqual(sample['samples'], [['a','first-a'],['a','middle-a'],['a','last-a']])
@@ -90,7 +90,7 @@ class HashJoinTests(unittest.TestCase):
         result = self.build(self.args(memory_mb=0.01))
         self.assertIsNone(result)
         self.assertEqual(self.stats, before)
-        self.assertTrue(any('falling back' in message for message,_ in self.events))
+        self.assertTrue(any('budget reached' in message for message,_ in self.events))
         self.assertEqual({p.name for p in self.root.iterdir()}, {'left.csv','right.csv'})
 
     def test_existing_sort_checkpoint_is_reused_without_opening_inputs(self):
@@ -184,7 +184,7 @@ class HashJoinTests(unittest.TestCase):
                                          dict(column='value', trim=True, ignore_case=True)]
                 with patch('compare.progress'):
                     summary = compare(args)
-                self.assertEqual(summary['execution_engine'], 'hash' if algorithm=='auto' else 'sort')
+                self.assertEqual(summary['execution_engine'], 'hash' if algorithm=='auto' else 'partitioned')
                 for field in ('execution_engine','comparison_engine','elapsed_seconds'):
                     summary.pop(field)
                 summaries.append(summary)

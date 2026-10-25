@@ -1,23 +1,13 @@
-"""Parallel, range-partitioned exact comparison for large inputs (the "partitioned" engine).
+"""Parallel exact hash comparison with bounded recursive spilling.
 
-1. Plan: split each delimited-text file into byte ranges that end at a newline, and each Parquet file
-   into row-group ranges. Sample keys and choose sorted key-range boundaries.
-2. Partition (parallel): each worker parses one range with the same packers as the other engines and
-   writes (key, packed row) frames into a spill file, grouped by key range.
-3. Join (parallel): each worker loads one key range from both sides in source order (so first/last
-   duplicate rules hold), sorts its keys and runs the shared comparison loop into partial outputs.
-4. Assemble: partial outputs are concatenated in key-range order. Every output file therefore has the
-   same global key order, and the same bytes, as the in-memory and disk-sort engines.
-
-Exactness of byte ranges: a range end is only a candidate (the first newline after an even split). A
-range is accepted only when its strict CSV parse ends exactly at the range end, and ranges are checked
-in file order starting from the header, so every accepted boundary is a proven record boundary. A
-range that ends inside a quoted line break fails its strict parse, so it is merged with the next range
-and re-read from the last proven boundary. Genuine errors are reported with the same global record
-number as the sequential engines.
+Source ranges are parsed in parallel and routed by a stable key hash. Each
+bucket preserves source occurrence order for duplicate policies. Full keys
+and packed values determine equality; no input rows or keys are sorted.
+CSV boundaries are validated in source order, merging quoted multiline ranges
+when necessary. Checkpoints retain completed reads and comparisons.
 """
 import base64
-import bisect
+import hashlib
 import csv
 import io
 import json
@@ -35,7 +25,7 @@ from types import SimpleNamespace
 
 from task_control import check_cancel
 
-FRAME = struct.Struct('<QQ')
+from hash_spill import FRAME, loaded_buckets
 MIB = 1024 ** 2
 # '\n' and '"' are single, unambiguous bytes in these encodings, so byte ranges can be split safely.
 SPLITTABLE_ENCODINGS = {'utf-8', 'utf-8-sig', 'cp1252'}
@@ -165,64 +155,14 @@ def _split_record(text, delimiter, width):
     return row if len(row) == width else None
 
 
-def sample_text_keys(path, width, key_positions, delimiter, encoding, start, count):
-    """Keys read at evenly spaced offsets. They only balance key ranges; correctness never depends on them."""
-    size = os.path.getsize(path)
-    keys = []
-    if size <= start:
-        return keys
-    decoding = 'utf-8' if encoding == 'utf-8-sig' else encoding
-    with open(path, 'rb') as stream:
-        for index in range(count):
-            stream.seek(start + (size - start) * index // count)
-            if index:
-                stream.readline()
-            line = stream.readline()
-            if not line:
-                continue
-            cells = _split_record(line.decode(decoding, 'replace').rstrip('\r\n'), delimiter, width)
-            if cells is not None:
-                keys.append(encode_key(tuple(cells[i] for i in key_positions)))
-    return keys
-
-
-def sample_parquet_keys(path, key_positions, count):
-    """Sample keys by column position: comparison names may be renamed and differ from the file's own."""
-    from parquet_input import open_file
-    keys = []
-    with open_file(path) as file:
-        key_names = [file.schema_arrow.names[position] for position in key_positions]
-        groups = file.num_row_groups
-        chosen = sorted({groups * index // max(1, min(groups, 32)) for index in range(min(groups, 32))})
-        for group in chosen:
-            table = file.read_row_group(group, columns=key_names)
-            columns = [table.column(name).to_pylist() for name in key_names]
-            step = max(1, table.num_rows // max(1, count // max(1, len(chosen))))
-            for row in range(0, table.num_rows, step):
-                keys.append(encode_key(tuple(None if column[row] is None else str(column[row]) for column in columns)))
-    return keys
-
-
-def choose_bounds(keys, partitions):
-    keys = sorted(keys)
-    if not keys or partitions <= 1:
-        return []
-    bounds = []
-    for index in range(1, partitions):
-        candidate = keys[len(keys) * index // partitions]
-        if not bounds or candidate > bounds[-1]:
-            bounds.append(candidate)
-    return bounds
-
-
 def _init_worker(max_field_mb):
     csv.field_size_limit(max_field_mb * MIB)
 
 
 def _partition_range(task):
-    """Phase 2: pack one byte or row-group range and spill its rows grouped by key range."""
+    """Phase 2: pack one byte or row-group range and spill its rows grouped by key hash."""
     side, path = task['side'], task['path']
-    bounds, excluded = task['bounds'], task['excluded']
+    partitions, excluded = task['partitions'], task['excluded']
     allow_empty, cancel_file = task['allow_empty'], task['cancel_file']
     if task['kind'] == 'parquet':
         from parquet_input import PackedRows
@@ -233,9 +173,10 @@ def _partition_range(task):
         options = SimpleNamespace(dialects={side: task['dialect']}, io_buffer_bytes=4 * MIB)
         opener = None if task['whole'] else (lambda: open_range(path, task['start'], task['end'], task['dialect']['encoding']))
         reader = PackedRows(path, task['names'], task['order'], task['key_positions'], options, side=side, opener=opener)
-    buffers = [[] for _ in range(len(bounds) + 1)]
+    buffers = [[] for _ in range(partitions)]
     pending = 0
     spills = []
+    checksums = {}
     sequence = 0
     spill_dir = Path(task['spill_dir'])
 
@@ -245,20 +186,24 @@ def _partition_range(task):
         sequence += 1
         segments = []
         offset = 0
-        with open(target, 'wb', buffering=8 * MIB) as stream:
+        digest = hashlib.sha256() if task.get('checkpointed') else None
+        with open(target, 'wb', buffering=256 * 1024) as stream:
             for part, items in enumerate(buffers):
                 if not items:
                     continue
                 data = b''.join(items)
                 stream.write(data)
+                if digest is not None:
+                    digest.update(data)
                 segments.append((part, offset, len(data)))
                 offset += len(data)
                 items.clear()
         pending = 0
+        if digest is not None:
+            checksums[str(target)] = digest.hexdigest()
         return str(target), segments
 
     count = excluded_count = 0
-    bisect_right = bisect.bisect_right
     pack = FRAME.pack
     sample, sample_bytes = [], 0
     with reader as rows:
@@ -272,48 +217,16 @@ def _partition_range(task):
                 continue
             if not allow_empty and any(value is None or value == '' for value in key_values):
                 raise ValueError(f'{path}: record {count}: empty key component')
-            buffers[bisect_right(bounds, key)].append(pack(len(key), len(payload)) + key + payload)
-            if len(sample) < ESTIMATE_PER_RANGE and zlib.crc32(key) % ESTIMATE_BUCKETS == 0 and sample_bytes < 4 * MIB:
+            key_hash = zlib.crc32(key)
+            buffers[key_hash % partitions].append(pack(len(key), len(payload), 1) + key + payload)
+            if len(sample) < ESTIMATE_PER_RANGE and key_hash % ESTIMATE_BUCKETS == 0 and sample_bytes < 4 * MIB:
                 sample.append((key, payload))
                 sample_bytes += len(key) + len(payload)
-            pending += len(key) + len(payload) + 16
-            if pending >= SPILL_BYTES:
+            pending += len(key) + len(payload) + FRAME.size + 40
+            if pending >= min(SPILL_BYTES, task['memory_mb'] * MIB // 8):
                 spills.append(flush())
     spills.append(flush())
-    return dict(side=side, index=task['index'], rows=count, excluded=excluded_count, spills=spills, estimate_sample=sample)
-
-
-def _load_partition(segments, policy, capture):
-    rows = {}
-    sample = None
-    unpack = FRAME.unpack_from
-    for path, offset, length in segments:
-        with open(path, 'rb') as stream:
-            stream.seek(offset)
-            data = stream.read(length)
-        position, end = 0, len(data)
-        while position < end:
-            key_size, payload_size = unpack(data, position)
-            position += 16
-            key = data[position:position + key_size]
-            position += key_size
-            payload = data[position:position + payload_size]
-            position += payload_size
-            previous = rows.get(key)
-            if previous is None:
-                rows[key] = [payload, 1]
-                continue
-            occurrences = previous[1] + 1
-            # Same diagnostic sample as the other engines: the smallest duplicated key, first three rows.
-            if capture:
-                if occurrences == 2 and (sample is None or key < sample[0]):
-                    sample = (key, [previous[0], payload])
-                elif sample is not None and sample[0] == key and len(sample[1]) < 3:
-                    sample[1].append(payload)
-            if policy == 'last':
-                previous[0] = payload
-            previous[1] = occurrences
-    return rows, sample
+    return dict(side=side, index=task['index'], rows=count, excluded=excluded_count, spills=spills, checksums=checksums, estimate_sample=sample)
 
 
 class _SampleCollector:
@@ -390,8 +303,6 @@ def _join_partition(task):
     """Phase 3: compare one key range of both sides with the shared comparison loop."""
     from compare import compare_pair_stream
     part, policy = task['part'], task['policy']
-    left, left_sample = _load_partition(task['left'], policy, task['capture'])
-    right, right_sample = _load_partition(task['right'], policy, task['capture'])
     check_cancel(task['cancel_file'])
     out = Path(task['out'])
     stats = dict(matched_keys=0, equal_rows=0, changed_rows=0, changed_cells=0, left_only=0, right_only=0,
@@ -400,29 +311,43 @@ def _join_partition(task):
     columns = {name: 0 for name in task['columns']}
     collector = _SampleCollector()
     names = ('differences', 'left_only', 'right_only', 'matched_keys', 'raw_differences', 'dup_left', 'dup_right')
-    streams = {name: open(out / f'{name}-{part:05d}.csv', 'w', encoding='utf-8', newline='', buffering=4 * MIB) for name in names}
+    from hash_spill import evidence_stream
+    opened = {name: evidence_stream(out / f'{name}-{part:05d}.csv', task.get('integrity', False)) for name in names}
+    streams = {name: value[0] for name, value in opened.items()}
     try:
         writers = {name: csv.writer(stream) for name, stream in streams.items()}
-        for side, rows in (('left', left), ('right', right)):
-            for key in sorted(key for key, entry in rows.items() if entry[1] > 1):
-                count = rows[key][1]
-                stats[side + '_duplicate_keys'] += 1
-                stats[side + '_duplicate_rows_skipped'] += count - 1
-                writers['dup_' + side].writerow([side, key.decode('utf-8'), count, count - 1, policy])
-        keys = sorted(left.keys() | right.keys())
+        samples = {}
+        limit = task.get('memory_bytes', 64 * MIB) * 3 // 5
+        for left, right, bucket_samples in loaded_buckets(task['left'], task['right'], policy,
+                task['capture'], limit, out, task['cancel_file']):
+            for side, rows in (('left', left), ('right', right)):
+                for key, entry in rows.items():
+                    count = entry[1]
+                    if count > 1:
+                        stats[side + '_duplicate_keys'] += 1
+                        stats[side + '_duplicate_rows_skipped'] += count - 1
+                        writers['dup_' + side].writerow([side, key.decode('utf-8'), count, count - 1, policy])
+                sample = bucket_samples.get(side)
+                if sample and (side not in samples or sample[0] < samples[side][0]):
+                    samples[side] = (sample[0], sample[1], rows[sample[0]][1])
 
-        def pairs():
-            for key in keys:
-                a, b = left.get(key), right.get(key)
-                yield ((key, a[0]) if a is not None else None, (key, b[0]) if b is not None else None)
+            def pairs():
+                for key, a in left.items():
+                    b = right.get(key)
+                    yield (key, a[0]), ((key, b[0]) if b is not None else None)
+                for key, b in right.items():
+                    if key not in left:
+                        yield None, (key, b[0])
 
-        compare_pair_stream(pairs(), task['column_count'], task['policies'], writers, stats, columns,
-                            cancel_file=task['cancel_file'], live=collector)
+            compare_pair_stream(pairs(), task['column_count'], task['policies'], writers, stats, columns,
+                                cancel_file=task['cancel_file'], live=collector)
+            left.clear()
+            right.clear()
     finally:
         for stream in streams.values():
             stream.close()
-    samples = {name: (sample[0], sample[1], rows[sample[0]][1]) for name, sample, rows in (('left', left_sample, left), ('right', right_sample, right)) if sample}
-    return dict(part=part, stats=stats, columns=columns, samples=samples, live_samples=collector.rows)
+    return dict(part=part, stats=stats, columns=columns, samples=samples, live_samples=collector.rows,
+                output_checksums={name: (sink.size, sink.digest.hexdigest()) for name, (_, sink) in opened.items() if sink is not None})
 
 
 def _describe(args, side, path, names, canonical):
@@ -577,16 +502,19 @@ class _Journal:
     checkpoint identity before this is read.
     """
 
-    def __init__(self, work, fingerprint):
+    def __init__(self, work, fingerprint, cancel_file=None):
         self.work, self.fingerprint = work, fingerprint
+        self.cancel_file = cancel_file
         self.plan, self.reads, self.sides, self.joins = None, {}, {}, {}
         self.lock = threading.Lock()
+        self.verified = set()
         manifest = work / 'manifest.json'
         try:
             saved = json.loads(manifest.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             saved = None
         if saved and saved.get('fingerprint') == fingerprint:
+            self._verify_metadata(saved)
             self.plan = _decode(saved['plan'])
             try:
                 lines = (work / 'progress.jsonl').read_text(encoding='utf-8').splitlines()
@@ -594,13 +522,18 @@ class _Journal:
                 lines = []
             for line in lines:
                 try:
-                    entry = _decode(json.loads(line))
+                    entry = json.loads(line)
                 except ValueError:
                     break  # the last line of an interrupted write
+                self._verify_metadata(entry)
+                entry = _decode(entry)
                 if entry['kind'] == 'read' and all(Path(path).exists() for path, _ in entry['result']['spills']):
+                    self._verify_spills(entry['result'])
                     self.reads[entry['id']] = entry['result']
                 elif entry['kind'] == 'side' and all(Path(path).exists() for result in entry['result']['ranges'] for path, _ in result['spills']):
                     # Every range of one file, accepted in file order (including ranges re-read across quoted line breaks).
+                    for result in entry['result']['ranges']:
+                        self._verify_spills(result)
                     self.sides[entry['id']] = entry['result']['ranges']
                 elif entry['kind'] == 'join':
                     self.joins[entry['result']['part']] = entry['result']
@@ -609,6 +542,26 @@ class _Journal:
         (work / 'spill').mkdir(parents=True, exist_ok=True)
         (work / 'parts').mkdir(exist_ok=True)
 
+    @staticmethod
+    def _signed(value):
+        return dict(value, checksum=hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest())
+
+    @staticmethod
+    def _verify_metadata(value):
+        checksum = value.pop('checksum', None)
+        if checksum != hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest():
+            raise ValueError('Comparison checkpoint metadata is damaged. Start a new comparison.')
+
+    def _verify_spills(self, result):
+        for name, expected in result.get('checksums', {}).items():
+            if name in self.verified:
+                continue
+            from checkpoints import digest
+            actual = digest(name, SimpleNamespace(cancel_file=self.cancel_file))
+            if actual != expected:
+                raise ValueError('Saved hash bucket is missing or damaged. Start a new comparison.')
+            self.verified.add(name)
+
     @property
     def resumed(self):
         return bool(self.reads or self.sides or self.joins)
@@ -616,7 +569,7 @@ class _Journal:
     def start(self, plan):
         self.plan = plan
         from file_io import atomic_write_text
-        atomic_write_text(self.work / 'manifest.json', json.dumps(dict(fingerprint=self.fingerprint, plan=_encode(plan))))
+        atomic_write_text(self.work / 'manifest.json', json.dumps(self._signed(dict(fingerprint=self.fingerprint, plan=_encode(plan)))))
         (self.work / 'progress.jsonl').write_text('', encoding='utf-8')
 
     def record(self, kind, identity, result):
@@ -625,13 +578,22 @@ class _Journal:
             result = dict(ranges=[{name: value for name, value in item.items() if name != 'estimate_sample'} for item in result])
         else:
             result = {name: value for name, value in result.items() if name != 'estimate_sample'}
-        line = json.dumps(_encode(dict(kind=kind, id=identity, result=result))) + '\n'
+        line = json.dumps(self._signed(_encode(dict(kind=kind, id=identity, result=result)))) + '\n'
         with self.lock, open(self.work / 'progress.jsonl', 'a', encoding='utf-8') as stream:
             stream.write(line)
 
     def joined_files_exist(self, part):
-        return all((self.work / 'parts' / f'{name}-{part:05d}.csv').exists()
-                   for name in ('differences', 'left_only', 'right_only', 'matched_keys', 'raw_differences', 'dup_left', 'dup_right'))
+        from checkpoints import digest
+        names = ('differences', 'left_only', 'right_only', 'matched_keys', 'raw_differences', 'dup_left', 'dup_right')
+        checksums = self.joins.get(part, {}).get('output_checksums', {})
+        for name in names:
+            path = self.work / 'parts' / f'{name}-{part:05d}.csv'
+            expected = checksums.get(name)
+            if not expected or not path.exists() or path.stat().st_size != expected[0]:
+                return False
+            if digest(path, SimpleNamespace(cancel_file=self.cancel_file)) != expected[1]:
+                return False  # recompute this bucket from validated source spills
+        return True
 
 
 def _read_id(task):
@@ -649,50 +611,40 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
     from compare import unpack_values
     from file_io import atomic_write_text
     started = time.monotonic()
-    workers = worker_count(args)
+    workers = min(worker_count(args), max(1, int(getattr(args, 'memory_mb', 1024) or 1024) // 64))
     # A checkpointed run keeps its work folder until it succeeds, so an interrupted run can resume.
     checkpointed = bool(getattr(args, 'checkpoint_dir', None))
     work = Path(temp) / (WORK_DIR if checkpointed else f'partitioned-{os.getpid()}')
     journal = None
     if checkpointed:
-        journal = _Journal(work, dict(version=1, range_bytes=RANGE_BYTES, canonical=list(canonical), keys=list(args.keys)))
+        journal = _Journal(work, dict(version=2, range_bytes=RANGE_BYTES, canonical=list(canonical), keys=list(args.keys)), getattr(args, 'cancel_file', None))
     else:
         shutil.rmtree(work, ignore_errors=True)
         (work / 'spill').mkdir(parents=True)
         (work / 'parts').mkdir()
     succeeded = False
     try:
-        budget = max(64, float(getattr(args, 'memory_mb', 0) or 1024)) * MIB
+        budget = max(1, float(getattr(args, 'memory_mb', 0) or 1024)) * MIB
         if journal is not None and journal.plan is not None:
             # The saved plan is reused as is, so recorded ranges line up even if workers or memory changed.
-            sources, bounds = journal.plan['sources'], journal.plan['bounds']
+            sources, partitions = journal.plan['sources'], journal.plan['partitions']
             total_bytes = sum(source['size'] for source in sources)
             progress(args, 'Resuming parallel comparison', stage='index', engine='partitioned', workers=workers,
-                     key_ranges=len(bounds) + 1, reused_reads=len(journal.reads), reused_key_ranges=len(journal.joins))
+                     key_ranges=partitions, reused_reads=len(journal.reads), reused_key_ranges=len(journal.joins))
         else:
             sources = [_describe(args, 'left', args.left, left_names, canonical),
                        _describe(args, 'right', args.right, right_names, canonical)]
             total_bytes = sum(source['size'] for source in sources)
-            # A key range of both sides must fit one worker's share of memory (packed rows plus dict overhead).
+            # Plan hash buckets from file size; oversized or skewed buckets split again on demand.
             partitions = max(workers * 2, min(4096, -(-int(total_bytes * 2.5) // int(max(64 * MIB, budget / workers)))))
-            sample_count = min(20000, partitions * 64)
-            progress(args, 'Planning parallel comparison', stage='index', engine='partitioned', workers=workers,
+            progress(args, 'Planning parallel hash comparison', stage='index', engine='partitioned', workers=workers,
                      key_ranges=partitions, input_mb=round(total_bytes / MIB))
-            keys = []
-            for source in sources:
-                if source['kind'] == 'parquet':
-                    keys += sample_parquet_keys(source['path'], source['key_columns'], sample_count // 2)
-                elif source['start'] is not None:
-                    keys += sample_text_keys(source['path'], len(source['names']), source['key_positions'],
-                                             source['dialect']['delimiter'], source['dialect']['encoding'],
-                                             source['start'], sample_count // 2)
-            bounds = choose_bounds(keys, partitions)
             if journal is not None:
-                journal.start(dict(sources=sources, bounds=bounds))
-        common = dict(bounds=bounds, excluded=args.excluded_keys, allow_empty=args.allow_empty_keys,
+                journal.start(dict(sources=sources, partitions=partitions))
+        common = dict(partitions=partitions, checkpointed=checkpointed, excluded=args.excluded_keys, allow_empty=args.allow_empty_keys,
                       cancel_file=getattr(args, 'cancel_file', None), spill_dir=str(work / 'spill'),
                       batch_rows=getattr(args, 'read_batch_size', 100000),
-                      memory_mb=max(16, int(budget / MIB / workers)), native_batch_bytes=getattr(args, 'native_batch_bytes', None))
+                      memory_mb=max(1, int(budget / MIB / workers)), native_batch_bytes=getattr(args, 'native_batch_bytes', None))
         context = multiprocessing.get_context('spawn')
         totals = dict(left=0, right=0)
         with ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_init_worker,
@@ -743,7 +695,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                          rows=stats[side + '_rows'], excluded=stats[side + '_excluded_rows'], status='completed')
             progress(args, 'Read and partition complete', stage='index', engine='partitioned', status='completed',
                      elapsed_seconds=round(time.monotonic() - phase, 3))
-            segments = {side: [[] for _ in range(len(bounds) + 1)] for side in ('left', 'right')}
+            segments = {side: [[] for _ in range(partitions)] for side in ('left', 'right')}
             for side in ('left', 'right'):
                 for result in read[side]:
                     for path, parts in result['spills']:
@@ -754,7 +706,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
             progress(args, 'Comparing keys', stage='compare', rows=0)
             phase = time.monotonic()
             futures = []
-            for part in range(len(bounds) + 1):
+            for part in range(partitions):
                 # A joined key range is reused only when its inputs were read from the same recorded ranges.
                 cached = journal.joins.get(part) if journal is not None and reused_all else None
                 if cached is not None and journal.joined_files_exist(part):
@@ -763,7 +715,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                 future = pool.submit(_join_partition, dict(part=part, left=segments['left'][part], right=segments['right'][part],
                                                            policy=args.duplicate_policy, capture=capture, out=str(work / 'parts'),
                                                            columns=names, column_count=len(canonical), policies=policies,
-                                                           cancel_file=common['cancel_file']))
+                                                           cancel_file=common['cancel_file'], memory_bytes=int(budget / workers), integrity=checkpointed))
                 if journal is not None:
                     future.add_done_callback(lambda done: done.exception() is None and journal.record('join', done.result()['part'], done.result()))
                 futures.append(future)
@@ -800,7 +752,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
         _assemble(out, work / 'parts', len(results), args.keys)
         if capture:
             for side in ('left', 'right'):
-                sample = next((result['samples'][side] for result in results if side in result['samples']), None)
+                sample = min((result['samples'][side] for result in results if side in result['samples']), key=lambda item: item[0], default=None)
                 if sample is None:
                     continue
                 key, payloads, count = sample
@@ -821,7 +773,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
 
 
 def _assemble(out, parts, count, keys):
-    """Concatenate partial outputs in key-range order under the same headers as the other engines."""
+    """Concatenate partial outputs in stable bucket order with unchanged report headers."""
     layout = [('differences', ['key_json', 'column', 'left_value', 'right_value'], ['differences']),
               ('left_only', keys, ['left_only']), ('right_only', keys, ['right_only']),
               ('matched_keys', ['key_json'], ['matched_keys']),

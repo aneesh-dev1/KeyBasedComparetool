@@ -70,13 +70,13 @@ assert.deepEqual(Array.from(context.starts),['/api/jobs/direct/start']);
 assert.equal(vm.runInContext('currentView',context),'runningPanel');
 assert.equal(vm.runInContext("phaseViews.includes('sourcePanel')||phaseViews.includes('overridesPanel')",context),false);
 assert.equal(vm.runInContext('phaseViews.length',context),5);
-// Restoring the previous run is an explicit user action; New retains its pointer.
+// Restoring the previous run is explicit; New clears the saved selection.
 vm.runInContext(`job=null;localStorage.getItem=()=> 'a'.repeat(32);api=async()=>({id:'a'.repeat(32),state:'complete'});`,context);
 await vm.runInContext('restoreCurrentComparison()',context);
 assert.equal(vm.runInContext('job.id',context),'a'.repeat(32));
 assert.equal(vm.runInContext('currentView',context),'results');
-vm.runInContext(`globalThis.reloaded=false;saveDraft=async()=>{};location.reload=()=>{reloaded=true};localStorage.removeItem=()=>{throw new Error('Must retain the last selection')};`,context);
-await nodes.get('menuNewComparison').events.click[0]();assert.equal(context.reloaded,true);
+vm.runInContext(`globalThis.reloaded=false;saveDraft=async()=>{};location.reload=()=>{reloaded=true};globalThis.removed=[];localStorage.removeItem=key=>removed.push(key);`,context);
+await nodes.get('menuNewComparison').events.click[0]();assert.equal(context.reloaded,true);assert(context.removed.includes('keywise-job'));
 register('<input id="consoleSearch"><button id="consolePause"></button><p id="consoleStatus"></p>');
 nodes.get('consoleSearch').value='batch';
 vm.runInContext("logText='Starting\\nBatch 1 complete\\nFinished';consolePaused=false;consoleFollow=false;paintConsole()",context);

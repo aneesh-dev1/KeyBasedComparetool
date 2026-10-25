@@ -27,43 +27,43 @@ class ResumeTests(unittest.TestCase):
     def finish(self):
         result=compare(self.args);self.assertEqual(result['matched_keys'],13);self.assertEqual(result['changed_cells'],13)
         with (self.root/'report/differences.csv').open() as stream:self.assertEqual(len(list(csv.DictReader(stream))),13)
-    def test_resume_partial_sort_at_multiline_unicode_record_boundary(self):
-        self.interrupt('left sort batch complete')
-        saved=json.loads((self.root/'saved/left.json').read_text());self.assertEqual(saved['count'],2)
+    def test_resume_read_buckets_with_multiline_unicode_records(self):
+        self.interrupt('Read and partition complete')
+        self.assertTrue((self.root/'saved/partitioned/manifest.json').exists())
         self.finish()
-    def test_resume_interrupted_merge(self):
-        self.interrupt('left merge batch complete');self.finish()
-    def test_resume_comparison_reuses_sort_and_replaces_partial_results(self):
-        self.interrupt('Comparison batch complete')
-        with patch('compare.write_run',side_effect=AssertionError('Should reuse completed sorting')):self.finish()
+    def test_resume_interrupted_hash_bucket(self):
+        self.interrupt('Comparison progress');self.finish()
+    def test_resume_comparison_reuses_buckets_and_replaces_partial_results(self):
+        self.interrupt('Comparison progress')
+        with patch('compare.write_run',side_effect=AssertionError('Sorting must never be used')):self.finish()
     def test_changed_source_same_size_same_mtime_rejected(self):
-        self.interrupt('left sort batch complete')
+        self.interrupt('Read and partition complete')
         path=self.root/'right.csv';stat=path.stat();path.write_bytes(path.read_bytes().replace(b'new',b'NEW'))
         import os
         os.utime(path,ns=(stat.st_atime_ns,stat.st_mtime_ns))
         with self.assertRaisesRegex(ValueError,'Source files or comparison settings changed'):compare(self.args)
     def test_corrupted_batch_rejected(self):
-        self.interrupt('left sort batch complete')
-        state=json.loads((self.root/'saved/left.json').read_text());path=self.root/'saved'/state['runs'][0]['name'];data=path.read_bytes();path.write_bytes(data[:-1]+bytes([data[-1]^1]))
+        self.interrupt('Read and partition complete')
+        path=next((self.root/'saved/partitioned/spill').glob('*.spill'));data=path.read_bytes();path.write_bytes(data[:-1]+bytes([data[-1]^1]))
         with self.assertRaisesRegex(ValueError,'missing or damaged'):compare(self.args)
     def test_exclusive_worker_and_configuration_validation(self):
         with lock(self.root/'saved'):
             with self.assertRaisesRegex(ValueError,'still owns'):compare(self.args)
-        self.interrupt('left sort batch complete');self.args.duplicate_policy='last'
+        self.interrupt('Read and partition complete');self.args.duplicate_policy='last'
         with self.assertRaisesRegex(ValueError,'settings changed'):compare(self.args)
 
-    def test_parallel_sort_resume_and_orphan_sorter_lock(self):
-        self.interrupt('left sort batch complete')
+    def test_resume_ignores_legacy_sort_worker_setting(self):
+        self.interrupt('Read and partition complete')
         self.args.sort_workers=2
         self.finish()
-    def test_orphan_sorter_lock_prevents_checkpoint_reuse(self):
-        self.interrupt('left sort batch complete')
-        with lock(self.root/'saved/lock-left'):
+    def test_worker_lock_prevents_checkpoint_reuse(self):
+        self.interrupt('Read and partition complete')
+        with lock(self.root/'saved'):
             with self.assertRaisesRegex(ValueError,'still owns'):compare(self.args)
 
     def test_checkpoint_metadata_corruption_rejected(self):
-        self.interrupt('left sort batch complete')
-        target=self.root/'saved/left.json';state=json.loads(target.read_text());state['position']+=1;target.write_text(json.dumps(state))
+        self.interrupt('Read and partition complete')
+        target=self.root/'saved/partitioned/manifest.json';state=json.loads(target.read_text());state['plan']['partitions']+=1;target.write_text(json.dumps(state))
         with self.assertRaisesRegex(ValueError,'metadata is damaged'):compare(self.args)
 
 
@@ -87,7 +87,7 @@ class ResumeAPITests(unittest.TestCase):
                 original=engine.progress
                 def stop(args,message,**values):
                     original(args,message,**values)
-                    if message=='left sort batch complete':raise RuntimeError('interruption')
+                    if message=='Read and partition complete':raise RuntimeError('interruption')
                 with patch('compare.progress',side_effect=stop):
                     with self.assertRaises(RuntimeError):compare(args)
                 server.app.pool.shutdown();server.app=Application(folder)

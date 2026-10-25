@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Memory-bounded exact tabular comparison with automatic hash join and disk fallback."""
+"""Memory-bounded exact tabular comparison with adaptive hash matching, without sorting."""
 import argparse
 import contextlib
 import csv
@@ -618,7 +618,7 @@ def _compare(args):
         if (out/'summary.json').exists():
             return json.loads((out/'summary.json').read_text())
         if not (out/'INCOMPLETE').exists(): raise ValueError('Existing report is not an interrupted comparison')
-        # Rebuild final comparison output from validated sorted runs; never append partial results.
+        # Rebuild final comparison output from validated hash buckets; never append partial results.
     out.mkdir(parents=True, exist_ok=bool(checkpoint_dir))
     (out / 'INCOMPLETE').write_text('Reports are incomplete until summary.json is present.\n')
     stats = dict(left_rows=0, right_rows=0, matched_keys=0, equal_rows=0,
@@ -628,28 +628,20 @@ def _compare(args):
     with contextlib.ExitStack() as resources, (contextlib.nullcontext(str(checkpoint_dir)) if checkpoint_dir else tempfile.TemporaryDirectory(prefix='csv-compare-', dir=args.temp_dir)) as work:
         temp = Path(work)
         policies=[(name,override_lookup.get(name),rule_lookup.get(name)) for name in canonical]
-        # Large inputs use the parallel partitioned engine; a resumed disk sort keeps its saved batches.
+        # All production paths use exact hash matching. Completed hash buckets
+        # are reused; small resident jobs avoid scratch I/O altogether.
         from partitioned import should_use, run as run_partitioned
-        resuming_sort=any((temp/(side+'.json')).exists() for side in ('left','right'))
-        # An interrupted parallel run continues with the same engine and reuses its finished key ranges.
-        resuming_partitioned=(temp/'partitioned'/'manifest.json').exists()
-        if not resuming_sort and (resuming_partitioned or should_use(args)):
+        if (temp/'partitioned'/'manifest.json').exists() or args.comparison_engine in ('sort', 'partitioned') or should_use(args):
             stats['execution_engine']='partitioned'
             run_partitioned(args,left_names,right_names,canonical,temp,stats,columns,out,policies,progress)
             if checkpoint_dir:
                 from checkpoints import verify_sources
                 verify_sources(checkpoint_dir)
         else:
-            joined=None
-            if args.comparison_engine=='auto':
-                from hash_join import try_build
-                joined=try_build(args,left_names,right_names,canonical,temp,stats,progress)
-                if joined is not None:resources.callback(joined.close)
-            if joined is None:
-                left_result, right_result = sort_inputs(args, left_names, right_names, canonical, temp)
-                left_paths, stats['left_rows'], stats['left_excluded_rows'] = left_result
-                right_paths, stats['right_rows'], stats['right_excluded_rows'] = right_result
-            stats['execution_engine']='hash' if joined is not None else 'sort'
+            from hash_join import try_build
+            joined=try_build(args,left_names,right_names,canonical,temp,stats,progress,adaptive=True)
+            resources.callback(joined.close)
+            stats['execution_engine']='hash'
             if checkpoint_dir:
                 from checkpoints import verify_sources
                 verify_sources(checkpoint_dir)
@@ -664,14 +656,7 @@ def _compare(args):
                     stream = stack.enter_context(open(out / f'{name}.csv', 'w', encoding='utf-8', newline='', buffering=getattr(args,'io_buffer_bytes',4*1024*1024)))
                     writers[name] = csv.writer(stream)
                     writers[name].writerow(fields)
-                if joined is not None:
-                    pairs=joined.iter_pairs(stats,writers['duplicate_keys'],args)
-                else:
-                    left_merge = stack.enter_context(contextlib.closing(merge(left_paths)))
-                    right_merge = stack.enter_context(contextlib.closing(merge(right_paths)))
-                    left = unique(left_merge, 'left',getattr(args,'diagnostics_file',None),args,stats,writers['duplicate_keys'])
-                    right = unique(right_merge, 'right',getattr(args,'diagnostics_file',None),args,stats,writers['duplicate_keys'])
-                    pairs=merge_pairs(left,right)
+                pairs=joined.iter_pairs(stats,writers['duplicate_keys'],args)
                 processed = 0
                 batch_size = args.compare_batch_size
                 batch_start = last_update = time.monotonic()
@@ -726,15 +711,15 @@ def parser():
     p.add_argument('--keys', nargs='+', required=True)
     p.add_argument('--output', required=True, help='New report directory; must not exist')
     p.add_argument('--memory-mb', type=int, default=0, help='Optional comparison budget in MB; 0 selects from available system RAM')
-    p.add_argument('--engine', dest='comparison_engine', choices=('auto','sort','partitioned'), default='auto', help='auto: parallel partitioned engine for large inputs, else in-memory hash join with disk-sort fallback')
+    p.add_argument('--engine', dest='comparison_engine', choices=('auto','sort','partitioned'), default='auto', help='auto: adaptive exact hash comparison; partitioned: disk hash buckets; sort: legacy alias for partitioned')
     p.add_argument('--workers', dest='parallel_workers', type=int, default=0, help='Parallel worker processes for the partitioned engine; 0 uses the CPU count (max 16)')
-    p.add_argument('--sort-workers', type=int, choices=(1,2), default=1, help='Parallel file-sorting processes; memory-mb is split between them')
+    p.add_argument('--sort-workers', type=int, choices=(1,2), default=1, help='Legacy option retained for saved configurations; hash workers are selected automatically')
     p.add_argument('--read-batch-size', type=int, default=100000)
     p.add_argument('--compare-batch-size', type=int, default=10000)
     p.add_argument('--duplicate-policy', choices=('first', 'last'), default='first')
-    p.add_argument('--checkpoint-dir', help='Persistent validated sort batches for restart recovery')
+    p.add_argument('--checkpoint-dir', help='Persistent hash buckets for restart recovery')
     p.add_argument('--temp-dir', help='Scratch directory, preferably on a fast local SSD')
-    p.add_argument('--fan-in', type=int, default=16, help='Maximum sorted streams per merge')
+    p.add_argument('--fan-in', type=int, default=16, help=argparse.SUPPRESS)
     p.add_argument('--delimiter', default=',')
     p.add_argument('--encoding', default='utf-8-sig')
     p.add_argument('--right-delimiter', help='Delimiter for the right file when it differs from --delimiter')

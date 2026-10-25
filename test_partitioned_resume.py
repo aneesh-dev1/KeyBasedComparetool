@@ -34,7 +34,7 @@ class PartitionedResumeTests(unittest.TestCase):
     def args(self, name, checkpoints=None):
         args = parser().parse_args([str(self.root / 'left.csv'), str(self.root / 'right.csv'), '--keys', 'id',
                                     '--output', str(self.root / name), '--temp-dir', str(self.root),
-                                    '--memory-mb', '64', '--engine', 'partitioned'])
+                                    '--memory-mb', '256', '--engine', 'partitioned'])
         args.parallel_workers = 3
         args.cancel_file = self.root / 'cancel'
         if checkpoints:
@@ -67,6 +67,11 @@ class PartitionedResumeTests(unittest.TestCase):
         self.assertTrue((work / 'manifest.json').exists(), 'the work folder is kept after an interruption')
         first = list(CountingPool.submitted)
         (self.root / 'cancel').unlink()
+        # A recorded output can be damaged independently of its source spills.
+        # Resume must detect the checksum mismatch and recompute that bucket.
+        piece = next(p for p in (work / 'parts').glob('differences-*.csv') if p.stat().st_size)
+        body = piece.read_bytes()
+        piece.write_bytes(bytes([body[0] ^ 1]) + body[1:])
         summary = self.run_compare(self.args('resumed', 'checkpoints'))
         # Every read range and at least the joined ranges recorded before the stop are reused.
         self.assertNotIn('_partition_range', CountingPool.submitted)
@@ -76,6 +81,17 @@ class PartitionedResumeTests(unittest.TestCase):
             self.assertEqual(summary[name], plain[name], name)
         for name in OUTPUTS:
             self.assertEqual((self.root / 'resumed' / f'{name}.csv').read_bytes(), (self.root / 'plain' / f'{name}.csv').read_bytes(), name)
+
+    def test_resume_preserves_duplicate_diagnostic_bytes(self):
+        from partitioned import _Journal
+        work = self.root / 'journal'
+        fingerprint = {'version': 2}
+        journal = _Journal(work, fingerprint)
+        journal.start({'sources': [], 'partitions': 2})
+        result = dict(part=0, stats={}, columns={}, samples={'left': [b'["a"]', [b'\x00a\x1fold', b'\x00a\x1fnew'], 2]})
+        journal.record('join', 0, result)
+        resumed = _Journal(work, fingerprint)
+        self.assertEqual(resumed.joins[0], result)
 
     def test_interrupted_reads_resume(self):
         args = self.args('reads', 'checkpoints')

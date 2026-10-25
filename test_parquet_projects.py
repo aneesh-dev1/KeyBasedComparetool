@@ -38,7 +38,7 @@ class ParquetTests(unittest.TestCase):
             original=engine.progress
             def interrupt(args,phase,**values):
                 original(args,phase,**values)
-                if phase=='left sort batch complete' and values['batch']==1:raise RuntimeError('Simulated interruption')
+                if phase=='Read and partition complete':raise RuntimeError('Simulated interruption')
             with patch.object(engine,'progress',interrupt):
                 with self.assertRaises(RuntimeError):engine.compare(args)
             self.assertEqual(engine.compare(args)['equal_rows'],3)

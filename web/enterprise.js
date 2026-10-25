@@ -618,7 +618,7 @@ window.addEventListener('DOMContentLoaded',()=>{
  const reusedNote='Reused from original run';
  function describe(li){
   const kind=li.dataset.kind,label=li.querySelector('.pipeline-label')?.textContent||li.textContent;
-  const read=/file 1/i.test(label)?['Read file 1','Champion file']:/file 2/i.test(label)?['Read file 2','Challenger file']:/both/i.test(label)?['Read & sort','Both files']:['Read & index','Keys of both files'];
+  const read=/file 1/i.test(label)?['Read file 1','Champion file']:/file 2/i.test(label)?['Read file 2','Challenger file']:/both/i.test(label)?['Read & index','Both files']:['Read & index','Keys of both files'];
   const text={validate:['Validate','Check configuration'],read,compare:['Compare','Match keys, find changes'],write:['Write results','Results & HTML report'],complete:['Analysis','View results'],review:['Re-evaluate Differences','Apply rules to retained evidence']}[kind]||[label,''];
   const state=['done','active','failed'].find(name=>li.classList.contains(name))||'pending';
   return {kind,title:text[0],subtitle:text[1],state};
