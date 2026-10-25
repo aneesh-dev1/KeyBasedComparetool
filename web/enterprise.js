@@ -1,5 +1,8 @@
 'use strict';
 // Presentation extensions share app.js controllers and never start work implicitly.
+
+// The TransUnion loader, used for startup, page switches, requests and mismatch analysis.
+function dcLoader(){return '<img class="tu-loader" src="/assets/transunion-loader.svg" alt="">';}
 let completionTimer=null,completionJob=null,completionRemaining=5,ruleDraftPrompt=null;
 const appPreloaderStarted=performance.now();
 const navStages=['navFiles','navScope','navPipeline','navResults'];
@@ -30,7 +33,7 @@ $('navFiles').setAttribute('aria-label','Files & headers');$('navFiles').querySe
 for(const [i,id] of navStages.entries()){$(id).style.setProperty('--step',i);$(id).title=stageNames[i];$(id).setAttribute('aria-keyshortcuts','Alt+'+(i+1));const digit=$(id).querySelector('.step-number-value');if(digit)digit.textContent=String(i+1);}
 // Preview follows applied headers and remains an optional inline view.
 const preview=document.querySelector('.inline-preview');$('keysPanel').append(preview);$('keysPanel').querySelector('.section-title').append($('navPreview'));
-const workspaceTransitionLoader=document.createElement('div');workspaceTransitionLoader.id='workspaceTransitionLoader';workspaceTransitionLoader.className='workspace-transition-loader';workspaceTransitionLoader.hidden=true;workspaceTransitionLoader.setAttribute('role','status');workspaceTransitionLoader.setAttribute('aria-live','polite');workspaceTransitionLoader.innerHTML='<span class="workspace-loader-card"><img src="/assets/transunion-loader.svg" alt=""><strong>Opening workspace…</strong></span>';$('mainWorkspace').append(workspaceTransitionLoader);
+const workspaceTransitionLoader=document.createElement('div');workspaceTransitionLoader.id='workspaceTransitionLoader';workspaceTransitionLoader.className='workspace-transition-loader';workspaceTransitionLoader.hidden=true;workspaceTransitionLoader.setAttribute('role','status');workspaceTransitionLoader.setAttribute('aria-live','polite');workspaceTransitionLoader.innerHTML='<span class="workspace-loader-card">'+dcLoader()+'<strong>Opening workspace…</strong></span>';$('mainWorkspace').append(workspaceTransitionLoader);
 let workspaceTransitionStarted=0,workspaceTransitionTimer=null,workspaceTransitionPainted=false;
 function startWorkspaceTransition(label='Opening workspace…'){
  clearTimeout(workspaceTransitionTimer);workspaceTransitionStarted=performance.now();workspaceTransitionPainted=false;
@@ -72,9 +75,10 @@ function fitKeysWorkspace(){
 window.addEventListener('resize',fitKeysWorkspace);
 function compactScopeAction(button,label,icon){
  button.classList.add('scope-icon-action');button.setAttribute('aria-label',label);button.title=label;
- button.innerHTML=`<span class="scope-action-label">${label}</span><span class="scope-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></span>`;
+ // icon: a Lucide name, or drawn paths for callers that still pass them.
+ button.innerHTML=`<span class="scope-action-label">${label}</span><span class="scope-action-icon" aria-hidden="true">${/^[a-z-]+$/.test(icon)?`<svg class="lucide" aria-hidden="true" focusable="false"><use href="/assets/lucide-sprite.svg#${icon}"/></svg>`:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`}</span>`;
 }
-const previewIcons={open:'<path d="M2.1 12a10.8 10.8 0 0 1 19.8 0 10.8 10.8 0 0 1-19.8 0Z"/><circle cx="12" cy="12" r="3"/>',close:'<path d="M10.7 5.1a10.7 10.7 0 0 1 11.2 6.6 1 1 0 0 1 0 .7 10.7 10.7 0 0 1-1.4 2.5"/><path d="M14.1 14.2a3 3 0 0 1-4.2-4.2"/><path d="M17.5 17.5a10.8 10.8 0 0 1-15.4-5.2 1 1 0 0 1 0-.7 10.8 10.8 0 0 1 4.4-5.1"/><path d="m2 2 20 20"/>'};
+const previewIcons={open:'eye',close:'eye-off'};
 compactScopeAction($('navPreview'),'Preview files',previewIcons.open);
 compactScopeAction($('openComparisonRules'),'Comparison rules','<path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6"/>');
 for(const node of [...$('keysPanel').childNodes])if(node.nodeType===3&&node.textContent.trim()==='null')node.remove();
@@ -121,8 +125,21 @@ $('useServerSources').onclick=async()=>{
 
 // A delayed request indicator is attached inside an active modal when necessary.
 const originalApi=api;let activeRequests=0,loaderTimer;
-const requestLoader=document.createElement('div');requestLoader.className='tu-request-loader';requestLoader.hidden=true;requestLoader.setAttribute('role','status');requestLoader.innerHTML='<img src="/assets/transunion-loader.svg" alt=""><span>Loading…</span>';
-api=async function(...args){activeRequests++;if(activeRequests===1)loaderTimer=setTimeout(()=>{const modal=[...document.querySelectorAll('dialog[open]')].at(-1);(modal||document.body).append(requestLoader);requestLoader.hidden=false;},220);try{return await originalApi(...args);}finally{if(--activeRequests===0){clearTimeout(loaderTimer);requestLoader.hidden=true;if(workspaceTransitionPainted)finishWorkspaceTransition();}}};
+const requestLoader=document.createElement('div');requestLoader.className='tu-request-loader';requestLoader.hidden=true;requestLoader.setAttribute('role','status');requestLoader.innerHTML=dcLoader()+'<span>Loading…</span>';
+// The corner "Loading…" is for requests that follow a click or key press and are still waiting after 0.4 s.
+// Background checks (notifications, live results, job status while a run is going) never show it.
+let lastUserAction=-Infinity,foregroundRequests=0;
+for(const type of ['pointerdown','keydown'])document.addEventListener(type,()=>{lastUserAction=performance.now();},{capture:true,passive:true});
+api=async function(...args){
+ const foreground=performance.now()-lastUserAction<600;
+ activeRequests++;
+ if(foreground&&++foregroundRequests===1)loaderTimer=setTimeout(()=>{const modal=[...document.querySelectorAll('dialog[open]')].at(-1);(modal||document.body).append(requestLoader);requestLoader.hidden=false;},400);
+ try{return await originalApi(...args);}
+ finally{
+  if(foreground&&--foregroundRequests===0){clearTimeout(loaderTimer);requestLoader.hidden=true;}
+  if(--activeRequests===0&&workspaceTransitionPainted)finishWorkspaceTransition();
+ }
+};
 
 // A one-shot countdown follows a newly completed run, never a historical result.
 // The countdown only follows a run this page watched finish, never a revisit of a completed job.
@@ -1428,7 +1445,7 @@ function redesignAnalysis(){
   // progress (cells indexed, percent and time left) instead of an empty table.
   const results=panel.querySelector('.analysis-results'),status=$('analysisStatus');
   const loader=document.createElement('div');loader.className='ds-analysis-loader';loader.hidden=true;loader.setAttribute('role','status');loader.setAttribute('aria-live','polite');
-  loader.innerHTML='<img src="/assets/transunion-loader.svg" alt="" width="64" height="64"><strong class="ds-analysis-loader-title"></strong><span class="ds-analysis-loader-detail"></span><div class="ds-analysis-progress" hidden><i></i></div><span class="ds-analysis-loader-eta"></span>';
+  loader.innerHTML=dcLoader()+'<strong class="ds-analysis-loader-title"></strong><span class="ds-analysis-loader-detail"></span><div class="ds-analysis-progress" hidden><i></i></div><span class="ds-analysis-loader-eta"></span>';
   results.querySelector('.table-scroll').before(loader);loader.append($('cancelAnalysis'));
   const bar=loader.querySelector('.ds-analysis-progress'),fill=bar.querySelector('i');
   let progress=null,samples=[],showTimer=0;
@@ -1929,5 +1946,264 @@ function redesignAnalysis(){
   }
   window.addEventListener('workspace-restored',()=>land().catch(showError),{once:true});
   window.addEventListener('hashchange',()=>land().catch(showError));
+ }
+}
+
+// Lucide everywhere: the sidebar, the step rail and the Keys & scope actions used hand-drawn icons. They become
+// the matching Lucide icons at the same size, so the sidebar keeps its look and motion.
+{
+ const sidebarIcons={navNew:'git-compare-arrows',navProjects:'folder-kanban',navHistory:'history',navContainers:'package-x',
+  navProfiles:'layout-template',navDocs:'book-open',navJson:'braces',navStorage:'hard-drive'};
+ for(const [id,name] of Object.entries(sidebarIcons)){const holder=$(id)?.querySelector('.side-icon');if(holder)holder.innerHTML=lucide(name);}
+ const stepIcons={navFiles:'files',navHeaders:'table-2',navScope:'key-round',navPipeline:'workflow',navResults:'chart-column'};
+ for(const [id,name] of Object.entries(stepIcons)){const icon=$(id)?.querySelector('.step-rail-icon');if(icon)icon.replaceWith(lucideNode(name,'step-rail-icon'));}
+ const rules=$('openComparisonRules')?.querySelector('.scope-action-icon');if(rules)rules.innerHTML=lucide('sliders-horizontal');
+}
+
+// Pipeline notices (a failed run, a duplicate key) sit in one area under the card title. In console view that area
+// spans the full width on its own row, so it never covers the stage rail or squeezes the console.
+window.addEventListener('DOMContentLoaded',()=>{
+ const panel=$('runningPanel'),heading=panel?.querySelector('.section-title');if(!heading)return;
+ const notices=document.createElement('div');notices.className='ds-pipeline-notices';heading.after(notices);
+ for(const id of ['pipelineErrorCard','duplicateDiagnostics'])if($(id))notices.append($(id));
+});
+// A duplicate key is a one-line warning; its sample rows open in a panel over the card, so the card keeps its height.
+loadDiagnostics=async function(){
+ const result=await api(endpoint('/diagnostics')),box=$('duplicateDiagnostics');
+ box.replaceChildren();box.hidden=!result.key;box.className='ds-dup-strip';
+ if(!result.key)return;
+ const key=Array.isArray(result.key)?result.key.join(' · '):String(result.key);
+ const text=document.createElement('p');text.className='ds-dup-text';
+ text.append(Object.assign(document.createElement('strong'),{textContent:`Duplicate key in the ${result.side==='right'?'challenger':'champion'} file`}),
+  document.createTextNode(` ${key} appears ${number(result.count)} times. One row per key is compared; the others are skipped.`));
+ const toggle=Object.assign(document.createElement('button'),{type:'button',className:'ds-dup-toggle'});
+ toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-controls','duplicateSamplePanel');
+ toggle.append(Object.assign(document.createElement('span'),{textContent:'Show rows'}),lucideNode('chevron-down'));
+ const sample=document.createElement('div');sample.id='duplicateSamplePanel';sample.className='ds-dup-panel';sample.hidden=true;
+ const scroll=document.createElement('div');scroll.className='table-scroll';
+ const table=document.createElement('table');table.id='duplicateSampleTable';scroll.append(table);
+ sample.append(Object.assign(document.createElement('p'),{textContent:result.note}),scroll);
+ toggle.addEventListener('click',()=>{const open=sample.hidden;sample.hidden=!open;toggle.setAttribute('aria-expanded',String(open));toggle.querySelector('span').textContent=open?'Hide rows':'Show rows';});
+ box.append(lucideNode('triangle-alert','ds-dup-icon'),text,toggle,sample);
+ drawTable('duplicateSampleTable',result.sample_columns,result.samples);
+};
+
+// Page polish shared by every view.
+{
+ // Library pages already carry their name as the page title; the card repeated it under an all-caps label.
+ for(const id of ['historyPanel','projectsPanel','docsPanel']){
+  const card=$(id),heading=card?.querySelector('.section-title h2');
+  if(heading&&heading.textContent.trim()===({historyPanel:'Job history',projectsPanel:'Projects',docsPanel:'Docs & FAQ'})[id])heading.classList.add('visually-hidden');
+  card?.querySelectorAll('.section-title .eyebrow').forEach(label=>{label.hidden=true;});
+ }
+ // Buttons that spell their icon as text (↻ Refresh, ＋ New, ← Previous, Next →) get the Lucide icon instead,
+ // including text the app writes later.
+ const glyphs=[[/^\s*(?:↻|⟳)\s*/,'refresh-cw','start'],[/^\s*(?:＋|\+)\s+/,'plus','start'],[/^\s*←\s*/,'arrow-left','start'],[/\s*→\s*$/,'arrow-right','end']];
+ const alone={'＋':'plus','+':'plus','→':'arrow-right','←':'arrow-left','↻':'refresh-cw'};
+ function iconize(button){
+  // A glyph on its own (a "＋" button) or in its own span ("Start comparison <span>→</span>") becomes the icon.
+  const only=alone[button.textContent.trim()];
+  if(only&&!button.querySelector('svg')){button.replaceChildren(lucideNode(only,'ds-glyph-icon'));button.classList.add('ds-glyph-button');return;}
+  for(const span of button.querySelectorAll(':scope > span')){const name=alone[span.textContent.trim()];if(name&&!span.querySelector('svg')){span.replaceWith(lucideNode(name,'ds-glyph-icon'));button.classList.add('ds-glyph-button');}}
+  if(button.dataset.iconized===button.textContent||button.children.length&&!button.querySelector(':scope > .ds-glyph-label'))return;
+  const text=button.textContent;
+  for(const [pattern,name,side] of glyphs){
+   if(!pattern.test(text))continue;
+   const label=Object.assign(document.createElement('span'),{className:'ds-glyph-label',textContent:text.replace(pattern,'')});
+   const icon=lucideNode(name,'ds-glyph-icon');
+   button.replaceChildren(...(side==='start'?[icon,label]:[label,icon]));
+   button.classList.add('ds-glyph-button');button.dataset.iconized=button.textContent;
+   return;
+  }
+ }
+ const scan=root=>{for(const button of root.querySelectorAll?root.querySelectorAll('button'):[])iconize(button);if(root.tagName==='BUTTON')iconize(root);};
+ scan(document.body);
+ new MutationObserver(records=>{for(const record of records){const button=record.target.closest?.('button')||record.target.parentElement?.closest?.('button');if(button)iconize(button);for(const node of record.addedNodes)if(node.nodeType===1)scan(node);}}).observe(document.body,{childList:true,subtree:true,characterData:true});
+ // Docs & FAQ sections open with a Lucide chevron instead of the browser's text triangle.
+ for(const summary of $('docsPanel')?.querySelectorAll('details > summary')||[]){summary.classList.add('ds-disclosure');summary.append(lucideNode('chevron-down','ds-disclosure-icon'));}
+}
+
+// Job history: status as a coloured pill, Open and Delete side by side as icon buttons, dates on one line.
+{
+ const historyBefore=loadHistory;
+ const states={complete:'Complete',running:'Running',queued:'Queued',error:'Failed',cancelled:'Cancelled',ready:'Ready',uploading:'Uploading',preparing:'Preparing'};
+ loadHistory=async function(){
+  await historyBefore();
+  const table=$('historyTable');if(!table)return;
+  table.classList.add('ds-history');
+  for(const row of table.tBodies[0]?.rows||[]){
+   const status=row.cells[2];
+   if(status&&!status.querySelector('.ds-state')){const state=status.textContent.trim();status.replaceChildren(Object.assign(document.createElement('span'),{className:`ds-state is-${state}`,textContent:states[state]||state}));}
+   const actions=row.cells[row.cells.length-1];
+   if(actions&&!actions.classList.contains('ds-history-actions')){
+    actions.classList.add('ds-history-actions');
+    for(const button of actions.querySelectorAll('button')){
+     const label=button.textContent.trim(),icon={Open:'external-link',Delete:'trash-2',Cancel:'circle-x'}[label];
+     if(!icon)continue;
+     button.classList.add('ds-row-button',`is-${label.toLowerCase()}`);
+     // Delete is icon-only (named for screen readers and on hover) so the row's actions fit beside each other.
+     if(label==='Delete'){button.replaceChildren(lucideNode(icon));button.setAttribute('aria-label','Delete job');button.title='Delete job';}
+     else button.replaceChildren(lucideNode(icon),Object.assign(document.createElement('span'),{textContent:label}));
+    }
+   }
+  }
+ };
+}
+
+// Projects: a reconciliation project is one dataset compared again and again, each run needing sign-off. The page
+// answers two questions: are differences shrinking run over run, and which runs still need sign-off? Its centre is
+// the run strip (one bar per completed run, oldest to newest, height = differences, colour = audit status); the
+// sign-off bar beneath doubles as its legend, and the runs ledger shows each run with its change against the
+// previous run. The timeline lives in the Activity drawer.
+{
+ const panelRoot=$('projectsPanel');panelRoot?.classList.add('pj');
+ const statusClass={'Unreviewed':'is-unreviewed','In review':'is-review','Approved':'is-approved','Changes requested':'is-changes'};
+ const statusOrder=['Approved','In review','Changes requested','Unreviewed'];
+ const shortDate=value=>value?new Date(value*1000).toLocaleDateString(undefined,{day:'numeric',month:'short'}):'—';
+ const longDate=value=>value?new Date(value*1000).toLocaleString(undefined,{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
+ const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;};
+ const reduced=()=>typeof reducedWorkspaceMotion==='function'&&reducedWorkspaceMotion();
+ // The drawer's all-caps label and text close button follow the rest of the app.
+ $('projectDrawer')?.querySelector('.eyebrow')?.remove();
+ const close=$('closeProjectDrawer');if(close){close.replaceChildren(lucideNode('x'));close.classList.add('pj-icon-button');}
+
+ renderProjectLibrary=function(){
+  const target=$('projectList');target.replaceChildren();
+  const query=$('projectSearch').value.toLowerCase();
+  const shown=projectCatalog.filter(project=>project.name.toLowerCase().includes(query));
+  for(const project of shown){
+   const total=project.comparisons||0,approved=project.approved||0;
+   const button=projectButton('',()=>selectProject(project.id),'pj-library-item');
+   button.setAttribute('aria-pressed',String(project.id===activeProject));
+   const meter=el('span','pj-meter');const fill=el('i');fill.style.width=(total?approved*100/total:0)+'%';meter.append(fill);
+   button.append(el('strong','',project.name),meter,el('span','pj-library-meta',total?`${approved} of ${total} signed off`:'No comparisons yet'));
+   target.append(button);
+  }
+  if(!shown.length)target.append(el('p','pj-library-empty',projectCatalog.length?'No project matches that search.':'No projects yet. Create one to group comparisons of the same data.'));
+ };
+
+ function runStrip(runs){
+  const section=el('section','pj-runs');section.setAttribute('aria-labelledby','pjRunsTitle');
+  const head=el('div','pj-section-head');const title=el('h3','','Differences per run');title.id='pjRunsTitle';
+  head.append(title,el('span','pj-section-note',runs.length?`${runs.length===1?'1 completed run':`Last ${runs.length} completed runs`}, oldest first`:''));
+  section.append(head);
+  if(!runs.length){section.append(el('p','pj-empty-line','Runs appear here once a comparison in this project completes.'));return section;}
+  const max=Math.max(1,...runs.map(run=>run.changed_cells||0));
+  const days=runs.map(run=>shortDate(run.finished||run.created));
+  const label=(run,index)=>days.filter(day=>day===days[index]).length>1?new Date((run.finished||run.created)*1000).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}):days[index];
+  const strip=el('ol','pj-strip');
+  runs.forEach((run,index)=>{
+   const value=run.changed_cells||0,item=el('li');
+   const bar=el('button',`pj-bar ${statusClass[run.audit_status]||''}${index===runs.length-1?' is-latest':''}`);bar.type='button';bar.dataset.record=run.id;
+   bar.setAttribute('aria-label',`${run.title}, ${longDate(run.finished||run.created)}: ${number(value)} differences, ${run.audit_status}`);
+   const column=el('span','pj-bar-column');const fill=el('span','pj-bar-fill');
+   // Linear height, so a near-clean run really looks near clean; the count above keeps small runs readable.
+   fill.style.height=Math.max(value?3:1,value*100/max)+'%';
+   if(!reduced())fill.style.animationDelay=(index*45)+'ms';
+   // Full count on wide screens; a compact one (400K) where bars are narrow.
+   const figure=el('span','pj-bar-value');figure.append(el('span','pj-value-full',number(value)),el('span','pj-value-short',new Intl.NumberFormat(undefined,{notation:'compact',maximumFractionDigits:1}).format(value)));
+   column.append(figure,fill);
+   bar.append(column,el('span','pj-bar-date',index===runs.length-1?'Latest':label(run,index)));
+   bar.addEventListener('click',()=>{const row=$('projectDashboard').querySelector(`tr[data-record="${CSS.escape(run.id)}"]`);if(row){row.scrollIntoView({block:'nearest',behavior:reduced()?'auto':'smooth'});row.classList.remove('is-flash');void row.offsetWidth;row.classList.add('is-flash');}else openProjectAudit(run.id).catch(showError);});
+   item.append(bar);strip.append(item);
+  });
+  section.append(strip);
+  return section;
+ }
+
+ function signOff(counts,total){
+  const section=el('section','pj-signoff');section.setAttribute('aria-label','Sign-off');
+  const approved=counts.Approved||0;
+  const head=el('div','pj-section-head');head.append(el('h3','','Sign-off'),el('span','pj-section-note',total?`${approved} of ${total} approved`:''));
+  const bar=el('div','pj-signoff-bar');bar.setAttribute('role','img');
+  bar.setAttribute('aria-label',statusOrder.map(status=>`${status}: ${counts[status]||0}`).join(', '));
+  const legend=el('ul','pj-legend');
+  for(const status of statusOrder){
+   const count=counts[status]||0;
+   if(count){const segment=el('span',statusClass[status]);segment.style.flexGrow=String(count);bar.append(segment);}
+   const entry=el('li',`${statusClass[status]}${count?'':' is-zero'}`);entry.append(el('span','pj-swatch'),el('span','',status),el('strong','',number(count)));legend.append(entry);
+  }
+  if(!total)bar.append(el('span','is-empty'));
+  section.append(head,bar,legend);
+  return section;
+ }
+
+ function ledger(detail,offset,deltas){
+  const section=el('section','pj-ledger');section.setAttribute('aria-labelledby','pjLedgerTitle');
+  const head=el('div','pj-section-head');const title=el('h3','','Runs');title.id='pjLedgerTitle';
+  head.append(title,el('span','pj-section-note',detail.total?`${offset+1}–${Math.min(offset+25,detail.total)} of ${detail.total}`:''));
+  section.append(head);
+  if(!detail.records.length){
+   const empty=el('div','pj-ledger-empty');
+   empty.append(el('p','','Attach comparisons of this dataset to track their differences and sign-off here.'),projectButton('Attach comparison',()=>showProjectCandidates(),'primary'));
+   section.append(empty);return section;
+  }
+  const scroll=el('div','pj-ledger-scroll');const table=el('table','pj-table');
+  const headRow=el('tr');for(const [label,cls] of [['Comparison',''],['Finished',''],['Differences','is-number'],['Since previous run','is-number'],['Sign-off',''],['','pj-col-open']]){const th=el('th',cls,label);th.scope='col';headRow.append(th);}
+  const thead=el('thead');thead.append(headRow);const tbody=el('tbody');
+  for(const record of detail.records){
+   const row=el('tr');row.dataset.record=record.id;
+   const name=el('td','pj-name');const review=projectButton('',()=>openProjectAudit(record.id),'pj-name-button');
+   review.append(el('strong','',record.title),el('small','',`${record.formats.join(' / ').toUpperCase()} · ${record.state==='complete'?'Complete':record.state}`));
+   review.setAttribute('aria-label',`Review ${record.title}`);name.append(review);
+   const finished=el('td','pj-date',longDate(record.finished||record.created));
+   const differences=el('td','is-number pj-figure',record.changed_cells==null?'—':number(record.changed_cells));
+   const change=el('td','is-number');const delta=deltas.get(record.id);
+   if(delta===undefined)change.append(el('span','pj-delta is-none','—'));
+   else if(delta===0)change.append(el('span','pj-delta is-flat','No change'));
+   else{const better=delta<0,tag=el('span',`pj-delta ${better?'is-down':'is-up'}`);tag.append(lucideNode(better?'arrow-down':'arrow-up'),document.createTextNode(number(Math.abs(delta))));tag.title=better?'Fewer differences than the previous run':'More differences than the previous run';change.append(tag);}
+   const status=el('td');const pill=projectButton('',()=>openProjectAudit(record.id),`pj-status ${statusClass[record.audit_status]||''}`);pill.textContent=record.audit_status;pill.title='Change sign-off';status.append(pill);
+   const open=el('td','pj-col-open');
+   if(record.kind!=='json'&&record.source_available!==false&&record.state==='complete'){const button=projectButton('',()=>openJob(record.id),'pj-icon-button');button.append(lucideNode('external-link'));button.setAttribute('aria-label',`Open ${record.title}`);button.title='Open comparison';open.append(button);}
+   row.append(name,finished,differences,change,status,open);tbody.append(row);
+  }
+  table.append(thead,tbody);scroll.append(table);section.append(scroll);
+  if(detail.total>25){
+   const pager=el('div','pj-pager');
+   const previous=projectButton('Previous',()=>selectProject(detail.project.id,Math.max(0,offset-25)));previous.prepend(lucideNode('arrow-left'));previous.disabled=offset===0;
+   const next=projectButton('Next',()=>selectProject(detail.project.id,offset+25));next.append(lucideNode('arrow-right'));next.disabled=offset+25>=detail.total;
+   pager.append(previous,next);section.append(pager);
+  }
+  return section;
+ }
+
+ function openActivity(){
+  openProjectDrawer('Activity');
+  const list=el('ol','pj-activity');
+  for(const event of projectDetail.events){const item=el('li');item.append(el('span','pj-activity-dot'),el('strong','',event.message),el('time','',longDate(event.at)));list.append(item);}
+  if(!projectDetail.events.length)list.append(el('li','pj-empty-line','No activity yet.'));
+  $('projectDrawerBody').append(list);
+ }
+
+ selectProject=async function(identity,offset=0){
+  activeProject=identity;projectOffset=offset;renderProjectLibrary();
+  const detail=await api('/api/projects/'+identity+'?offset='+offset);if(activeProject!==identity)return;projectDetail=detail;
+  const dashboard=$('projectDashboard');dashboard.replaceChildren();
+  const runs=detail.trend||[];
+  // Change against the previous completed run, in finishing order.
+  const deltas=new Map();runs.forEach((run,index)=>{if(index)deltas.set(run.id,(run.changed_cells||0)-(runs[index-1].changed_cells||0));});
+  // A div, not a header element: the page has global styles for header elements.
+  const header=el('div','pj-head');const titles=el('div','pj-titles');
+  titles.append(el('h2','',detail.project.name),el('p','pj-description',detail.project.description||'Group comparisons of the same data to follow their differences and sign-off.'));
+  const actions=el('div','pj-head-actions');actions.id='projectAttachAction';
+  const activity=projectButton('Activity',openActivity);activity.prepend(lucideNode('history'));
+  const attach=projectButton('Attach comparison',()=>showProjectCandidates(),'primary');attach.prepend(lucideNode('plus'));
+  actions.append(activity,attach);header.append(titles,actions);
+  const approved=detail.audit_counts.Approved||0,latest=detail.latest;
+  const summary=el('p','pj-summary');
+  summary.textContent=!detail.total?'No comparisons attached yet.':
+   `${number(detail.total)} ${detail.total===1?'comparison':'comparisons'}, ${number(approved)} signed off.`+(latest?` The latest run found ${number(latest.changed_cells||0)} ${latest.changed_cells===1?'difference':'differences'}.`:'');
+  dashboard.append(header,summary,runStrip(runs),signOff(detail.audit_counts,detail.total),ledger(detail,offset,deltas));
+  dashboard.scrollTop=0;
+ };
+ // The page's own title and the panel's repeated heading: keep the actions, drop the duplicate words.
+ // New project and Refresh move into the project list's header; the panel's own title row then goes.
+ const panelTitle=panelRoot?.querySelector(':scope > .section-title'),library=panelRoot?.querySelector('.project-library');
+ if(panelTitle&&library){
+  const refresh=$('refreshProjects'),create=$('createProject'),top=el('div','pj-library-head');
+  refresh.classList.add('pj-icon-button');refresh.replaceChildren(lucideNode('refresh-cw'));refresh.title='Refresh projects';
+  create.classList.add('pj-icon-button','pj-create');create.replaceChildren(lucideNode('plus'));create.setAttribute('aria-label','New project');create.title='New project';
+  top.append(el('h2','','Projects'),refresh,create);
+  library.prepend(top);panelTitle.hidden=true;
  }
 }

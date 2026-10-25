@@ -1,9 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="240" height="240" viewBox="796.68 461.93 12 12" role="img" aria-labelledby="tudc-title tudc-description">
   <title id="tudc-title">TransUnion Data Compare loading</title>
-  <desc id="tudc-description">A dot circles anticlockwise, draws the TU logo, circles again and contracts to a dot in a seamless eight-second loop.</desc>
+  <desc id="tudc-description">The TU logo appears at once, a dot circles it and it contracts to a dot, then the dot redraws the logo, in a seamless eight-second loop.</desc>
   <!-- The filled badge paths are preserved from the application's TransUnion logo.
        Self-contained: no JavaScript, fonts, external resources or raster assets.
        Prefix tudc IDs when embedding multiple copies inline; img copies are isolated. -->
+  <!-- Every animation starts 5.1 s into the loop, just after the logo is fully drawn, so the first frame
+       (often all a short wait shows) is the whole logo rather than a lone dot. -->
   <style>
     .tudc-motion { display: inline; }
     .tudc-still { display: none; }
@@ -19,10 +21,10 @@
     </g>
     <mask id="tudc-write-mask" maskUnits="userSpaceOnUse" x="796.68" y="461.93" width="12" height="12" style="mask-type:luminance">
       <g fill="none" stroke="white" stroke-width="0.96" stroke-linecap="round" stroke-linejoin="round">
-        <path id="tudc-ring-reveal" d="M 798.490000 468.700000 C 798.850000 470.720000 800.550000 472.180000 802.680000 472.180000 C 805.040000 472.180000 806.950000 470.270000 806.950000 467.910000 C 806.950000 465.550000 805.040000 463.650000 802.680000 463.650000 C 801.150000 463.650000 799.760000 464.480000 799.040000 465.850000 C 798.780000 466.290000 798.730000 466.650000 798.990000 466.890000 C 799.140000 467.010000 799.380000 467.020000 799.750000 467.020000 L 801.830000 467.020000" pathLength="100" stroke-dasharray="100 100" stroke-dashoffset="100" opacity="0"><animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.22777778;0.22866667;1" dur="8s" repeatCount="indefinite"/><animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.22777778;0.38888889;1" dur="8s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;.33333333 0.31284413 .66666667 0.89571862;0 0 1 1"/></path>
-        <path id="tudc-t-reveal" d="M 801.360000 465.540000 L 800.320000 468.740000 C 800.150000 469.260000 800.410000 469.520000 800.820000 469.520000 C 801.030000 469.520000 801.250000 469.480000 801.460000 469.390000" pathLength="100" stroke-dasharray="100 100" stroke-dashoffset="100" opacity="0"><animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.41666667;0.41755556;1" dur="8s" repeatCount="indefinite"/><animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.41666667;0.47555556;1" dur="8s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;.33333333 0.27408110 .66666667 0.82869932;0 0 1 1"/></path>
-        <path id="tudc-u-reveal" d="M 803.140000 466.890000 L 802.580000 468.600000 C 802.400000 469.150000 802.590000 469.500000 803.180000 469.500000 C 803.810000 469.500000 804.380000 469.000000 804.590000 468.390000 L 805.080000 466.900000" pathLength="100" stroke-dasharray="100 100" stroke-dashoffset="100" opacity="0"><animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.50555556;0.50644444;1" dur="8s" repeatCount="indefinite"/><animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.50555556;0.57777778;1" dur="8s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;.33333333 0.26185382 .66666667 1.00000000;0 0 1 1"/></path>
-        <path id="tudc-u-tail-reveal" d="M 805.080000 466.900000 L 804.590000 468.390000 C 804.320000 469.230000 804.750000 469.560000 805.580000 469.540000" pathLength="100" stroke-dasharray="100 100" stroke-dashoffset="100" opacity="0"><animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.57777778;0.57866667;1" dur="8s" repeatCount="indefinite"/><animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.57777778;0.61666667;1" dur="8s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;.33333333 0.00000000 .66666667 1.00000000;0 0 1 1"/></path>
+        <path id="tudc-ring-reveal" d="M 798.490000 468.700000 C 798.850000 470.720000 800.550000 472.180000 802.680000 472.180000 C 805.040000 472.180000 806.950000 470.270000 806.950000 467.910000 C 806.950000 465.550000 805.040000 463.650000 802.680000 463.650000 C 801.150000 463.650000 799.760000 464.480000 799.040000 465.850000 C 798.780000 466.290000 798.730000 466.650000 798.990000 466.890000 C 799.140000 467.010000 799.380000 467.020000 799.750000 467.020000 L 801.830000 467.020000" pathLength="100" stroke-dasharray="100 100" stroke-dashoffset="100" opacity="0"><animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.22777778;0.22866667;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/><animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.22777778;0.38888889;1" dur="8s" begin="-5.1s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;.33333333 0.31284413 .66666667 0.89571862;0 0 1 1"/></path>
+        <path id="tudc-t-reveal" d="M 801.360000 465.540000 L 800.320000 468.740000 C 800.150000 469.260000 800.410000 469.520000 800.820000 469.520000 C 801.030000 469.520000 801.250000 469.480000 801.460000 469.390000" pathLength="100" stroke-dasharray="100 100" stroke-dashoffset="100" opacity="0"><animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.41666667;0.41755556;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/><animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.41666667;0.47555556;1" dur="8s" begin="-5.1s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;.33333333 0.27408110 .66666667 0.82869932;0 0 1 1"/></path>
+        <path id="tudc-u-reveal" d="M 803.140000 466.890000 L 802.580000 468.600000 C 802.400000 469.150000 802.590000 469.500000 803.180000 469.500000 C 803.810000 469.500000 804.380000 469.000000 804.590000 468.390000 L 805.080000 466.900000" pathLength="100" stroke-dasharray="100 100" stroke-dashoffset="100" opacity="0"><animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.50555556;0.50644444;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/><animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.50555556;0.57777778;1" dur="8s" begin="-5.1s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;.33333333 0.26185382 .66666667 1.00000000;0 0 1 1"/></path>
+        <path id="tudc-u-tail-reveal" d="M 805.080000 466.900000 L 804.590000 468.390000 C 804.320000 469.230000 804.750000 469.560000 805.580000 469.540000" pathLength="100" stroke-dasharray="100 100" stroke-dashoffset="100" opacity="0"><animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.57777778;0.57866667;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/><animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.57777778;0.61666667;1" dur="8s" begin="-5.1s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;.33333333 0.00000000 .66666667 1.00000000;0 0 1 1"/></path>
       </g>
     </mask>
   </defs>
@@ -30,47 +32,47 @@
   <g class="tudc-motion">
     <g transform="translate(802.68 467.93)">
       <g>
-        <animateTransform attributeName="transform" type="scale" values="1;1;0.04;0.04" keyTimes="0;0.833333;0.95;1" calcMode="spline" keySplines="0 0 1 1;.22 1 .36 1;0 0 1 1" dur="8s" repeatCount="indefinite"/>
+        <animateTransform attributeName="transform" type="scale" values="1;1;0.04;0.04" keyTimes="0;0.833333;0.95;1" calcMode="spline" keySplines="0 0 1 1;.22 1 .36 1;0 0 1 1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
         <g transform="translate(-802.68 -467.93)">
           <use xlink:href="#tudc-badge" mask="url(#tudc-write-mask)">
-            <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.61666667;0.63111111;1" dur="8s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.61666667;0.63111111;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
           </use>
           <use xlink:href="#tudc-badge" opacity="0">
-            <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.61666667;0.63111111;1" dur="8s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.61666667;0.63111111;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
           </use>
           <!-- Each visible dot uses the exact centreline of the stroke it reveals. The
                opacity hand-offs make these segments read as one continuous pen tip. -->
           <circle r="0.27" fill="#4aa4bf">
-            <animateMotion path="M 802.68 467.93 C 802.68 465.50 802.68 463.65 802.68 463.65 C 800.32 463.65 798.49 465.56 798.49 467.91 C 798.49 470.27 800.32 472.18 802.68 472.18 C 805.04 472.18 806.95 470.27 806.95 467.91 C 806.95 465.55 805.04 463.65 802.68 463.65 C 800.85 463.65 798.92 466.02 798.49 468.70" keyPoints="0;1;1" keyTimes="0;0.22777778;1" calcMode="linear" dur="8s" repeatCount="indefinite"/>
-            <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.2276;0.2278;1" dur="8s" repeatCount="indefinite"/>
+            <animateMotion path="M 802.68 467.93 C 802.68 465.50 802.68 463.65 802.68 463.65 C 800.32 463.65 798.49 465.56 798.49 467.91 C 798.49 470.27 800.32 472.18 802.68 472.18 C 805.04 472.18 806.95 470.27 806.95 467.91 C 806.95 465.55 805.04 463.65 802.68 463.65 C 800.85 463.65 798.92 466.02 798.49 468.70" keyPoints="0;1;1" keyTimes="0;0.22777778;1" calcMode="linear" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.2276;0.2278;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
           </circle>
           <circle r="0.27" fill="#4aa4bf" opacity="0">
-            <animateMotion dur="8s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.22777778;0.38888889;1" calcMode="linear"><mpath xlink:href="#tudc-ring-reveal"/></animateMotion>
-            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.2276;0.2278;0.3887;0.3889;1" dur="8s" repeatCount="indefinite"/>
+            <animateMotion dur="8s" begin="-5.1s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.22777778;0.38888889;1" calcMode="linear"><mpath xlink:href="#tudc-ring-reveal"/></animateMotion>
+            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.2276;0.2278;0.3887;0.3889;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
           </circle>
           <circle r="0.27" fill="#4aa4bf" opacity="0">
-            <animateMotion path="M 801.83 467.02 C 801.72 466.53 801.54 466.00 801.36 465.54" keyPoints="0;0;1;1" keyTimes="0;0.38888889;0.41666667;1" calcMode="linear" dur="8s" repeatCount="indefinite"/>
-            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.3887;0.3889;0.4165;0.4167;1" dur="8s" repeatCount="indefinite"/>
+            <animateMotion path="M 801.83 467.02 C 801.72 466.53 801.54 466.00 801.36 465.54" keyPoints="0;0;1;1" keyTimes="0;0.38888889;0.41666667;1" calcMode="linear" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.3887;0.3889;0.4165;0.4167;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
           </circle>
           <circle r="0.27" fill="#4aa4bf" opacity="0">
-            <animateMotion dur="8s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.41666667;0.47555556;1" calcMode="linear"><mpath xlink:href="#tudc-t-reveal"/></animateMotion>
-            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.4165;0.4167;0.4754;0.4756;1" dur="8s" repeatCount="indefinite"/>
+            <animateMotion dur="8s" begin="-5.1s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.41666667;0.47555556;1" calcMode="linear"><mpath xlink:href="#tudc-t-reveal"/></animateMotion>
+            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.4165;0.4167;0.4754;0.4756;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
           </circle>
           <circle r="0.27" fill="#4aa4bf" opacity="0">
-            <animateMotion path="M 801.46 469.39 C 801.76 468.45 802.28 467.45 803.14 466.89" keyPoints="0;0;1;1" keyTimes="0;0.47555556;0.50555556;1" calcMode="linear" dur="8s" repeatCount="indefinite"/>
-            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.4754;0.4756;0.5054;0.5056;1" dur="8s" repeatCount="indefinite"/>
+            <animateMotion path="M 801.46 469.39 C 801.76 468.45 802.28 467.45 803.14 466.89" keyPoints="0;0;1;1" keyTimes="0;0.47555556;0.50555556;1" calcMode="linear" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.4754;0.4756;0.5054;0.5056;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
           </circle>
           <circle r="0.27" fill="#4aa4bf" opacity="0">
-            <animateMotion dur="8s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.50555556;0.57777778;1" calcMode="linear"><mpath xlink:href="#tudc-u-reveal"/></animateMotion>
-            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.5054;0.5056;0.5776;0.5778;1" dur="8s" repeatCount="indefinite"/>
+            <animateMotion dur="8s" begin="-5.1s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.50555556;0.57777778;1" calcMode="linear"><mpath xlink:href="#tudc-u-reveal"/></animateMotion>
+            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.5054;0.5056;0.5776;0.5778;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
           </circle>
           <circle r="0.27" fill="#4aa4bf" opacity="0">
-            <animateMotion dur="8s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.57777778;0.61666667;1" calcMode="linear"><mpath xlink:href="#tudc-u-tail-reveal"/></animateMotion>
-            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.5776;0.5778;0.6165;0.6167;1" dur="8s" repeatCount="indefinite"/>
+            <animateMotion dur="8s" begin="-5.1s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.57777778;0.61666667;1" calcMode="linear"><mpath xlink:href="#tudc-u-tail-reveal"/></animateMotion>
+            <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.5776;0.5778;0.6165;0.6167;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
           </circle>
           <circle r="0.27" fill="#4aa4bf" opacity="0">
-            <animateMotion path="M 805.58 469.54 C 806.86 469.20 807.52 468.55 807.52 467.93 C 807.52 465.26 805.35 463.09 802.68 463.09 C 800.01 463.09 797.84 465.26 797.84 467.93 C 797.84 470.60 800.01 472.77 802.68 472.77 C 805.35 472.77 807.52 470.60 807.52 467.93 C 807.52 465.26 805.35 463.09 802.68 463.09 C 802.68 465.04 802.68 466.86 802.68 467.93" keyPoints="0;0;1;1" keyTimes="0;0.61666667;0.83333333;1" calcMode="linear" dur="8s" repeatCount="indefinite"/>
-            <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.6165;0.6167;1" dur="8s" repeatCount="indefinite"/>
+            <animateMotion path="M 805.58 469.54 C 806.86 469.20 807.52 468.55 807.52 467.93 C 807.52 465.26 805.35 463.09 802.68 463.09 C 800.01 463.09 797.84 465.26 797.84 467.93 C 797.84 470.60 800.01 472.77 802.68 472.77 C 805.35 472.77 807.52 470.60 807.52 467.93 C 807.52 465.26 805.35 463.09 802.68 463.09 C 802.68 465.04 802.68 466.86 802.68 467.93" keyPoints="0;0;1;1" keyTimes="0;0.61666667;0.83333333;1" calcMode="linear" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.6165;0.6167;1" dur="8s" begin="-5.1s" repeatCount="indefinite"/>
           </circle>
         </g>
       </g>

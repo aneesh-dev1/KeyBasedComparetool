@@ -1295,3 +1295,173 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 
 /* Console view switch: stage icons travelling between the horizontal graph and the vertical rail. */
 .ds-console-flight{position:fixed;inset:0;z-index:40;pointer-events:none}
+
+/* ───────────── Pipeline notices: a failed run or a duplicate key, under the card title ───────────── */
+.ds-pipeline-notices{position:relative;z-index:6;display:flex;flex-direction:column;gap:8px;min-width:0}
+.ds-pipeline-notices:not(:has(> :not([hidden]))){display:none}
+.enterprise-ui #runningPanel[data-live-tab=console]>.ds-pipeline-notices{grid-column:1/-1;grid-row:2}
+.enterprise-ui #runningPanel[data-live-tab=console]:has(>.ds-pipeline-notices > :not([hidden])){grid-template-rows:auto auto minmax(0,1fr)}
+.enterprise-ui #runningPanel[data-live-tab=console]:has(>.ds-pipeline-notices > :not([hidden]))>:is(#pipelineStages,#pipelineTerminal){grid-row:3}
+/* The graph gives up spare top and bottom space so a notice never pushes it out of the fixed-height card. */
+.enterprise-ui #runningPanel[data-live-tab=graph]:has(>.ds-pipeline-notices > :not([hidden]))>#pipelineGraph{padding-top:36px;padding-bottom:96px}
+.ds-dup-strip{position:relative;display:flex;align-items:center;gap:var(--space-3);margin:0;padding:8px 8px 8px 14px;border:1px solid color-mix(in srgb,var(--tu-yellow-500,#fcd800) 70%,var(--border-default));border-left-width:3px;border-radius:var(--radius-md);background:color-mix(in srgb,var(--tu-yellow-500,#fcd800) 10%,var(--surface-card))}
+.ds-dup-strip[hidden]{display:none}
+.ds-dup-strip svg.ds-dup-icon{flex:none;font-size:18px;color:var(--attention-text,#7a5b00)}
+.ds-dup-text{flex:1;min-width:0;margin:0;font-size:var(--text-sm);line-height:1.4;color:var(--text-default);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ds-dup-text strong{font-weight:650;color:var(--text-strong)}
+.ds-dup-toggle{display:inline-flex;align-items:center;gap:4px;flex:none;height:30px;padding:0 10px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);color:var(--text-default);font:600 var(--text-xs)/1 var(--font-sans);cursor:pointer}
+.ds-dup-toggle svg.lucide{font-size:14px;transition:transform var(--dur-2) var(--ease-out)}
+.ds-dup-toggle[aria-expanded=true] svg.lucide{transform:rotate(180deg)}
+.ds-dup-toggle:hover,.ds-dup-toggle:focus-visible{background:var(--surface-hover);outline:none;box-shadow:var(--focus-ring)}
+.ds-dup-panel{position:absolute;top:calc(100% + 6px);right:0;left:0;z-index:30;max-height:260px;overflow:auto;padding:var(--space-3);border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);box-shadow:0 16px 40px rgba(0,43,64,.16);animation:ds-dup-open .18s var(--ease-out)}
+.ds-dup-panel[hidden]{display:none}
+.ds-dup-panel p{margin:0 0 var(--space-2);font-size:var(--text-xs);color:var(--text-muted)}
+@keyframes ds-dup-open{from{opacity:0;transform:translateY(-4px)}}
+@media (prefers-reduced-motion:reduce){.ds-dup-panel{animation:none}}
+
+/* ───────────── Page polish ───────────── */
+.visually-hidden{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip-path:inset(50%)!important;white-space:nowrap!important}
+.ds-glyph-button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.ds-glyph-button svg.ds-glyph-icon{font-size:15px;flex:none}
+.ds-glyph-button:hover svg.ds-glyph-icon[class*=arrow-right],.ds-glyph-button:hover .ds-glyph-label+svg{transform:translateX(2px);transition:transform var(--dur-2) var(--ease-out)}
+/* Docs & FAQ disclosures */
+#docsPanel summary.ds-disclosure{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);list-style:none;cursor:pointer}
+#docsPanel summary.ds-disclosure::-webkit-details-marker{display:none}
+#docsPanel summary.ds-disclosure svg.ds-disclosure-icon{flex:none;font-size:16px;color:var(--text-muted);transition:transform var(--dur-2) var(--ease-out)}
+#docsPanel details[open]>summary.ds-disclosure svg.ds-disclosure-icon{transform:rotate(180deg)}
+/* Projects: the comparisons list and timeline keep a usable height; the dashboard scrolls instead. */
+.enterprise-ui .project-bottom{flex:1 0 260px}
+/* Job history */
+#historyTable.ds-history td{vertical-align:middle}
+#historyTable.ds-history td:first-child{white-space:nowrap}
+.ds-state{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font:600 var(--text-xs)/1.6 var(--font-sans);background:var(--surface-sunken);color:var(--text-muted);white-space:nowrap}
+.ds-state::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.ds-state.is-complete{background:color-mix(in srgb,var(--success) 12%,#fff);color:color-mix(in srgb,var(--success) 80%,#000)}
+.ds-state:is(.is-running,.is-queued,.is-preparing,.is-uploading){background:var(--tu-cyan-50);color:var(--tu-cyan-700)}
+.ds-state.is-error{background:color-mix(in srgb,var(--danger) 10%,#fff);color:var(--danger)}
+.ds-history-actions{white-space:nowrap}
+.ds-history-actions .ds-row-button{display:inline-flex;align-items:center;gap:5px;height:30px;margin:0 4px 0 0;padding:0 9px!important;font-size:var(--text-xs)!important}
+.ds-history-actions .ds-row-button.is-delete{width:30px;padding:0!important;justify-content:center}
+#historyTable.ds-history td.history-storage{white-space:nowrap}
+.ds-history-actions .ds-row-button svg.lucide{font-size:14px}
+.ds-history-actions .ds-row-button.is-delete:hover{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,#fff)}
+
+/* ───────────── Projects: run strip, sign-off and runs ledger ─────────────
+   Status colours are the app's audit colours. Navy carries structure; yellow appears only where a run
+   still needs sign-off. One motion: the run bars grow from the baseline when a project opens. */
+#projectsPanel.pj{--pj-unreviewed:#a8bac4;--pj-review:#00a6ca;--pj-approved:#2b8b65;--pj-changes:#d7922b;--pj-ink:#002b40;--pj-line:#dbe6ec}
+#projectsPanel.pj>.section-title{margin-bottom:var(--space-3);justify-content:flex-end}
+#projectsPanel.pj .project-layout{display:grid;grid-template-columns:248px minmax(0,1fr);gap:24px;flex:1;min-height:0;height:auto}
+/* Library rail */
+#projectsPanel.pj .project-library{display:flex;flex-direction:column;gap:6px;min-height:0;padding:0 16px 0 0;border:0;border-right:1px solid var(--pj-line);border-radius:0;background:none;overflow:auto}
+#projectsPanel.pj #projectSearch{margin-bottom:6px}
+#projectsPanel.pj #projectList{display:flex;flex-direction:column;gap:2px}
+#projectsPanel.pj .pj-library-item{display:grid;gap:6px;width:100%;padding:10px 12px;border:0;border-radius:8px;background:none;text-align:left;color:var(--text-default);cursor:pointer;transition:background var(--dur-2) var(--ease-out)}
+#projectsPanel.pj .pj-library-item strong{font-size:var(--text-sm);font-weight:600;line-height:1.3;color:var(--pj-ink)}
+#projectsPanel.pj .pj-library-item:hover{background:var(--surface-sunken)}
+#projectsPanel.pj .pj-library-item[aria-pressed=true]{background:color-mix(in srgb,var(--pj-review) 9%,#fff);box-shadow:inset 3px 0 0 var(--pj-ink)}
+#projectsPanel.pj .pj-library-item:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+#projectsPanel.pj .pj-meter{display:block;height:4px;border-radius:2px;background:var(--pj-line);overflow:hidden}
+#projectsPanel.pj .pj-meter i{display:block;height:100%;background:var(--pj-approved)}
+#projectsPanel.pj .pj-library-meta,#projectsPanel.pj .pj-library-empty{font-size:var(--text-xs);color:var(--text-muted)}
+#projectsPanel.pj .pj-library-empty{margin:8px 12px;line-height:1.5}
+/* Dashboard column */
+#projectsPanel.pj #projectDashboard{display:flex;flex-direction:column;gap:28px;min-height:0;padding:2px 14px 24px 0;scrollbar-gutter:stable;border:0;border-radius:0;background:none;overflow:auto}
+#projectsPanel.pj .pj-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-4)}
+#projectsPanel.pj .pj-titles h2{margin:0;font-size:26px;font-weight:650;line-height:1.15;letter-spacing:-.015em;color:var(--pj-ink)}
+#projectsPanel.pj .pj-description{max-width:68ch;margin:6px 0 0;font-size:var(--text-sm);line-height:1.5;color:var(--text-muted)}
+#projectsPanel.pj .pj-head-actions{display:flex;gap:8px;flex:none}
+#projectsPanel.pj .pj-head-actions button{display:inline-flex;align-items:center;gap:6px;height:36px}
+#projectsPanel.pj .pj-head-actions svg.lucide{font-size:16px}
+#projectsPanel.pj .pj-summary{margin:-16px 0 0;font-size:var(--text-md);line-height:1.5;color:var(--text-default);font-variant-numeric:tabular-nums}
+#projectsPanel.pj .pj-section-head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-3);margin-bottom:12px}
+#projectsPanel.pj .pj-section-head h3{margin:0;font-size:var(--text-md);font-weight:650;color:var(--pj-ink)}
+#projectsPanel.pj .pj-section-note,#projectsPanel.pj .pj-empty-line{font-size:var(--text-xs);color:var(--text-muted)}
+#projectsPanel.pj .pj-empty-line{margin:0}
+/* Run strip: the page's centre. Each bar is a run; its colour is the run's sign-off status. */
+#projectsPanel.pj .pj-strip{display:flex;align-items:stretch;gap:6px;height:190px;margin:0;padding:0 0 0;list-style:none;border-bottom:1px solid var(--pj-ink)}
+#projectsPanel.pj .pj-strip li{flex:1 1 0;min-width:0;max-width:72px;display:flex}
+#projectsPanel.pj .pj-bar{position:relative;display:flex;flex-direction:column;width:100%;padding:0;border:0;background:none;cursor:pointer;color:var(--pj-unreviewed)}
+#projectsPanel.pj .pj-bar-column{position:relative;flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 4px}
+#projectsPanel.pj .pj-bar-fill{width:min(100%,34px)!important}
+#projectsPanel.pj .pj-bar-fill{display:block;width:100%;border-radius:4px 4px 0 0;background:currentColor;transform-origin:50% 100%;animation:pj-grow .7s cubic-bezier(.22,1,.36,1) both;transition:filter var(--dur-2) var(--ease-out)}
+#projectsPanel.pj .pj-bar-value{margin-bottom:5px;font:600 11px/1 var(--font-sans);font-variant-numeric:tabular-nums;color:var(--text-muted);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#projectsPanel.pj .pj-bar-date{position:absolute;top:100%;left:0;right:0;margin-top:7px;font:500 11px/1 var(--font-sans);color:var(--text-muted);text-align:center;white-space:nowrap}
+#projectsPanel.pj .pj-bar.is-latest .pj-bar-date{font-weight:650;color:var(--pj-ink)}
+#projectsPanel.pj .pj-bar.is-latest .pj-bar-value{color:var(--pj-ink)}
+#projectsPanel.pj .pj-bar:hover .pj-bar-fill{filter:brightness(.88)}
+#projectsPanel.pj .pj-bar:focus-visible{outline:none}
+#projectsPanel.pj .pj-bar:focus-visible .pj-bar-fill{box-shadow:0 0 0 3px #fff,0 0 0 5px var(--pj-review)}
+#projectsPanel.pj .pj-runs{padding-bottom:22px}
+@keyframes pj-grow{from{transform:scaleY(0)}}
+/* Status colours, shared by the bars, the sign-off bar, its legend and the ledger pills */
+#projectsPanel.pj .is-unreviewed{color:var(--pj-unreviewed)}
+#projectsPanel.pj .is-review{color:var(--pj-review)}
+#projectsPanel.pj .is-approved{color:var(--pj-approved)}
+#projectsPanel.pj .is-changes{color:var(--pj-changes)}
+/* Sign-off: proportion of runs in each state; its legend explains the bar colours above */
+#projectsPanel.pj .pj-signoff-bar{display:flex;gap:2px;height:10px;border-radius:5px;overflow:hidden;background:var(--pj-line)}
+#projectsPanel.pj .pj-signoff-bar>span{display:block;min-width:4px;background:currentColor}
+#projectsPanel.pj .pj-signoff-bar>span.is-empty{flex:1;background:none}
+#projectsPanel.pj .pj-legend{display:flex;flex-wrap:wrap;gap:6px 22px;margin:12px 0 0;padding:0;list-style:none}
+#projectsPanel.pj .pj-legend li{display:inline-flex;align-items:center;gap:7px;font-size:var(--text-sm)}
+#projectsPanel.pj .pj-legend li>span:not(.pj-swatch){color:var(--text-default)}
+#projectsPanel.pj .pj-legend li strong{font-weight:650;font-variant-numeric:tabular-nums;color:var(--pj-ink)}
+#projectsPanel.pj .pj-legend li.is-zero{opacity:.5}
+#projectsPanel.pj .pj-swatch{width:10px;height:10px;border-radius:3px;background:currentColor}
+/* Runs ledger */
+#projectsPanel.pj .pj-ledger-scroll{overflow-x:auto}
+#projectsPanel.pj .pj-table{width:100%;border-collapse:collapse;font-size:var(--text-sm)}
+#projectsPanel.pj .pj-table th{padding:0 12px 8px;border-bottom:1px solid var(--pj-ink);font:600 var(--text-xs)/1.3 var(--font-sans);color:var(--text-muted);text-align:left;white-space:nowrap;background:none}
+#projectsPanel.pj .pj-table td{padding:10px 12px;border-bottom:1px solid var(--pj-line);vertical-align:middle;color:var(--text-default)}
+#projectsPanel.pj .pj-table .is-number{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+#projectsPanel.pj .pj-table tr{transition:background var(--dur-2) var(--ease-out)}
+#projectsPanel.pj .pj-table tbody tr:hover{background:var(--surface-sunken)}
+#projectsPanel.pj .pj-table tr.is-flash{animation:pj-flash 1.4s ease-out}
+@keyframes pj-flash{0%,30%{background:color-mix(in srgb,var(--pj-review) 16%,#fff)}}
+#projectsPanel.pj .pj-name-button{display:grid;gap:2px;max-width:360px;padding:0;border:0;background:none;text-align:left;cursor:pointer;color:inherit}
+#projectsPanel.pj .pj-name-button strong{font-weight:600;color:var(--pj-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#projectsPanel.pj .pj-name-button small{font-size:var(--text-xs);color:var(--text-muted)}
+#projectsPanel.pj .pj-name-button:hover strong{text-decoration:underline;text-underline-offset:3px}
+#projectsPanel.pj .pj-name-button:focus-visible{outline:none;box-shadow:var(--focus-ring);border-radius:4px}
+#projectsPanel.pj .pj-date{white-space:nowrap;color:var(--text-muted)}
+#projectsPanel.pj .pj-figure{font-weight:650;color:var(--pj-ink)}
+#projectsPanel.pj .pj-delta{display:inline-flex;align-items:center;gap:3px;font-weight:600}
+#projectsPanel.pj .pj-delta svg.lucide{font-size:13px}
+#projectsPanel.pj .pj-delta.is-down{color:var(--pj-approved)}
+#projectsPanel.pj .pj-delta.is-up{color:#b5651d}
+#projectsPanel.pj .pj-delta:is(.is-flat,.is-none){font-weight:500;color:var(--text-muted)}
+#projectsPanel.pj .pj-status{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:1px solid color-mix(in srgb,currentColor 35%,#fff);border-radius:13px;background:color-mix(in srgb,currentColor 9%,#fff);font:600 var(--text-xs)/1 var(--font-sans);white-space:nowrap;cursor:pointer}
+#projectsPanel.pj .pj-status::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+#projectsPanel.pj .pj-status.is-unreviewed{color:#5d7280;border-color:color-mix(in srgb,var(--tu-yellow-500,#fcd800) 75%,#fff);background:color-mix(in srgb,var(--tu-yellow-500,#fcd800) 14%,#fff)}
+#projectsPanel.pj .pj-status.is-unreviewed::before{background:var(--pj-unreviewed)}
+#projectsPanel.pj .pj-status:hover{filter:brightness(.95)}
+#projectsPanel.pj .pj-status:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+#projectsPanel.pj .pj-col-open{width:44px;text-align:right}
+#projectsPanel.pj .pj-icon-button,#projectDrawer .pj-icon-button{display:inline-grid;place-items:center;width:32px;height:32px;padding:0;border:1px solid transparent;border-radius:8px;background:none;color:var(--text-muted);cursor:pointer}
+#projectsPanel.pj .pj-icon-button:hover,#projectDrawer .pj-icon-button:hover{background:var(--surface-sunken);color:var(--pj-ink,#002b40)}
+#projectsPanel.pj .pj-icon-button svg.lucide,#projectDrawer .pj-icon-button svg.lucide{font-size:16px}
+#projectsPanel.pj .pj-ledger-empty{display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:20px;border:1px dashed var(--pj-line);border-radius:8px}
+#projectsPanel.pj .pj-ledger-empty p{margin:0;font-size:var(--text-sm);color:var(--text-muted)}
+#projectsPanel.pj .pj-pager{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+#projectsPanel.pj .pj-pager button{display:inline-flex;align-items:center;gap:6px}
+#projectsPanel.pj #projectStatus{display:none}
+/* Activity drawer */
+#projectDrawer .pj-activity{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
+#projectDrawer .pj-activity li{position:relative;display:grid;gap:2px;padding:0 0 16px 22px;border-left:1px solid var(--border-default,#dbe6ec);margin-left:5px}
+#projectDrawer .pj-activity li:last-child{border-left-color:transparent}
+#projectDrawer .pj-activity-dot{position:absolute;left:-5px;top:4px;width:9px;height:9px;border-radius:50%;background:#00a6ca;box-shadow:0 0 0 3px #fff}
+#projectDrawer .pj-activity strong{font-size:var(--text-sm);font-weight:600;color:#002b40}
+#projectDrawer .pj-activity time{font-size:var(--text-xs);color:var(--text-muted)}
+@media (prefers-reduced-motion:reduce){#projectsPanel.pj .pj-bar-fill,#projectsPanel.pj .pj-table tr.is-flash{animation:none}}
+body.reduce-motion #projectsPanel.pj .pj-bar-fill{animation:none}
+@media (max-width:900px){#projectsPanel.pj .project-layout{grid-template-columns:1fr}#projectsPanel.pj .project-library{max-height:200px;padding:0 0 12px;border-right:0;border-bottom:1px solid var(--pj-line)}#projectsPanel.pj .pj-head{flex-direction:column}#projectsPanel.pj .pj-strip{height:150px}}
+#projectsPanel.pj>.section-title[hidden]{display:none}
+#projectsPanel.pj .pj-library-head{display:flex;align-items:center;gap:4px;margin-bottom:4px}
+#projectsPanel.pj .pj-library-head h2{flex:1;margin:0;font-size:var(--text-md);font-weight:650;color:var(--pj-ink)}
+#projectsPanel.pj .pj-library-head .pj-create{border-color:color-mix(in srgb,var(--tu-yellow-500,#fcd800) 70%,#fff);background:var(--tu-yellow-500,#fcd800);color:var(--pj-ink)}
+#projectsPanel.pj .pj-library-head .pj-create:hover{filter:brightness(.96);background:var(--tu-yellow-500,#fcd800)}
+#projectsPanel.pj .pj-value-short{display:none}
+#projectsPanel.pj .pj-head-actions button{white-space:nowrap}
+@media (max-width:1100px){#projectsPanel.pj .pj-value-full{display:none}#projectsPanel.pj .pj-value-short{display:inline}}
+@media (max-width:900px){#projectsPanel.pj .pj-head-actions{width:100%}#projectsPanel.pj .pj-head-actions button{flex:1;justify-content:center}#projectsPanel.pj .pj-titles h2{font-size:22px}#projectsPanel.pj .pj-strip{gap:3px}#projectsPanel.pj .pj-bar-date{font-size:10px}}
