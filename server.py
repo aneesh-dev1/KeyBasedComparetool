@@ -1572,6 +1572,27 @@ def make_server(root, port=8765, host='127.0.0.1', public_url=None, max_jobs=1, 
     return server
 
 
+def source_roots_file(path):
+    """Folders listed in source-roots.txt, one per line, for server-path input on any platform (the Windows
+    launcher has no command line to edit). Blank lines and # comments are ignored; a missing folder is reported
+    and skipped so the server still starts."""
+    roots=[]
+    try:
+        lines=Path(path).read_text(encoding='utf-8-sig').splitlines()
+    except FileNotFoundError:
+        return roots
+    for line in lines:
+        value=line.strip()
+        if not value or value.startswith('#'):
+            continue
+        folder=Path(os.path.expandvars(os.path.expanduser(value)))
+        if folder.is_dir():
+            roots.append(folder.resolve())
+        else:
+            print(f'{Path(path).name}: {value} is not a folder this server can read; skipped.', flush=True)
+    return roots
+
+
 def lock_data_directory(root):
     """One server owns a data folder; independent workers do not take this lock."""
     root = Path(root).resolve()
@@ -1612,6 +1633,9 @@ if __name__ == '__main__':
     server = make_server(args.data_dir, args.port, args.host, args.public_url, args.max_jobs, args.max_sort_mb)
     server.source_roots=[Path(value).resolve(strict=True) for value in args.source_root]
     if any(not p.is_dir() for p in server.source_roots):parser.error('--source-root must be a directory')
+    server.source_roots+=source_roots_file(BASE/'source-roots.txt')
+    if server.source_roots:
+        print('Server files can be read from: '+'; '.join(str(root) for root in server.source_roots), flush=True)
     server.app.retention_days = args.retention_days
     server.app.analysis_retention_days = max(0, args.analysis_retention_days)
     cleanup_stop = threading.Event()

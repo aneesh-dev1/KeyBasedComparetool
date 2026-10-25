@@ -6,7 +6,7 @@ SUPPORTED={'.csv','.dat','.txt','.tsv','.psv','.xlsx','.xlsm','.parquet','.json'
 
 def inspect_source(value, roots):
     if not roots:
-        raise ValueError('Server file access is disabled. Ask the administrator to configure --source-root.')
+        raise ValueError('Server files are not enabled. List the allowed folders in source-roots.txt next to server.py (or start the server with --source-root), then restart it.')
     if not isinstance(value,str) or not value.strip() or not Path(value).is_absolute():
         raise ValueError('Enter an absolute file path on the server')
     try:

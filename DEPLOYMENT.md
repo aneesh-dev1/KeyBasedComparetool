@@ -258,7 +258,13 @@ SOURCE_ROOTS="/srv/key-compare/input
 ```
 
 Each newline adds one `--source-root` argument. The default is empty, which
-disables server-path input. Users select **Use server paths** in Files & headers
+disables server-path input ("Server files are not enabled" in Files & headers).
+
+On any platform, including the Windows launcher, the folders can instead be listed
+in `source-roots.txt` next to `server.py`, one per line (copy
+`source-roots.example.txt`; `#` comments, `~` and environment variables are allowed,
+and the file is git-ignored). Restart the app after changing it; the console lists the
+folders it accepted and names any it skipped. Users select **Use server paths** in Files & headers
 and enter two absolute paths visible to the server. The process needs read access.
 The application rejects paths outside these roots, including escaping symlinks,
 unsupported types and changed source files. Choose directories that everyone

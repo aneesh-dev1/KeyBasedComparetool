@@ -5,3 +5,4 @@ deploy.env
 *.log
 
 .venv/
+source-roots.txt

@@ -23,6 +23,8 @@ falls back to `python`. Keep its console window open while work is running.
 If the folder is synced by OneDrive, the launcher keeps comparison data in
 `%LOCALAPPDATA%\DataCompare\data` instead, because syncing scratch files slows large comparisons.
 For files of several GB, also exclude the data folder from real-time antivirus scanning.
+To compare files already on the machine or a share ("Use server paths"), list the allowed
+folders in `source-roots.txt` next to `server.py` (see `source-roots.example.txt`) and restart.
 On other platforms, or from a terminal in this folder:
 
 ```bash

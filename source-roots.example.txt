@@ -1,0 +1,12 @@
+# Folders whose files Data Compare may read directly ("Use server paths"), one per line.
+# Copy this file to source-roots.txt next to server.py, list your folders, and restart the app.
+# Everyone who can open the app can read every file in these folders, so list only shared input folders.
+# Blank lines and lines starting with # are ignored; ~ and environment variables are expanded.
+#
+# Windows examples:
+# D:\Reconciliation\Input
+# \\fileserver\team-share\extracts
+#
+# Linux examples:
+# /srv/key-compare/input
+# /mnt/team-share/reconciliation

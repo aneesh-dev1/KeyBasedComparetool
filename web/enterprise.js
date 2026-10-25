@@ -93,7 +93,7 @@ let serverFilesEnabled=false,serverCheckTimer=null,serverCheckVersion=0;
 function serverCheckMessage(message,state='idle'){$('serverSourceHelp').textContent=message;$('serverSourceFields').dataset.permissionState=state;}
 async function checkServerSources(){
   const version=++serverCheckVersion,button=$('useServerSources'),left=$('leftServerPath').value.trim(),right=$('rightServerPath').value.trim();button.disabled=true;
-  if(!serverFilesEnabled){serverCheckMessage('Server file access is not enabled by the administrator.','error');return;}
+  if(!serverFilesEnabled){serverCheckMessage('Server files are not enabled. Ask your administrator to list the allowed folders in source-roots.txt next to server.py, then restart the app.','error');return;}
   if(!left||!right){serverCheckMessage('Enter both server paths to check file access.','idle');return;}
   serverCheckMessage('Checking that both files are allowed and readable…','checking');
   try{const result=await api('/api/server-sources/check',{files:{left,right}});if(version!==serverCheckVersion)return;button.disabled=!result.valid;serverCheckMessage(`Access confirmed · ${result.files.left.name} and ${result.files.right.name}`,'valid');}
@@ -104,7 +104,7 @@ function setSourceMode(mode){if(job||uploading){showError('Start a new compariso
 $('computerSource').onclick=()=>setSourceMode('computer');$('serverSource').onclick=()=>setSourceMode('server');
 for(const id of ['leftServerPath','rightServerPath'])$(id).addEventListener('input',()=>scheduleServerCheck());
 $('useServerSources').disabled=true;
-api('/api/source-options').then(config=>{serverFilesEnabled=config.enabled;serverCheckMessage(config.enabled?'Enter both paths to check access.':'Ask your administrator to enable server files with --source-root.');}).catch(error=>{serverFilesEnabled=false;serverCheckMessage(error.message||'Could not check server file access.','error');});
+api('/api/source-options').then(config=>{serverFilesEnabled=config.enabled;serverCheckMessage(config.enabled?'Enter both paths to check access.':'Server files are not enabled. Ask your administrator to list the allowed folders in source-roots.txt next to server.py, then restart the app.');}).catch(error=>{serverFilesEnabled=false;serverCheckMessage(error.message||'Could not check server file access.','error');});
 $('useServerSources').onclick=async()=>{
   const button=$('useServerSources');button.disabled=true;clearError();
   try{
