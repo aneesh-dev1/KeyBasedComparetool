@@ -57,7 +57,7 @@
 .enterprise-ui #rerunDialog{height:auto;min-height:0;background:#f7fafc;width:min(940px,calc(100vw - 48px))}
 .enterprise-ui #rerunDialog .rerun-body{flex:0 1 auto;min-height:250px;max-height:52dvh}
 .enterprise-ui #rerunDialog .rerun-footer{display:flex;justify-content:flex-end}
-.enterprise-ui #reviewPlan{padding:8px 22px;font-size:12px}
+
 .enterprise-ui #sourcePanel>.section-title{margin-top:0}
 @media(max-width:650px){.enterprise-ui #rerunDialog{width:calc(100vw - 16px)}.enterprise-ui #rerunDialog .rerun-body{min-height:220px;max-height:60dvh}}
 

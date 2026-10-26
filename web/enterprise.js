@@ -2333,10 +2333,11 @@ loadDiagnostics=async function(){
  titleBox.querySelector('p').textContent='Change exclusions, overrides or rules. Your original results are kept.';
  const actions=el('div','rc-actions');actions.append(start,close);heading.append(actions);
  // The plan says what Apply will do; errors read right under it.
- const plan=el('div','rc-plan');plan.append(lucideNode('info'),$('reviewPlan'));heading.after(plan);plan.after($('rerunError'));
+ heading.after($('rerunError'));
  const counts={};
  for(const name of ['overrides','rules']){counts[name]=el('span','rc-count');$('rerun-tab-'+name).append(counts[name]);}
- const summary=el('div','ds-scope-summary rc-summary');tabs.after(summary);
+ // The scope summary is no longer shown in this dialog; syncSummary still keeps the tab counts current.
+ const summary=el('div','ds-scope-summary rc-summary');
  dialog.querySelector('.rerun-footer').hidden=true;
 
  const card=(title,sub,extra)=>{const box=el('section','rc-card'),head=el('div','rc-card-head'),text=el('div');text.append(el('h3','',title));if(sub)text.append(el('p','',sub));head.append(text);if(extra)head.append(extra);box.append(head);return box;};
@@ -2568,7 +2569,7 @@ loadDiagnostics=async function(){
  renderRerunRuleSummary=function(){renderRuleRows();syncSummary();};
  const baseShowTab=showRerunTab;
  // The summary strip is shown on Value overrides only; Keys & scope and Comparison rules show the same facts in their cards.
- showRerunTab=function(tab){baseShowTab(tab);summary.hidden=tab!=='overrides';if(!rerunDraft||!dialog.open)return;if(tab==='overrides')fillOverrideColumns();if(tab==='rules')prepareRules();};
+ showRerunTab=function(tab){baseShowTab(tab);if(!rerunDraft||!dialog.open)return;if(tab==='overrides')fillOverrideColumns();if(tab==='rules')prepareRules();};
  // Built just before the dialog opens, so the opening animation already has the final size.
  const show=dialog.showModal;
  dialog.showModal=function(){if(rerunDraft&&job?.columns){ignorePage=0;renderScope();renderOverrides();renderRulesTab();syncSummary();}return show.call(dialog);};

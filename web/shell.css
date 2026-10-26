@@ -1436,10 +1436,6 @@ body.reduce-motion #projectsPanel.pj .pj-bar-fill{animation:none}
 #rerunDialog.rc .drawer-heading p{margin:6px 0 0;font-size:var(--text-sm);color:var(--text-muted)}
 #rerunDialog.rc .rc-actions{display:flex;align-items:center;gap:10px;flex:none}
 #rerunDialog.rc #startRerun{height:40px;padding:0 18px;white-space:nowrap;font-weight:650}
-#rerunDialog.rc .rc-plan{display:flex;align-items:flex-start;gap:10px;flex-shrink:0;margin:0 24px;padding:10px 14px;border:1px solid #c7e6ee;border-radius:var(--radius-md);background:var(--tu-cyan-50);color:#00596f;font-size:var(--text-sm);line-height:1.45}
-#rerunDialog.rc .rc-plan:has(#reviewPlan:empty){display:none}
-#rerunDialog.rc .rc-plan svg.lucide{flex:none;margin-top:2px;font-size:16px;color:var(--tu-cyan-700)}
-#rerunDialog.rc #reviewPlan{margin:0!important;padding:0!important;background:none!important;border:0!important}
 .enterprise-ui #rerunDialog.rc #rerunError{flex-shrink:0;margin:8px 24px 0;padding:0;font-size:var(--text-sm)}
 .enterprise-ui #rerunDialog.rc .rerun-tabs{flex-shrink:0;gap:2px;margin:14px 24px 0;padding:3px;border:1px solid var(--border-default);border-bottom:1px solid var(--border-default);border-radius:10px;background:var(--surface-sunken)}
 .enterprise-ui #rerunDialog.rc .rerun-tabs [role=tab]{position:relative;display:flex;align-items:center;justify-content:center;gap:8px;flex:1;height:40px;padding:0 12px;border:1px solid transparent;border-radius:8px;background:none;color:var(--text-muted);font:500 var(--text-sm)/1 var(--font-sans);cursor:pointer;transition:background-color var(--dur-1) ease,color var(--dur-1) ease}
@@ -1449,9 +1445,6 @@ body.reduce-motion #projectsPanel.pj .pj-bar-fill{animation:none}
 #rerunDialog.rc .rc-count{min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--n-200);color:var(--text-muted);font:600 11px/20px var(--font-sans);text-align:center}
 #rerunDialog.rc .rc-count:empty{display:none}
 #rerunDialog.rc [aria-selected=true] .rc-count{background:var(--tu-cyan-50);color:var(--tu-cyan-700)}
-#rerunDialog.rc .rc-summary{flex-shrink:0;margin:14px 24px 0}
-#rerunDialog.rc .rc-summary[hidden]{display:none}
-#rerunDialog.rc .rc-summary .rc-lock{font-size:14px;color:var(--text-faint)}
 .enterprise-ui #rerunDialog.rc .rerun-footer{display:none}
 .enterprise-ui #rerunDialog.rc .rerun-body{flex:1 1 auto;min-height:0;max-height:none;padding:16px 24px 24px;background:none}
 #rerunDialog.rc #rerun-scope:not([hidden]){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:16px}
@@ -1577,7 +1570,7 @@ body.reduce-motion #projectsPanel.pj .pj-bar-fill{animation:none}
 @media (max-width:650px){
  .enterprise-ui #rerunDialog.rc{width:calc(100vw - 16px);height:calc(100dvh - 16px)}
  .enterprise-ui #rerunDialog.rc .drawer-heading{flex-wrap:wrap;padding:16px}
- #rerunDialog.rc :is(.rc-plan,.rc-summary,.rerun-tabs){margin-left:16px!important;margin-right:16px!important}
+ #rerunDialog.rc .rerun-tabs{margin-left:16px!important;margin-right:16px!important}
  .enterprise-ui #rerunDialog.rc .rerun-body{padding:14px 16px 16px}
  #rerunDialog.rc .rc-override-form{grid-template-columns:1fr}
 }
