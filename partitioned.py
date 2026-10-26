@@ -30,7 +30,6 @@ import re
 import shutil
 import struct
 import time
-import zlib
 import threading
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from pathlib import Path
@@ -45,11 +44,6 @@ SPLITTABLE_ENCODINGS = {'utf-8', 'utf-8-sig', 'cp1252'}
 AUTO_MIN_BYTES = 64 * MIB
 RANGE_BYTES = 64 * MIB
 SPILL_BYTES = 48 * MIB
-# Early estimate: keys whose CRC-32 falls in one bucket of ESTIMATE_BUCKETS are sampled. The choice depends only
-# on the key, so both files sample the same keys. Each range keeps at most ESTIMATE_PER_RANGE rows.
-ESTIMATE_BUCKETS = 64
-ESTIMATE_PER_RANGE = 400
-ESTIMATE_BYTES = 64 * MIB
 _NEEDS_ESCAPE = re.compile(r'[\x00-\x1f\\"]').search
 
 
@@ -464,8 +458,7 @@ def _read_fingerprints(task):
     spills, pending, sequence = [], 0, 0
     spill_dir = Path(task['spill_dir'])
     count = excluded_count = 0
-    bisect_right, pack, crc32 = bisect.bisect_right, FRAME.pack, zlib.crc32
-    sample, sample_bytes = [], 0
+    bisect_right, pack = bisect.bisect_right, FRAME.pack
     lines = _byte_lines(path, task['start'], task['end'])
     span_end = [0]
 
@@ -546,10 +539,6 @@ def _read_fingerprints(task):
         else:
             # The record's whole span (all its lines) is referenced; only its fingerprint is kept.
             stored = REF + b'P' + digest(payload) + REF_TAIL.pack(offset, span_end[0] - offset)
-        if len(sample) < ESTIMATE_PER_RANGE and crc32(key) % ESTIMATE_BUCKETS == 0 and sample_bytes < 4 * MIB:
-            real = payload if kind is None else _ref_payload(record, kind, layout)
-            sample.append((key, real))
-            sample_bytes += len(key) + len(real)
         buffers[bisect_right(bounds, key)].append(pack(len(key), len(stored)) + key + stored)
         pending += len(key) + len(stored) + 16
         if pending >= SPILL_BYTES:
@@ -557,7 +546,7 @@ def _read_fingerprints(task):
             sequence += 1
             pending = 0
     spills.append(_write_spill(spill_dir / f"{side}-{task['index']:05d}-{sequence:04d}.spill", buffers))
-    return dict(side=side, index=task['index'], rows=count, excluded=excluded_count, spills=spills, estimate_sample=sample)
+    return dict(side=side, index=task['index'], rows=count, excluded=excluded_count, spills=spills)
 
 
 def _fetch(layout, mode, refs):
@@ -644,7 +633,6 @@ def _partition_range(task):
     text = task['kind'] == 'text'
     bisect_right = bisect.bisect_right
     pack = FRAME.pack
-    sample, sample_bytes = [], 0
     with reader as rows:
         for key_values, payload in rows:
             count += 1
@@ -661,14 +649,11 @@ def _partition_range(task):
             if not allow_empty and any(value is None or value == '' for value in key_values):
                 raise ValueError(f'{path}: record {count}: empty key component')
             buffers[bisect_right(bounds, key)].append(pack(len(key), len(payload)) + key + payload)
-            if len(sample) < ESTIMATE_PER_RANGE and zlib.crc32(key) % ESTIMATE_BUCKETS == 0 and sample_bytes < 4 * MIB:
-                sample.append((key, payload))
-                sample_bytes += len(key) + len(payload)
             pending += len(key) + len(payload) + 16
             if pending >= SPILL_BYTES:
                 spills.append(flush())
     spills.append(flush())
-    return dict(side=side, index=task['index'], rows=count, excluded=excluded_count, spills=spills, estimate_sample=sample)
+    return dict(side=side, index=task['index'], rows=count, excluded=excluded_count, spills=spills)
 
 
 def _load_partition(segments, policy, capture):
@@ -704,80 +689,6 @@ def _load_partition(segments, policy, capture):
     return rows, sample
 
 
-class _SampleCollector:
-    """Keeps a few changed cells from one key range for the live view; snapshots are written by the parent."""
-
-    def __init__(self, limit=25):
-        self.rows, self.limit = [], limit
-
-    def sample(self, row):
-        if len(self.rows) < self.limit:
-            self.rows.append((row[0], row[1], row[2][:300], row[3][:300]))
-
-    def tick(self, *args, **kwargs):
-        pass
-
-
-class _NullWriter:
-    def writerow(self, row):
-        pass
-
-    def writerows(self, rows):
-        pass
-
-
-class _Estimator:
-    """Compares sampled keys present in both files with the real comparison loop, writing nothing."""
-
-    def __init__(self, column_count, policies, names):
-        self.column_count, self.policies = column_count, policies
-        self.seen = dict(left={}, right={})
-        self.bytes = dict(left=0, right=0)
-        self.stats = dict(matched_keys=0, equal_rows=0, changed_rows=0, changed_cells=0, left_only=0, right_only=0,
-                          override_equivalent_cells=0, rule_equivalent_cells=0)
-        self.columns = {name: 0 for name in names}
-        self.writers = {name: _NullWriter() for name in ('differences', 'raw_differences', 'matched_keys', 'left_only', 'right_only')}
-
-    def feed(self, result):
-        from compare import compare_pair_stream
-        side = result.get('side')
-        if side not in self.seen or not result.get('estimate_sample'):
-            return
-        mine, other, pairs = self.seen[side], self.seen['right' if side == 'left' else 'left'], []
-        for key, payload in result['estimate_sample']:
-            if key in mine or self.bytes[side] >= ESTIMATE_BYTES:
-                continue
-            mine[key] = payload
-            self.bytes[side] += len(key) + len(payload)
-            if key in other:
-                pairs.append(((key, payload), (key, other[key])) if side == 'left' else ((key, other[key]), (key, payload)))
-        if pairs:
-            compare_pair_stream(pairs, self.column_count, self.policies, self.writers, self.stats, self.columns)
-
-    def snapshot(self):
-        compared = self.stats['matched_keys']
-        return dict(sampled_keys=compared, changed_rows=self.stats['changed_rows'], equal_rows=self.stats['equal_rows'],
-                    changed_cells=self.stats['changed_cells'],
-                    changed_cells_by_column={name: count for name, count in self.columns.items() if count}) if compared else None
-
-
-def _watch_reads(futures, args, estimator, live, on_read=None, on_tick=None):
-    """While both files are read, feed finished ranges from either file into the estimate."""
-    pending, done_count, total = set(futures), 0, len(futures)
-    while pending:
-        check_cancel(getattr(args, 'cancel_file', None))
-        done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
-        for future in done:
-            done_count += 1
-            if future.exception() is None:
-                estimator.feed(future.result())
-                if on_read is not None:
-                    on_read(future.result())
-        if on_tick is not None:
-            on_tick()
-        live.tick('reading', ranges_read=done_count, ranges_total=total, estimate=estimator.snapshot(), force=not pending)
-
-
 def _join_partition(task):
     """Phase 3: compare one key range of both sides with the shared comparison loop."""
     from compare import compare_pair_stream
@@ -791,7 +702,8 @@ def _join_partition(task):
                  override_equivalent_cells=0, rule_equivalent_cells=0, left_duplicate_keys=0,
                  left_duplicate_rows_skipped=0, right_duplicate_keys=0, right_duplicate_rows_skipped=0)
     columns = {name: 0 for name in task['columns']}
-    collector = _SampleCollector()
+    from mismatch_patterns import Tracker
+    tracker = Tracker()
     names = ('differences', 'left_only', 'right_only', 'matched_keys', 'raw_differences', 'dup_left', 'dup_right')
     streams = {name: open(out / f'{name}-{part:05d}.csv', 'w', encoding='utf-8', newline='', buffering=4 * MIB) for name in names}
     try:
@@ -810,12 +722,16 @@ def _join_partition(task):
                 yield ((key, a[0]) if a is not None else None, (key, b[0]) if b is not None else None)
 
         compare_pair_stream(pairs(), task['column_count'], task['policies'], writers, stats, columns,
-                            cancel_file=task['cancel_file'], live=collector)
+                            cancel_file=task['cancel_file'], patterns=tracker)
     finally:
         for stream in streams.values():
             stream.close()
+    # This key range's mismatch patterns; merged in key order when the ranges are assembled.
+    patterns_file = out / f'patterns-{part:05d}.json'
+    patterns_file.with_suffix('.part').write_text(json.dumps(tracker.state(), ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+    patterns_file.with_suffix('.part').replace(patterns_file)
     samples = {name: (sample[0], sample[1], rows[sample[0]][1]) for name, sample, rows in (('left', left_sample, left), ('right', right_sample, right)) if sample}
-    return dict(part=part, stats=stats, columns=columns, samples=samples, live_samples=collector.rows)
+    return dict(part=part, stats=stats, columns=columns, samples=samples)
 
 
 def _describe(args, side, path, names, canonical):
@@ -1017,18 +933,16 @@ class _Journal:
         (self.work / 'progress.jsonl').write_text('', encoding='utf-8')
 
     def record(self, kind, identity, result):
-        # The estimate sample only feeds the live estimate; it is not needed to resume.
         if kind == 'side':
-            result = dict(ranges=[{name: value for name, value in item.items() if name != 'estimate_sample'} for item in result])
-        else:
-            result = {name: value for name, value in result.items() if name != 'estimate_sample'}
+            result = dict(ranges=result)
         line = json.dumps(_encode(dict(kind=kind, id=identity, result=result))) + '\n'
         with self.lock, open(self.work / 'progress.jsonl', 'a', encoding='utf-8') as stream:
             stream.write(line)
 
     def joined_files_exist(self, part):
         return all((self.work / 'parts' / f'{name}-{part:05d}.csv').exists()
-                   for name in ('differences', 'left_only', 'right_only', 'matched_keys', 'raw_differences', 'dup_left', 'dup_right'))
+                   for name in ('differences', 'left_only', 'right_only', 'matched_keys', 'raw_differences', 'dup_left', 'dup_right')) \
+            and (self.work / 'parts' / f'patterns-{part:05d}.json').exists()
 
 
 def _read_id(task):
@@ -1110,8 +1024,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
         with ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=_init_worker,
                                  initargs=(getattr(args, 'max_field_mb', 64), shared)) as pool:
             phase = time.monotonic()
-            # Both files are read side by side: ranges are queued alternately, in proportion to each file's size,
-            # so the early estimate sees matching keys from the start.
+            # Both files are read side by side: ranges are queued alternately, in proportion to each file's size.
             order = sorted(((index / len(tasks), side, index) for side, tasks in plans.items() for index in range(len(tasks))))
             futures_by_side = {side: [None] * len(tasks) for side, tasks in plans.items()}
             finished = journal.sides if journal is not None else {}
@@ -1119,7 +1032,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                 task = plans[side][index]
                 cached = journal.reads.get(_read_id(task)) if journal is not None else None
                 if side in finished:
-                    cached = dict(side=side, rows=0, spills=[])  # already read; only keeps the live estimate's bookkeeping simple
+                    cached = dict(side=side, rows=0, spills=[])  # already read before an interruption
                 if cached is not None:
                     futures_by_side[side][index] = _done(cached)
                     continue
@@ -1157,14 +1070,6 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
 
             for side in finished:
                 read_done(dict(side=side))  # files read before an interruption count from the start
-            # Live view: an early estimate from sampled keys while the files are read, then exact counts per key range.
-            live = None
-            if getattr(args, 'live_file', None):
-                from live import LiveSnapshot
-                live_stats, live_columns = {}, {}
-                live = LiveSnapshot(args.live_file, live_stats, live_columns)
-                estimator = _Estimator(len(canonical), policies, [name for name in canonical if name not in args.keys])
-                _watch_reads([future for _, futures in submitted.values() for future in futures], args, estimator, live, read_done, read_tick)
             read = {}
             for source in sources:
                 side = source['side']
@@ -1211,18 +1116,8 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
                 futures.append(future)
             joined = [0]
 
-            estimate = estimator.snapshot() if live is not None else None
-
             def compared(result):
                 joined[0] += 1
-                if live is not None and result is not None:
-                    for name, value in result['stats'].items():
-                        live_stats[name] = live_stats.get(name, 0) + value
-                    for name, value in result['columns'].items():
-                        live_columns[name] = live_columns.get(name, 0) + value
-                    for row in result.get('live_samples', ()):
-                        live.sample(row)
-                    live.tick(key_ranges_done=joined[0], key_ranges=len(futures), estimate=estimate, force=joined[0] == len(futures))
                 # At most about 20 progress lines, however many key ranges there are.
                 if joined[0] * 20 // len(futures) != (joined[0] - 1) * 20 // len(futures):
                     progress(args, 'Comparison progress', stage='compare', key_ranges_done=joined[0],
@@ -1240,6 +1135,11 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
             for name, value in result['columns'].items():
                 columns[name] += value
         _assemble(out, work / 'parts', len(results), args.keys)
+        from mismatch_patterns import Tracker, save as save_patterns
+        patterns = Tracker()
+        for part in range(len(results)):
+            patterns.merge(json.loads((work / 'parts' / f'patterns-{part:05d}.json').read_text(encoding='utf-8')))
+        save_patterns(patterns, out)
         if capture:
             for side in ('left', 'right'):
                 sample = next((result['samples'][side] for result in results if side in result['samples']), None)

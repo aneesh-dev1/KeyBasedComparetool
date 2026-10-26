@@ -34,6 +34,9 @@ from excel_input import sheets as excel_sheets, convert as convert_excel
 from file_io import atomic_write_text, replace_retry
 from compare import execution_settings, common_headers, align_headers, read_header, normalize_headers, header, validate_scope, validate_overrides
 from reports import export_excel, export_html, make_summary_html, REPORT_VERSION
+# Reports that include comments and rebuild themselves when comments change, after this quiet period.
+AUTO_REFRESH = ('html', 'excel')
+NOTES_SETTLE_SECONDS = 3
 import run_diff
 import text_dialect
 
@@ -133,15 +136,18 @@ class Application:
         self.json_lock = threading.Lock()
         self.tasks = {}
         self.max_jobs = max_jobs
+        # When each job's comments last changed; reports that include comments rebuild once they settle.
+        self.notes_at = {}
         csv.field_size_limit(64 * 1024 * 1024)
         for path in self.root.glob('*/job.json'):
             if not re.fullmatch(r'[a-f0-9]{32}', path.parent.name):
                 continue
             job = json.loads(path.read_text())
             self.cleanup_upload_journal_temps(job['id'])
-            if job['state'] == 'uploading' and not job.get('source_paths'):
+            if job['state'] == 'uploading':
                 for side in ('left', 'right'):
-                    self.recover_upload(job, side)
+                    if side not in job.get('source_paths', {}):
+                        self.recover_upload(job, side)
             changed = False
             if job['state'] in ('queued', 'running', 'preparing'):
                 job.update(state='error', error='Server stopped before comparison completed. '+resume_message(path.parent,job))
@@ -224,8 +230,9 @@ class Application:
             if not path.is_file():
                 raise ValueError('Comparison not found')
             job = json.loads(path.read_text())
-            if job['state'] == 'uploading' and not job.get('source_paths'):
-                for side in ('left', 'right'):
+            if job['state'] == 'uploading':
+                # A file read from a server path is complete from the start; only uploads report progress.
+                for side in [side for side in ('left', 'right') if side not in job.get('source_paths', {})]:
                     source = self.upload_path(job, side)
                     job['files'][side]['uploaded'] = self.upload_offsets.get(
                         (identity, side), source.stat().st_size if source.exists() else 0)
@@ -279,10 +286,11 @@ class Application:
         self.directory(identity).mkdir()
         job = dict(id=identity, owner=owner, state='uploading', created=time.time(), files=files, delimiter=delimiter, encoding=encoding, header=has_header, comparison_engine='auto', exports={}, upload_compression=['gzip'])
         if source_paths:job['source_paths']=source_paths
-        required=0 if source_paths else sum(f['size'] for f in files.values())
+        # Only uploaded files are copied to the server; a server path is read where it is.
+        required=sum(f['size'] for side,f in files.items() if side not in (source_paths or {}))
         if shutil.disk_usage(self.root).free<required+128*1024**2:
             self.directory(identity).rmdir()
-            raise ValueError('Insufficient server disk space for both uploaded files. Clean up old jobs first.')
+            raise ValueError('Insufficient server disk space for the uploaded files. Clean up old jobs first.')
         self.save(job)
         return job
 
@@ -458,6 +466,8 @@ class Application:
                 job = self.load(identity)
                 if job['state'] != 'uploading' or job['files'][side]['complete']:
                     raise ValueError('This file is already finalized')
+                if side in job.get('source_paths', {}):
+                    raise ValueError('This file is read from a server path, so it is not uploaded')
                 self.recover_upload(job, side)
                 target = self.upload_path(job, side)
                 current = target.stat().st_size if target.exists() else 0
@@ -621,8 +631,7 @@ class Application:
             with (directory/'run.log').open('a') as log:log.write(f'{time.strftime("%H:%M:%S")}  {message}\n')
         try:
             notify('Applying rules to retained evidence; no source reads or sorting')
-            (directory/'live.json').unlink(missing_ok=True)
-            summary=revise(directory/'baseline',directory/'report',job,job['columns'],notify,live_file=directory/'live.json')
+            summary=revise(directory/'baseline',directory/'report',job,job['columns'],notify)
             (directory/'report/summary.html').write_text(make_summary_html(summary),encoding='utf-8')
             self.write_html_report(identity)
             check_cancel(directory/'cancel-comparison')
@@ -643,7 +652,6 @@ class Application:
         self.patch(identity, state='running', started=time.time(), memory_cap_mb=getattr(self, 'memory_cap_mb', 0), memory_concurrency=1, allocation=allocation)
         job = self.load(identity)
         directory = self.directory(identity)
-        (directory / 'live.json').unlink(missing_ok=True)
         command = [sys.executable, str(BASE / 'worker.py'), str(directory)]
         try:
             with (directory / 'run.log').open('ab') as log:
@@ -723,15 +731,34 @@ class Application:
             log.write(f'{time.strftime("%H:%M:%S")}  Writing HTML report\n')
         self.run_export(identity, 'html', pipeline=True)
 
+    def refresh_export(self, identity, kind):
+        """Rebuild a report after comments change, once they have settled, so a burst of comments rebuilds once."""
+        flag = self.directory(identity) / ('cancel-' + kind)
+        while time.time() - self.notes_at.get(identity, 0) < NOTES_SETTLE_SECONDS:
+            check_cancel(flag)
+            time.sleep(0.5)
+        self.run_export(identity, kind)
+
     def run_export(self, identity, kind, pipeline=False):
+        # The HTML report and Excel workbook include comments: comments saved while one is being built start
+        # another build straight after, so the finished report always has them.
+        started = time.time()
+        self._run_export(identity, kind, pipeline)
+        if pipeline or kind not in AUTO_REFRESH or self.notes_at.get(identity, 0) <= started:
+            return
+        if self.load(identity)['exports'].get(kind, {}).get('state') == 'queued':
+            self.refresh_export(identity, kind)
+
+    def _run_export(self, identity, kind, pipeline=False):
         def status(state, **values):
             with self.lock:
                 job = self.load(identity)
-                # Notes saved while this report was being built are not in it: offer a fresh one instead.
+                # Notes saved while this report was being built are not in it.
                 previous = job['exports'].get(kind, {})
                 if previous.get('state') == 'running' and previous.get('notes_changed'):
                     if state == 'complete':
-                        state, values = 'outdated', dict(values, message='Analysis notes changed. Generate a fresh report.')
+                        state, values = ('queued', dict(message='Updating with the new comments…')) if kind in AUTO_REFRESH and not pipeline \
+                            else ('outdated', dict(values, message='Analysis notes changed. Generate a fresh report.'))
                     elif state == 'running':
                         values = dict(values, notes_changed=True)
                 job['exports'][kind] = dict(state=state, updated=time.time(), **values)
@@ -882,9 +909,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response(dict(enabled=bool(self.server.source_roots),roots=[str(p) for p in self.server.source_roots]))
             if path=='/api/server-sources/check' and self.command=='POST':
                 from source_inputs import inspect_source
-                config=self.body();sources={side:inspect_source(config.get('files',{}).get(side),self.server.source_roots) for side in ('left','right')}
+                # Checks whichever paths are given, so each file can be checked as soon as its path is typed.
+                config=self.body();given={side:value for side,value in (config.get('files') or {}).items() if side in ('left','right')}
+                if not given:raise ValueError('Enter a server path to check')
+                sources={side:inspect_source(value,self.server.source_roots) for side,value in given.items()}
                 suffixes=[Path(v['path']).suffix.lower() for v in sources.values()]
-                if '.json' in suffixes and suffixes!=['.json','.json']:raise ValueError('Choose JSON files on both sides')
+                if len(suffixes)==2 and '.json' in suffixes and suffixes!=['.json','.json']:raise ValueError('Choose JSON files on both sides')
                 return self.json_response(dict(valid=True,files={side:dict(name=Path(value['path']).name,size=value['size']) for side,value in sources.items()}))
             if path=='/api/server-sources' and self.command=='POST':
                 from source_inputs import inspect_source
@@ -1027,7 +1057,19 @@ class Handler(BaseHTTPRequestHandler):
                         atomic_write_text(target,encoded)
                 return self.json_response(dict(profiles=profiles))
             if self.command == 'POST' and path == '/api/jobs':
-                return self.json_response(self.app.create(self.body(), self.workspace), 201)
+                # Each file is either uploaded ({name, size}) or read from an allowed server path ({path}).
+                config=self.body();sources={}
+                for side,item in (config.get('files') or {}).items():
+                    if side in ('left','right') and isinstance(item,dict) and 'path' in item:
+                        from source_inputs import inspect_source
+                        sources[side]=inspect_source(item['path'],self.server.source_roots)
+                        if Path(sources[side]['path']).suffix.lower()=='.json':raise ValueError('JSON files are compared from the same source on both sides. Choose two server paths or upload both files.')
+                        config['files'][side]=dict(name=Path(sources[side]['path']).name,size=sources[side]['size'])
+                item=self.app.create(config,self.workspace,sources or None)
+                if sources:
+                    for side in sources:item['files'][side]['uploaded']=item['files'][side]['size']
+                    self.app.save(item)
+                return self.json_response(item,201)
             if self.command == 'GET' and path == '/api/jobs':
                 offset = max(0, int(query.get('offset', ['0'])[0]))
                 records = []
@@ -1051,7 +1093,7 @@ class Handler(BaseHTTPRequestHandler):
             job = self.app.load(identity)
             if self.server.shared and job.get('owner') != self.workspace:
                 if job['state']!='complete':return self.json_response({'error':'Comparison is private while it is being prepared or processed'},404)
-                shared_actions={'review-plan','review-copy','validate-rules','annotations','analysis','live','export/excel','export/html','export/ai','ai-findings'}
+                shared_actions={'review-plan','review-copy','validate-rules','annotations','analysis','export/excel','export/html','export/ai','ai-findings'}
                 if self.command not in ('GET','HEAD') and action not in shared_actions:
                     return self.json_response({'error':'Only the creating browser can edit sources, cancel or delete this job. Use Recompare to create your own review.'},403)
             job['can_manage']=not self.server.shared or job.get('owner')==self.workspace
@@ -1172,10 +1214,16 @@ class Handler(BaseHTTPRequestHandler):
                         encoded=json.dumps(notes)
                         if len(encoded.encode('utf-8'))>2*1024**2:raise ValueError('Analysis notes exceed the 2 MiB limit')
                         atomic_write_text(target,encoded)
-                        for export in current.get('exports',{}).values():
-                            if export.get('state')=='complete':export.update(state='outdated',message='Analysis notes changed. Generate a fresh report.')
+                        self.app.notes_at[identity]=time.time();refresh=[]
+                        for kind,export in current.get('exports',{}).items():
+                            # The HTML report and Excel workbook rebuild themselves; the AI package is made on request.
+                            if kind in AUTO_REFRESH and export.get('state') in ('complete','outdated'):
+                                current['exports'][kind]=dict(state='queued',updated=time.time(),message='Updating with the new comments…');refresh.append(kind)
+                            elif export.get('state')=='complete':export.update(state='outdated',message='Analysis notes changed. Generate a fresh report.')
                             elif export.get('state') in ('queued','running'):export['notes_changed']=True
                         self.app.save(current)
+                        for kind in refresh:
+                            if (identity,kind) not in self.app.tasks:self.app.submit(identity,kind,self.app.refresh_export,kind)
                 return self.json_response(dict(notes=notes))
             if self.command == 'DELETE' and action is None:
                 self.app.remove_job(identity, allowed_requests=1)
@@ -1481,13 +1529,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.app.save(job)
                     self.app.submit(identity,'comparison',self.app.run_comparison)
                 return self.json_response(job,202)
-            if action == 'live' and self.command == 'GET':
-                # Live counts and the latest mismatches while the comparison runs; final results come from the report.
-                from live import read as read_live
-                snapshot = read_live(directory / 'live.json') or {}
-                stage = (read_live(directory / 'progress.json') or {}).get('stage')
-                return self.json_response(dict(snapshot, job_state=job['state'], stage=stage,
-                                               results_ready=bool(job.get('summary'))))
             if action == 'analysis' and self.command == 'DELETE':
                 freed = self.app.clear_analysis(identity, 'Analysis data was cleared to save space; it rebuilds when you open the mismatch drawer.')
                 return self.json_response(dict(freed=freed))

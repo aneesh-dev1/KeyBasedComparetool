@@ -7,6 +7,9 @@
 /* Expanded sidebar: the T's stem, the "D" of DATA COMPARE and the "C" of the COMPARE group label share one vertical line. */
 body:not(.sidebar-collapsed) #workspaceSidebar .brand-logo{margin-left:-1.9px}
 body:not(.sidebar-collapsed) #workspaceSidebar .sidebar-product{left:19.7px}
+/* The logo starts at the same left edge as "Data Compare" (the logo image has a -1.9px margin and its T sits at
+   its left edge), so the two stay aligned whatever the sidebar's width. */
+body:not(.sidebar-collapsed) #workspaceSidebar .brand{left:21.6px;transform:none}
 /* Compare files menu (expanded sidebar): drops down from under the item; Lucide chevron in a light filled square. */
 #comparisonMenu .ds-menu-inner{min-height:0;overflow:hidden}
 /* At 0fr the menu also cancels the sidebar group's 8px flex gap, so nothing below jumps at either end. */
@@ -135,7 +138,11 @@ body:not(.sidebar-collapsed) #workspaceSidebar #comparisonMenu.is-closing>.ds-me
 #appPreloader span{font-size:var(--text-xs);color:var(--text-muted)}
 #appPreloader.ready{opacity:0;visibility:hidden;pointer-events:none}
 /* In-app restart: the loader covers the content area only; the sidebar stays visible and still. */
-.soft-reload #appPreloader{left:60px;z-index:50;background:var(--surface-canvas)}
+/* After Refresh the loader covers only the page content: the sidebar and the top bar stay in place. Until the
+   top bar is rebuilt, the loader's own strip holds its place so nothing else shows there. */
+.soft-reload #appPreloader{left:60px;top:var(--topbar-height);z-index:50;background:var(--surface-canvas)}
+.soft-reload #appPreloader::before{content:"";position:absolute;left:0;right:0;top:calc(-1 * var(--topbar-height));height:var(--topbar-height);box-sizing:border-box;background:#fff;border-bottom:1px solid var(--border-subtle,#d9e3e9)}
+.soft-reload .workspace-topbar.ds{z-index:60}
 .soft-reload #appPreloader img{width:56px;height:56px}
 .soft-reload #appPreloader strong{display:none}
 
@@ -188,7 +195,7 @@ body:not(.sidebar-collapsed) #workspaceSidebar #comparisonMenu.is-closing>.ds-me
 #uploadPanel.ds .file-card.drag{border-style:solid;box-shadow:0 0 0 4px color-mix(in srgb,var(--tu-cyan-500) 18%,transparent);transform:scale(1.01)}
 #uploadPanel.ds :is(.file-card,.server-path-card):focus-within{border-color:var(--tu-cyan-600);box-shadow:var(--focus-ring)}
 #uploadPanel.ds :is(.file-card,.server-path-card) .file-top{display:flex;align-items:center;justify-content:space-between;align-self:stretch;margin-bottom:var(--space-3)}
-#uploadPanel.ds .file-top .label{font-size:var(--text-2xs);font-weight:600;letter-spacing:var(--tracking-caps);color:var(--text-faint)}
+#uploadPanel.ds .file-top .label{font-size:var(--text-sm);font-weight:650;letter-spacing:0;color:var(--text-strong)}
 #uploadPanel.ds .file-symbol{display:grid;place-items:center;width:24px;height:24px;border-radius:6px;background:var(--tu-navy-700);color:#fff;font:700 var(--text-xs)/1 var(--font-sans)}
 #uploadPanel.ds :is(#rightCard,.server-path-card:last-child) .file-symbol{background:var(--tu-cyan-700)}
 #uploadPanel.ds :is(.file-drop-icon,.server-path-icon){display:grid;place-items:center;width:52px;height:52px;margin-bottom:var(--space-2);border-radius:14px;background:var(--surface-card);border:1px solid var(--border-default);box-shadow:var(--shadow-1);color:var(--tu-cyan-700);transition:transform var(--dur-3) var(--ease-spring),box-shadow var(--dur-2) ease}
@@ -289,11 +296,12 @@ body:not(.sidebar-collapsed) #workspaceSidebar #comparisonMenu.is-closing>.ds-me
 #headersPanel.ds .header-search-box.is-expanded #headerSearch{width:min(280px,40vw);padding:0 var(--space-3) 0 0;opacity:1}
 #headersPanel.ds .header-actions{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap}
 #headersPanel.ds .header-actions [hidden]{display:none}
-#headersPanel.ds .ds-expand-action{display:flex;align-items:center;justify-content:flex-end;height:36px;min-width:36px;padding:0 9px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);color:var(--text-muted);white-space:nowrap;cursor:pointer;transition:background-color var(--dur-2) ease,color var(--dur-2) ease,border-color var(--dur-2) ease,box-shadow var(--dur-2) ease}
-#headersPanel.ds .ds-expand-action svg.lucide{font-size:17px;flex:none}
-#headersPanel.ds .ds-expand-action .ds-action-label{max-width:0;margin-right:0;opacity:0;overflow:hidden;font:600 var(--text-xs)/1 var(--font-sans);color:var(--text-strong);transform:translateX(9px);transition:max-width .34s var(--ease-out),margin-right .34s var(--ease-out),opacity .18s ease,transform .34s var(--ease-out)}
-#headersPanel.ds .ds-expand-action:is(:hover,:focus-visible){background:var(--tu-cyan-50);color:var(--tu-cyan-700);border-color:color-mix(in srgb,var(--tu-cyan-600) 45%,#fff);box-shadow:var(--shadow-1)}
-#headersPanel.ds .ds-expand-action:is(:hover,:focus-visible) .ds-action-label{max-width:140px;margin-right:8px;opacity:1;transform:none}
+/* Icon button whose label slides out to the left on hover or focus; shared by every page. */
+.enterprise-ui .ds-expand-action{display:flex;align-items:center;justify-content:flex-end;height:36px;min-width:36px;padding:0 9px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);color:var(--text-muted);white-space:nowrap;cursor:pointer;transition:background-color var(--dur-2) ease,color var(--dur-2) ease,border-color var(--dur-2) ease,box-shadow var(--dur-2) ease}
+.enterprise-ui .ds-expand-action svg.lucide{font-size:17px;flex:none}
+.enterprise-ui .ds-expand-action .ds-action-label{max-width:0;margin-right:0;opacity:0;overflow:hidden;font:600 var(--text-xs)/1 var(--font-sans);color:var(--text-strong);transform:translateX(9px);transition:max-width .34s var(--ease-out),margin-right .34s var(--ease-out),opacity .18s ease,transform .34s var(--ease-out)}
+.enterprise-ui .ds-expand-action:is(:hover,:focus-visible){background:var(--tu-cyan-50);color:var(--tu-cyan-700);border-color:color-mix(in srgb,var(--tu-cyan-600) 45%,#fff);box-shadow:var(--shadow-1)}
+.enterprise-ui .ds-expand-action:is(:hover,:focus-visible) .ds-action-label{max-width:140px;margin-right:8px;opacity:1;transform:none}
 #headersPanel.ds .header-actions .pill{display:none}
 #headersPanel.ds #headerLayoutStatus{display:flex;align-items:center;gap:var(--space-2);margin:0;padding:var(--space-2) var(--space-3);border:1px solid color-mix(in srgb,var(--warning) 45%,#fff);border-radius:var(--radius-md);background:var(--warning-50);font-size:var(--text-xs);color:var(--warning-text)}
 #headersPanel.ds #headerLayoutStatus[hidden]{display:none}
@@ -306,7 +314,7 @@ body:not(.sidebar-collapsed) #workspaceSidebar #comparisonMenu.is-closing>.ds-me
 #headersPanel.ds .header-editors>section>p.muted{display:grid;grid-template-columns:minmax(0,1fr) 20px minmax(0,1fr);gap:var(--space-2);margin:0;padding:var(--space-2) var(--space-4);background:var(--surface-sunken);border-bottom:1px solid var(--border-default);font-size:0}
 #headersPanel.ds .header-editors>section>p.muted::before{content:"Original name";grid-column:1;font:600 var(--text-2xs)/1.4 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint)}
 #headersPanel.ds .header-editors>section>p.muted::after{content:"Comparison name";grid-column:3;font:600 var(--text-2xs)/1.4 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint)}
-#headersPanel.ds :is(#headerLeftList,#headerRightList){flex:1;min-height:0;overflow:auto;padding:var(--space-1) 0;scrollbar-width:thin;scrollbar-color:var(--n-300) transparent;overscroll-behavior:contain}
+#headersPanel.ds :is(#headerLeftList,#headerRightList){flex:1;min-height:0;overflow:auto;padding:var(--space-1) 0;overscroll-behavior:contain}
 #headersPanel.ds .header-edit{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 20px minmax(0,1fr);align-items:center;gap:var(--space-2);margin:0;padding:3px var(--space-4);transition:background-color var(--dur-1) ease}
 #headersPanel.ds .header-edit:hover{background:var(--surface-sunken)}
 #headersPanel.ds .header-edit::after{content:"";grid-column:2;grid-row:1;justify-self:center;width:14px;height:14px;background:var(--n-400);-webkit-mask:var(--ds-arrow) center/contain no-repeat;mask:var(--ds-arrow) center/contain no-repeat}
@@ -541,7 +549,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .ds-lib-head{display:flex;align-items:flex-start;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-2);flex:none}
 /* The library is one fixed-height card; its list scrolls inside the card, not the page. */
 .ds-library .ds-lib-list{height:calc(100dvh - var(--topbar-height) - 128px);min-height:360px}
-.ds-library .ds-lib-list>#containerLibrary,.ds-library .ds-lib-list>.ds-template-grid{flex:1;min-height:0;overflow:auto;align-content:start;padding:2px 4px 4px 2px;margin:0 -4px 0 -2px;scrollbar-width:thin;scrollbar-color:var(--n-300) transparent;overscroll-behavior:contain}
+.ds-library .ds-lib-list>#containerLibrary,.ds-library .ds-lib-list>.ds-template-grid{flex:1;min-height:0;overflow:auto;align-content:start;padding:2px 4px 4px 2px;margin:0 -4px 0 -2px;overscroll-behavior:contain}
 .ds-lib-head>div{flex:1;min-width:200px}
 .ds-lib-search{display:flex;align-items:center;gap:var(--space-2);height:36px;width:220px;padding:0 var(--space-3);border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);color:var(--text-faint)}
 .ds-lib-search:focus-within{border-color:var(--tu-cyan-600);box-shadow:var(--focus-ring)}
@@ -604,7 +612,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #keysPanel.ds-scope .ds-card-hint{margin:3px 0 0;font-size:var(--text-xs);line-height:1.4;color:var(--text-muted)}
 #keysPanel.ds-scope .scope-card-heading .pill{flex:none;background:var(--n-100);color:var(--text-muted)}
 #keysPanel.ds-scope .scope-card .search{height:36px;margin:0!important}
-#keysPanel.ds-scope .key-list{flex:1;min-height:0;display:flex!important;flex-direction:column;gap:1px;margin:0!important;padding:2px!important;border:1px solid var(--border-subtle);border-radius:var(--radius-md);overflow:auto!important;max-height:none!important;height:auto!important;scrollbar-width:thin;scrollbar-color:var(--n-300) transparent;overscroll-behavior:contain}
+#keysPanel.ds-scope .key-list{flex:1;min-height:0;display:flex!important;flex-direction:column;gap:1px;margin:0!important;padding:2px!important;border:1px solid var(--border-subtle);border-radius:var(--radius-md);overflow:auto!important;max-height:none!important;height:auto!important;overscroll-behavior:contain}
 #keysPanel.ds-scope .key-option{position:relative;display:flex!important;align-items:center;gap:var(--space-3);min-height:36px!important;height:36px;margin:0!important;padding:0 var(--space-3)!important;border:0!important;border-radius:6px!important;background:transparent!important;box-shadow:none!important;font:500 var(--text-sm)/1 var(--font-mono);color:var(--text-default);cursor:pointer;flex:none;transition:background-color var(--dur-1) ease}
 #keysPanel.ds-scope .key-option:hover{background:var(--surface-sunken)!important}
 #keysPanel.ds-scope .key-option span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -684,7 +692,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .ds-drawer .rule-selection-tools{grid-column:2;display:flex!important;align-items:center;gap:var(--space-2)!important;margin:0!important}
 .ds-drawer .rule-selection-tools button{height:34px!important;padding:0 var(--space-3)!important;white-space:nowrap!important;font-size:var(--text-xs)!important}
 .ds-drawer #ruleSelectionCount{grid-column:1/-1;order:3;font-size:var(--text-xs);color:var(--text-muted)}
-.ds-drawer #ruleColumnChoices{grid-column:1/-1;display:grid!important;grid-template-columns:repeat(auto-fill,minmax(130px,1fr))!important;gap:2px!important;max-height:180px!important;margin:0!important;padding:var(--space-2)!important;border:1px solid var(--border-subtle)!important;border-radius:var(--radius-md)!important;background:var(--surface-sunken)!important;overflow:auto;scrollbar-width:thin}
+.ds-drawer #ruleColumnChoices{grid-column:1/-1;display:grid!important;grid-template-columns:repeat(auto-fill,minmax(130px,1fr))!important;gap:2px!important;max-height:180px!important;margin:0!important;padding:var(--space-2)!important;border:1px solid var(--border-subtle)!important;border-radius:var(--radius-md)!important;background:var(--surface-sunken)!important;overflow:auto;}
 .ds-drawer #ruleColumnChoices label{display:flex!important;align-items:center;gap:var(--space-2);min-height:30px;padding:0 var(--space-2)!important;border-radius:6px;font:500 var(--text-xs)/1.2 var(--font-mono);color:var(--text-default);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ds-drawer #ruleColumnChoices label:hover{background:var(--surface-card)}
 .ds-drawer :is(#ruleColumnChoices,.rule-options) input[type=checkbox]{appearance:none;-webkit-appearance:none;width:16px!important;height:16px!important;min-height:0!important;min-width:0!important;padding:0!important;flex:none;margin:0;border:1.5px solid var(--n-400);border-radius:4px;background:var(--surface-card);cursor:pointer}
@@ -846,7 +854,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .ds-drawer .duplicate-rule-setting label{grid-template-columns:auto minmax(0,1fr);align-items:center;gap:var(--space-2)!important}
 .ds-drawer .duplicate-rule-setting .tu-select-trigger{min-height:32px!important;height:32px}
 .ds-rules-panes{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:var(--space-4)}
-.ds-drawer .comparison-rule-builder{min-height:0;overflow:auto;scrollbar-width:thin;gap:var(--space-3)!important}
+.ds-drawer .comparison-rule-builder{min-height:0;overflow:auto;gap:var(--space-3)!important}
 .ds-drawer #ruleColumnPicker{flex:1 1 auto;min-height:0;grid-template-rows:auto minmax(96px,1fr)}
 .ds-drawer #ruleColumnChoices{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))!important;align-content:start;max-height:none!important;min-height:96px;height:100%}
 .ds-drawer #ruleColumnChoices label>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -863,7 +871,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .ds-rules-configured #configuredRuleSearch{height:32px;margin:0;font-size:var(--text-xs)}
 .ds-rules-configured #ruleEditorEmpty{flex:1;display:grid;place-items:center;margin:0;padding:var(--space-4);border:1.5px dashed var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);font-size:var(--text-sm);color:var(--text-muted);text-align:center}
 .ds-rules-configured #ruleEditorEmpty[hidden]{display:none}
-.ds-rules-configured #comparisonRuleList{flex:1;min-height:0;max-height:none!important;display:flex;flex-direction:column;gap:4px;overflow:auto;scrollbar-width:thin}
+.ds-rules-configured #comparisonRuleList{flex:1;min-height:0;max-height:none!important;display:flex;flex-direction:column;gap:4px;overflow:auto;}
 .ds-drawer .comparison-rule-card{display:grid!important;grid-template-columns:minmax(96px,38%) minmax(0,1fr) auto!important;align-items:center;gap:var(--space-2);margin:0!important;padding:6px 6px 6px var(--space-3)!important;border:1px solid var(--border-default)!important;border-radius:var(--radius-md)!important;background:var(--surface-card)!important}
 .ds-drawer .comparison-rule-card[hidden]{display:none!important}
 .ds-drawer .comparison-rule-card>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 var(--text-xs)/1.3 var(--font-mono);color:var(--text-strong)}
@@ -920,7 +928,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #analysisDrawer.ds-mismatch .analysis-results>*{flex:none;margin:0!important}
 #analysisDrawer.ds-mismatch .analysis-context{display:none!important}
 #analysisDrawer.ds-mismatch #analysisStatus{font-size:var(--text-xs)!important;color:var(--text-muted)}
-#analysisDrawer.ds-mismatch .analysis-results>.table-scroll{flex:0 1 auto;width:100%;min-height:0;max-height:none!important;overflow:auto;border:1px solid var(--border-default)!important;border-radius:var(--radius-lg)!important;scrollbar-width:thin}
+#analysisDrawer.ds-mismatch .analysis-results>.table-scroll{flex:0 1 auto;width:100%;min-height:0;max-height:none!important;overflow:auto;border:1px solid var(--border-default)!important;border-radius:var(--radius-lg)!important;}
 #analysisDrawer.ds-mismatch #analysisTable{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--text-xs)}
 #analysisDrawer.ds-mismatch #analysisTable :is(th,td){min-width:0!important;max-width:38ch;padding:7px var(--space-3)!important;font-size:var(--text-xs)!important;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid var(--border-subtle)}
 #analysisDrawer.ds-mismatch #analysisTable th{position:sticky;top:0;z-index:1;height:34px;font-weight:600;letter-spacing:.01em}
@@ -942,7 +950,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #analysisDrawer.ds-mismatch .analysis-help[open]{max-height:22dvh;overflow:auto}
 /* Comments & findings: a collapsible footer. */
 #analysisDrawer.ds-mismatch .enterprise-comments{padding:0!important;border:1px solid var(--border-default)!important;border-radius:var(--radius-lg)!important;background:var(--surface-sunken)!important}
-#analysisDrawer.ds-mismatch .enterprise-comments[open]{max-height:44dvh;overflow:auto;scrollbar-width:thin}
+#analysisDrawer.ds-mismatch .enterprise-comments[open]{max-height:44dvh;overflow:auto;}
 #analysisDrawer.ds-mismatch .enterprise-comments>summary{display:flex;align-items:center;gap:var(--space-2);padding:10px var(--space-4);list-style:none;font:600 var(--text-sm)/1.2 var(--font-sans)!important;color:var(--text-strong)!important;cursor:pointer}
 #analysisDrawer.ds-mismatch .enterprise-comments>summary::-webkit-details-marker{display:none}
 #analysisDrawer.ds-mismatch .enterprise-comments>summary .lucide{width:16px;height:16px;color:var(--text-muted)}
@@ -1003,7 +1011,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .ds-attach-head span{font-size:var(--text-xs);line-height:1.45;color:var(--text-muted)}
 .ds-attach-search{height:34px;margin:0}
 .ds-attach-search[hidden]{display:none}
-.ds-attach-list{display:flex;flex-direction:column;gap:2px;max-height:min(240px,40dvh);margin:0 calc(var(--space-2) * -1);padding:0 var(--space-2);overflow:auto;scrollbar-width:thin}
+.ds-attach-list{display:flex;flex-direction:column;gap:2px;max-height:min(240px,40dvh);margin:0 calc(var(--space-2) * -1);padding:0 var(--space-2);overflow:auto;}
 .ds-attach-list:empty{display:none}
 .ds-attach-option{display:grid!important;grid-template-columns:16px minmax(0,1fr) 16px;align-items:center;gap:var(--space-2);width:100%;height:36px;min-height:0!important;padding:0 var(--space-3)!important;border:1px solid transparent!important;border-radius:var(--radius-md)!important;background:transparent!important;color:var(--text-default)!important;font:500 var(--text-sm)/1 var(--font-sans)!important;text-align:left;box-shadow:none!important;cursor:pointer}
 .ds-attach-option[hidden]{display:none!important}
@@ -1160,61 +1168,12 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 /* The error card replaces the duplicated heading and raw log paragraph while it is shown. */
 #runningPanel:has(#pipelineErrorCard:not([hidden])) :is(#phase,#processed){display:none!important}
 
-/* ───────────── Live results (Analysis while a comparison runs) ───────────── */
-#results.is-live>:not(#liveResults){display:none!important}
-.ds-live{display:flex;flex-direction:column;gap:var(--space-4);font-family:var(--font-sans)}
-.ds-live[hidden]{display:none}
-.ds-live-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-4)}
-.ds-live-head h2{margin:6px 0 0;font-size:var(--text-xl);font-weight:650;color:var(--text-strong)}
-.ds-live-phase{margin:4px 0 0;font-size:var(--text-sm);color:var(--text-muted)}
-.ds-live-elapsed{font-size:var(--text-xs);color:var(--text-faint);font-variant-numeric:tabular-nums;white-space:nowrap}
-.ds-live-pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 10px;border-radius:var(--radius-full);background:var(--danger-50);color:var(--danger-text);font:700 var(--text-2xs)/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase}
-.ds-live-pill i,.ds-live-dot{width:8px;height:8px;border-radius:50%;background:var(--danger);animation:ds-live-pulse 1.4s ease-in-out infinite}
-@keyframes ds-live-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
-.ds-live-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--space-3)}
-.ds-live-metric{display:grid;grid-template-columns:20px minmax(0,1fr);grid-template-rows:auto auto;column-gap:var(--space-2);align-items:center;padding:var(--space-3) var(--space-4);border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-card)}
-.ds-live-metric svg.lucide{width:18px;height:18px;color:var(--tu-cyan-700)}
-.ds-live-metric span{font-size:var(--text-xs);color:var(--text-muted)}
-.ds-live-metric strong{grid-column:1/-1;margin-top:6px;font:700 var(--text-2xl)/1 var(--font-sans);color:var(--text-strong);font-variant-numeric:tabular-nums;transition:color .3s}
-.ds-live-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:var(--space-4);align-items:start}
-.ds-live-card{display:flex;flex-direction:column;gap:var(--space-3);min-width:0;padding:var(--space-4);border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--surface-card)}
-.ds-live-card h3{margin:0;font-size:var(--text-md);font-weight:650;color:var(--text-strong)}
-.ds-live-columns{display:flex;flex-direction:column;gap:var(--space-2)}
-.ds-live-column{display:grid;grid-template-columns:minmax(80px,32%) minmax(0,1fr) auto;align-items:center;gap:var(--space-3);font-size:var(--text-sm)}
-.ds-live-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:var(--text-xs);color:var(--text-default)}
-.ds-live-bar{height:8px;border-radius:var(--radius-full);background:var(--n-100);overflow:hidden}
-.ds-live-bar i{display:block;height:100%;border-radius:inherit;background:var(--attention);transition:width .6s cubic-bezier(.45,0,.2,1)}
-.ds-live-column b{font-variant-numeric:tabular-nums;color:var(--text-strong)}
-.ds-live-feed{max-height:min(440px,50dvh);overflow:auto;border:1px solid var(--border-default);border-radius:var(--radius-md)}
-.ds-live-feed table{width:100%;border-collapse:separate;border-spacing:0;font:var(--text-xs)/1.4 var(--font-mono)}
-.ds-live-feed th{position:sticky;top:0;z-index:1;padding:8px 12px;text-align:left;font-family:var(--font-sans);white-space:nowrap}
-.ds-live-feed td{max-width:28ch;padding:6px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-bottom:1px solid var(--border-subtle)}
-.ds-live-feed tbody tr{animation:ds-dialect-in .4s var(--ease-out)}
-.ds-live-empty{margin:0;padding:var(--space-4);font:var(--text-sm)/1.5 var(--font-sans)!important;color:var(--text-muted);text-align:center;white-space:normal!important}
-.ds-live-foot{margin:0;font-size:var(--text-xs);color:var(--text-faint)}
-.ds-live-open{display:inline-flex;align-items:center;gap:var(--space-2);align-self:flex-start;height:36px;margin:0 0 var(--space-3);padding:0 var(--space-4);border:1px solid color-mix(in srgb,var(--danger) 30%,#fff);border-radius:var(--radius-full);background:var(--surface-card);color:var(--text-strong);font:600 var(--text-sm)/1 var(--font-sans);box-shadow:var(--shadow-1);cursor:pointer}
-.ds-live-open[hidden]{display:none}
-.ds-live-open svg.lucide{width:16px;height:16px}
-.ds-live-open:hover{background:var(--surface-hover)}
-@media (max-width:1100px){.ds-live-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.ds-live-grid{grid-template-columns:minmax(0,1fr)}}
-@media (max-width:640px){.ds-live-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (prefers-reduced-motion:reduce){.ds-live-pill i,.ds-live-dot,.ds-live-feed tbody tr{animation:none}}
-
 /* Excel options inside the Export menu. */
 #reportsMenu .ds-excel-options{display:grid;gap:var(--space-2);padding:var(--space-3);border:1px solid var(--border-subtle);border-radius:var(--radius-md);background:var(--surface-sunken)}
 #reportsMenu .ds-excel-options label{display:grid;gap:4px;font-size:var(--text-xs);font-weight:600;color:var(--text-default)}
 #reportsMenu .ds-excel-options .ds-excel-check{display:flex;align-items:flex-start;gap:var(--space-2);font-weight:500;line-height:1.4;cursor:pointer}
 #reportsMenu .ds-excel-options .ds-excel-check input{flex:none;width:16px;height:16px;margin:1px 0 0;accent-color:var(--tu-cyan-600)}
 
-/* Early estimate card in the live view. */
-.ds-live-estimate{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-4);border:1.5px dashed color-mix(in srgb,var(--tu-cyan-600) 55%,#fff);border-radius:var(--radius-lg);background:color-mix(in srgb,var(--tu-cyan-50) 60%,#fff)}
-.ds-live-estimate[hidden]{display:none}
-.ds-live-estimate-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-2) var(--space-3)}
-.ds-live-estimate-tag{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--radius-full);background:var(--tu-cyan-600);color:#fff;font:700 var(--text-2xs)/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase}
-.ds-live-estimate-head strong{font-size:var(--text-lg);font-weight:650;color:var(--text-strong);font-variant-numeric:tabular-nums}
-.ds-live-estimate-note{flex-basis:100%;font-size:var(--text-xs);color:var(--text-muted)}
-.ds-live-estimate-columns{display:flex;flex-wrap:wrap;gap:6px}
-.ds-live-estimate-chip{display:inline-flex;align-items:center;height:24px;padding:0 10px;border:1px solid var(--border-default);border-radius:var(--radius-full);background:var(--surface-card);font:500 var(--text-xs)/1 var(--font-mono);color:var(--text-default)}
 
 /* Compare-as type in the rules drawer. */
 .ds-drawer .ds-rule-type{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--space-2) var(--space-3)}
@@ -1238,7 +1197,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #headersPanel.ds .ds-dialect-status.is-error{color:var(--danger-text)}
 /* The card's heading, file settings and hint never shrink; with the taller fixed-width editor open the card scrolls. */
 #headersPanel.ds .header-editors>section>:is(h3,.ds-dialect,.ds-dialect-editor,.ds-dialect-hint,p.muted){flex:none}
-#headersPanel.ds .header-editors>section.is-editing-dialect:has(.ds-dialect-editor.is-fixed){overflow:auto;scrollbar-width:thin}
+#headersPanel.ds .header-editors>section.is-editing-dialect:has(.ds-dialect-editor.is-fixed){overflow:auto;}
 #headersPanel.ds .ds-fixed textarea{min-height:88px}
 
 /* Job history storage column. */
@@ -1283,8 +1242,6 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 .enterprise-ui #runningPanel[data-live-tab=graph]>#pipelineGraph{flex:1 1 auto;min-height:0;align-content:center}
 @media(max-width:800px){.enterprise-ui #runningPanel:is([data-live-tab=graph],[data-live-tab=console]){height:auto;overflow:visible}}
 
-/* "View live results" sits with the other pipeline card actions, top right, at the same size. */
-.pipeline-actions .ds-live-open{height:34px;margin:0;padding:0 var(--space-3);align-self:center;font-size:var(--text-xs)}
 
 /* Top bar: an even gap between Refresh, the bell and Help, so the unread count never sits under Help. */
 .enterprise-ui .ds-topbar-refresh{margin-right:0}
@@ -1692,3 +1649,101 @@ body.reduce-motion #projectsPanel.pj .pj-bar-fill{animation:none}
 #projectsPanel.pj .pj-compare-cells .pj-pager .pj-section-note{margin-right:auto}
 @media (max-width:1100px){#projectsPanel.pj .pj-compare-pick{grid-template-columns:minmax(0,1fr) auto}#projectsPanel.pj .pj-compare-arrow{display:none}#projectsPanel.pj .pj-compare-pick .pj-compare-run:first-child{grid-column:1/-1}#projectsPanel.pj .pj-compare-totals{grid-template-columns:repeat(3,minmax(0,1fr))}#projectsPanel.pj .pj-compare-total:nth-child(4){padding-left:0;border-left:0}}
 @media (max-width:700px){#projectsPanel.pj .pj-compare-totals{grid-template-columns:repeat(2,minmax(0,1fr))}#projectsPanel.pj .pj-compare-total:nth-child(odd){padding-left:0;border-left:0}#projectsPanel.pj .pj-compare-total:nth-child(4){padding-left:16px;border-left:1px solid var(--pj-line)}#projectsPanel.pj .pj-compare-arrow{display:none}}
+
+/* File sources: each file card has its own Upload / Server path switch (enterprise.js). */
+#uploadPanel.ds .ds-source-col{display:flex;flex-direction:column;gap:var(--space-2);min-width:0}
+#uploadPanel.ds .ds-source-col>:is(.file-card,.server-path-card){flex:1}
+#uploadPanel.ds .ds-source-col>[hidden]{display:none!important}
+#uploadPanel.ds .ds-side-source{display:inline-flex;align-self:flex-start;gap:2px;padding:3px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-sunken)}
+#uploadPanel.ds .ds-side-source[hidden]{display:none}
+#uploadPanel.ds .ds-side-source button{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border:0;border-radius:6px;background:none;color:var(--text-muted);font:600 var(--text-xs)/1 var(--font-sans);cursor:pointer;transition:background-color var(--dur-1) ease,color var(--dur-1) ease}
+#uploadPanel.ds .ds-side-source button svg.lucide{font-size:14px}
+#uploadPanel.ds .ds-side-source button:hover{color:var(--text-strong)}
+#uploadPanel.ds .ds-side-source button[aria-pressed=true]{background:var(--surface-card);color:var(--text-strong);box-shadow:0 1px 2px rgb(0 43 64/.12)}
+#uploadPanel.ds .ds-side-source button:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+#uploadPanel.ds .ds-source-col .server-path-card .file-symbol{background:var(--tu-navy-700)}
+#uploadPanel.ds .ds-source-col[data-side=right] .server-path-card .file-symbol{background:var(--tu-cyan-700)}
+#uploadPanel.ds .ds-path-status{align-self:stretch;min-height:1.4em;font-size:var(--text-xs);line-height:1.4;color:var(--text-muted);text-align:left}
+#uploadPanel.ds .server-path-card[data-state=valid] .ds-path-status{color:var(--success)}
+#uploadPanel.ds .server-path-card[data-state=error] .ds-path-status{color:var(--danger)}
+#uploadPanel.ds .server-path-card[data-state=valid]{border-style:solid;border-color:color-mix(in srgb,var(--success) 45%,#fff)}
+#uploadPanel.ds .server-path-card[data-state=error]{border-color:color-mix(in srgb,var(--danger) 45%,#fff)}
+
+/* Preview files (Keys & scope only) takes over the card: while open it replaces the scope cards, sits flush in
+   the card with no box of its own, and its two tables fill the height. One toolbar row: title, what is shown,
+   then rows per file, Load and column paging. */
+#keysPanel.ds-scope.preview-expanded .inline-preview #sourcePanel{padding:0!important;border:0!important;border-radius:0!important;background:none!important}
+#keysPanel.ds-scope .inline-preview #sourcePanel{display:grid!important;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto minmax(0,1fr);align-items:center;gap:var(--space-3)}
+#keysPanel.ds-scope #sourcePanel .section-title{grid-column:1;grid-row:1}
+#keysPanel.ds-scope #sourcePanel .section-title h2{margin:0;font-size:var(--text-sm);white-space:nowrap}
+#keysPanel.ds-scope #sourcePanel .section-title p{display:none}
+#keysPanel.ds-scope #sourceStatus{grid-column:2;grid-row:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+#keysPanel.ds-scope #sourcePanel .preview-controls{grid-column:3;grid-row:1;flex-wrap:nowrap!important}
+#keysPanel.ds-scope #sourcePanel .preview-controls label{white-space:nowrap}
+#keysPanel.ds-scope #sourcePanel .preview-controls #sourcePrev{margin-left:0}
+#keysPanel.ds-scope #sourcePanel #compare{display:none}
+#keysPanel.ds-scope .source-preview-grid{grid-column:1/-1;grid-row:2;align-self:stretch}
+#keysPanel.ds-scope .source-preview-grid :is(th,td){max-width:28ch;padding:6px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#keysPanel.ds-scope .source-preview-grid table{width:max-content;min-width:100%}
+#keysPanel.ds-scope .source-preview-grid .table-scroll{max-height:none!important}
+@media (max-width:1100px){
+ #keysPanel.ds-scope .inline-preview #sourcePanel{grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr)}
+ #keysPanel.ds-scope #sourcePanel .preview-controls{grid-column:2;justify-content:flex-end}
+ #keysPanel.ds-scope #sourceStatus{grid-column:1/-1;grid-row:2}
+ #keysPanel.ds-scope .source-preview-grid{grid-row:3}
+}
+@media (max-width:800px){
+ #keysPanel.ds-scope .inline-preview #sourcePanel{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto minmax(0,1fr)}
+ #keysPanel.ds-scope #sourcePanel .preview-controls{grid-column:1;grid-row:2;flex-wrap:wrap!important;justify-content:flex-start}
+ #keysPanel.ds-scope #sourceStatus{grid-row:3}
+ #keysPanel.ds-scope .source-preview-grid{grid-row:4;grid-template-columns:minmax(0,1fr)}
+}
+
+/* Job history header: the description on the left, actions grouped on the right as on the other pages. */
+.enterprise-ui #historyPanel>.section-title{display:flex;align-items:center;justify-content:flex-start;gap:var(--space-4)}
+.enterprise-ui #historyPanel>.section-title>div:first-child{flex:1;min-width:0}
+.enterprise-ui #historyPanel>.section-title p{margin:0}
+.enterprise-ui #historyPanel .ds-history-head-actions{display:flex;align-items:center;gap:var(--space-2);flex:none}
+.enterprise-ui #historyPanel .ds-history-head-actions #reset{height:36px;margin:0;white-space:nowrap}
+@media (max-width:700px){
+ .enterprise-ui #historyPanel>.section-title{flex-wrap:wrap}
+ .enterprise-ui #historyPanel>.section-title>div:first-child{flex:1 1 100%}
+ .enterprise-ui #historyPanel .ds-history-head-actions{flex:1 1 100%;min-width:0}
+ .enterprise-ui #historyPanel .ds-history-head-actions #reset{flex:1;min-width:0}
+}
+
+/* Verdict: the opening answer on the Analysis page — overall cell match, a sentence, and the column strip. */
+.enterprise-ui #results .result-heading{flex-wrap:wrap}
+.enterprise-ui #results .ds-verdict{flex:1 0 100%;order:9;display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:28px;row-gap:12px;align-items:end;margin-top:10px;padding:16px 18px 14px;border:1px solid var(--analysis-line,#dde6ea);border-radius:10px;background:#fff}
+.enterprise-ui #results .ds-verdict-rate{display:grid;gap:4px;padding-right:28px;border-right:1px solid #e6edf0}
+.enterprise-ui #results .ds-verdict-rate strong{font-size:40px;line-height:1;font-weight:300;letter-spacing:-.02em;color:var(--tu-navy-950);font-variant-numeric:tabular-nums;white-space:nowrap}
+.enterprise-ui #results .ds-verdict-rate span{font-size:var(--text-sm,13px);color:var(--text-muted)}
+.enterprise-ui #results .ds-verdict-copy{display:grid;gap:6px;min-width:0}
+.enterprise-ui #results .ds-verdict-state{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:650;color:var(--text-strong)}
+.enterprise-ui #results .ds-verdict-state::before{content:"";width:9px;height:9px;border-radius:50%;background:var(--danger)}
+.enterprise-ui #results .ds-verdict-state.is-clean::before{background:var(--success)}
+.enterprise-ui #results .ds-verdict-state.is-empty::before{background:var(--n-400,#9aa8b0)}
+.enterprise-ui #results .ds-verdict-copy p{margin:0;font-size:15px;line-height:1.5;color:var(--text-muted);max-width:72ch}
+.enterprise-ui #results .ds-verdict-copy strong{color:var(--text-strong);font-weight:650}
+.enterprise-ui #results .ds-verdict-strip{grid-column:1/-1;height:30px;padding:3px;border-radius:6px;background:#f2f6f8}
+.enterprise-ui #results .ds-verdict-strip svg{display:block;width:100%;height:100%}
+.enterprise-ui #results .ds-verdict-strip rect{shape-rendering:crispEdges}
+.enterprise-ui #results .ds-verdict-strip .is-perfect{fill:var(--tu-cyan-700)}
+.enterprise-ui #results .ds-verdict-strip .is-low{fill:var(--tu-cyan-300)}
+.enterprise-ui #results .ds-verdict-strip .is-medium{fill:var(--warning)}
+.enterprise-ui #results .ds-verdict-strip .is-high{fill:var(--danger)}
+.enterprise-ui #results .ds-verdict-strip rect[role=button]{cursor:pointer;transition:opacity .15s ease}
+.enterprise-ui #results .ds-verdict-strip svg:hover rect{opacity:.55}
+.enterprise-ui #results .ds-verdict-strip svg:hover rect:hover,.enterprise-ui #results .ds-verdict-strip rect:focus-visible{opacity:1}
+.enterprise-ui #results .ds-verdict-strip rect:focus-visible{outline:none;stroke:var(--tu-navy-950);stroke-width:.12;vector-effect:non-scaling-stroke}
+.enterprise-ui #results .ds-verdict-key{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 18px;margin-top:-4px}
+.enterprise-ui #results .ds-verdict-key p{margin:0;font-size:12px;color:var(--text-muted)}
+.enterprise-ui #results .ds-verdict-key ul{display:flex;flex-wrap:wrap;gap:4px 16px;margin:0;padding:0;list-style:none}
+.enterprise-ui #results .ds-verdict-key li{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted)}
+.enterprise-ui #results .ds-verdict-key li b{color:var(--text-strong);font-weight:650;font-variant-numeric:tabular-nums}
+.enterprise-ui #results .ds-verdict-key li.is-empty{opacity:.5}
+.enterprise-ui #results .ds-verdict-key .ds-dot{width:8px;height:8px;border-radius:2px}
+.enterprise-ui #results .ds-verdict-key .is-perfect .ds-dot{background:var(--tu-cyan-700)}.enterprise-ui #results .ds-verdict-key .is-low .ds-dot{background:var(--tu-cyan-300)}
+.enterprise-ui #results .ds-verdict-key .is-medium .ds-dot{background:var(--warning)}.enterprise-ui #results .ds-verdict-key .is-high .ds-dot{background:var(--danger)}
+@media(max-width:700px){.enterprise-ui #results .ds-verdict{grid-template-columns:1fr}.enterprise-ui #results .ds-verdict-rate{padding:0 0 12px;border-right:0;border-bottom:1px solid #e6edf0}.enterprise-ui #results .ds-verdict-rate strong{font-size:34px}}
+@media(prefers-reduced-motion:reduce){.enterprise-ui #results .ds-verdict-strip rect{transition:none}}

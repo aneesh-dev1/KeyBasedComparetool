@@ -74,7 +74,6 @@
 .ds progress::-moz-progress-bar{background:var(--tu-cyan-500);border-radius:var(--radius-full)}
 
 /* Scrollbars inside scrolling regions */
-.ds .ds-scroll{scrollbar-width:thin;scrollbar-color:var(--n-300) transparent}
 
 @keyframes ds-pop{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
 @keyframes ds-fade-up{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}

@@ -5,6 +5,7 @@ import threading
 import time
 import unittest
 import zipfile
+from unittest.mock import patch
 from pathlib import Path
 from urllib.error import HTTPError
 from server import make_server
@@ -96,8 +97,18 @@ class FeatureTests(unittest.TestCase):
             self.assertIn('Analysis notes',book.read('xl/workbook.xml').decode())
             self.assertIn('Expected: Known &lt;difference&gt;',book.read('xl/worksheets/sheet2.xml').decode())
         self.assertIn('Known &lt;difference&gt;',self.client.request(path+'/download/comparison-report.html').decode())
-        self.client.request(path+'/annotations',dict(column='v',key=None,status='Resolved',comment='Reviewed'))
-        self.assertEqual(self.client.request(path)['exports']['excel']['state'],'outdated')
+        # New comments rebuild both reports by themselves, once comments settle: two in a row, one rebuild with both.
+        with patch('server.NOTES_SETTLE_SECONDS',0.5):
+            self.client.request(path+'/annotations',dict(column='v',key=None,status='Resolved',comment='Reviewed'))
+            self.assertEqual(self.client.request(path)['exports']['html']['state'],'queued')
+            self.client.request(path+'/annotations',dict(column='',key=['001'],status='Expected',comment='Key note'))
+            for kind in ('excel','html'):
+                ready=self.client.wait(path,lambda j:j['exports'][kind]['state'] in ('complete','error','outdated'))
+                self.assertEqual(ready['exports'][kind]['state'],'complete',ready)
+        html=self.client.request(path+'/download/comparison-report.html').decode()
+        self.assertIn('Reviewed',html);self.assertIn('Key note',html);self.assertNotIn('Known &lt;difference&gt;',html)
+        with zipfile.ZipFile(io.BytesIO(self.client.request(path+'/download/mismatches.xlsx'))) as book:
+            self.assertIn('Resolved: Reviewed',book.read('xl/worksheets/sheet2.xml').decode())
         self.assertTrue(self.client.request('/api/activity')['activities'])
         self.assertEqual(self.other.request('/api/activity')['activities'],[])
         self.assertTrue(self.other.request(path+'/annotations')['notes'])

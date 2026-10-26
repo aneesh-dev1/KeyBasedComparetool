@@ -1,11 +1,28 @@
 """Isolated comparison worker launched by server.py."""
 import json
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
 from compare import compare
 
+
+def lower_priority():
+    """Run the comparison below the web server and the browser, so the app stays responsive while it works. It
+    still uses every idle core. The engine's worker processes inherit this priority on Windows and elsewhere."""
+    try:
+        if sys.platform == 'win32':
+            import ctypes
+            kernel = ctypes.windll.kernel32
+            kernel.SetPriorityClass(kernel.GetCurrentProcess(), 0x4000)  # BELOW_NORMAL_PRIORITY_CLASS
+        else:
+            os.nice(10)
+    except (OSError, AttributeError, ValueError):
+        pass
+
+
 if __name__ == '__main__':
+    lower_priority()
     directory = Path(sys.argv[1])
     job = json.loads((directory / 'job.json').read_text())
     from runtime_resources import prepare_worker
@@ -32,7 +49,7 @@ if __name__ == '__main__':
                            value_overrides=job.get('value_overrides', []),
                            column_headers=job.get('column_headers'),
                            ignore_key_containers=job.get('ignore_key_containers', []),
-                           progress_file=directory / 'progress.json', live_file=directory / 'live.json')
+                           progress_file=directory / 'progress.json')
     try:
         compare(args)
     except Exception as error:

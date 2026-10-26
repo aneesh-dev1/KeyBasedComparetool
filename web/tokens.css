@@ -136,3 +136,15 @@ svg.lucide{width:1em;height:1em;flex:none;fill:none;stroke:currentColor;stroke-w
 
 @media (prefers-reduced-motion:reduce){:root{--dur-1:0ms;--dur-2:0ms;--dur-3:0ms}}
 body.reduce-motion{--dur-1:0ms;--dur-2:0ms;--dur-3:0ms}
+
+/* Scrollbars follow the theme: thin and rounded, a quiet brand-teal tint on light surfaces and soft white on the
+   dark sidebar and console. Where the browser styles scrollbar parts, the thumb deepens on hover. */
+:root{--scroll-thumb:color-mix(in srgb,var(--tu-cyan-700) 38%,transparent);--scroll-thumb-hover:var(--tu-cyan-700);--scroll-track:transparent;--scroll-size:10px}
+.sidebar,#workspaceSidebar,#consoleLog,#pipelineTerminal{--scroll-thumb:rgb(255 255 255/.26);--scroll-thumb-hover:var(--tu-cyan-400)}
+*{scrollbar-width:thin;scrollbar-color:var(--scroll-thumb) var(--scroll-track)}
+@supports not (scrollbar-color:auto){
+ ::-webkit-scrollbar{width:var(--scroll-size);height:var(--scroll-size)}
+ ::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:var(--scroll-track)}
+ ::-webkit-scrollbar-thumb{min-height:36px;border:3px solid transparent;border-radius:999px;background:var(--scroll-thumb) padding-box}
+ ::-webkit-scrollbar-thumb:hover{background-color:var(--scroll-thumb-hover)}
+}

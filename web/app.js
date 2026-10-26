@@ -145,7 +145,7 @@ function choose(side, file) {
   if (uploading || (job && job.state!=='uploading')) return;
   if(file&&!/\.(csv|xlsx|xlsm|json|parquet)$/i.test(file.name)){showError('Choose CSV, Parquet, JSON, .xlsx or .xlsm. Save older .xls files as .xlsx first.');return;}
   files[side] = file || null;
-  $(`${side}Name`).textContent = file ? file.name : `Choose ${side==='left'?'champion':'challenger'} file`;
+  $(`${side}Name`).textContent = file ? file.name : `Choose ${side==='left'?'File 1':'File 2'}`;
   $(`${side}Size`).textContent = file ? bytes(file.size) : 'Click to browse or drop a file here';
   $('upload').disabled = !files.left || !files.right;
   updateDetectedFiles();
@@ -208,7 +208,13 @@ function showPausedUpload(){
 }
 $('upload').addEventListener('click', async () => {
   if(uploading)return;
-  if(files.left&&files.right){const left=detectedFileType(files.left),right=detectedFileType(files.right);if((left==='JSON')!==(right==='JSON')){showError('Choose two JSON files, or a pair of CSV/DAT/Excel/Parquet files. JSON cannot be compared to a table.');return;}if(left==='JSON'){await loadUnifiedJson();return;}}
+  // A file is either uploaded from this computer or read from a server path ({name, size, serverPath}).
+  const onServer=side=>!!files[side]?.serverPath;
+  if(files.left&&files.right){const left=detectedFileType(files.left),right=detectedFileType(files.right);if((left==='JSON')!==(right==='JSON')){showError('Choose two JSON files, or a pair of CSV/DAT/Excel/Parquet files. JSON cannot be compared to a table.');return;}
+    if(left==='JSON'&&onServer('left')!==onServer('right')){showError('Choose both JSON files from the same place: two server paths or two uploads.');return;}
+    if(left==='JSON'&&!onServer('left')){await loadUnifiedJson();return;}}
+  // Both files on the server: nothing to upload.
+  if(onServer('left')&&onServer('right')&&!job){await $('useServerSources').onclick();return;}
   let delimiter;
   try{delimiter=selectedDelimiter();}catch(error){showError(error);return;}
   clearError(); uploading=true;pauseUploadRequested=false;lastUploadPaint=0;lastUploadAnnouncement=0;uploadPaintSide=null;uploadController=new AbortController();
@@ -219,22 +225,24 @@ $('upload').addEventListener('click', async () => {
   $('delimiter').disabled = $('encoding').disabled = $('headerRow').disabled = true;syncCustomDelimiter();
   try {
     if (!job) {
-      const space=await api('/api/preflight',{bytes:files.left.size+files.right.size},undefined,uploadController.signal);
+      const space=await api('/api/preflight',{bytes:['left','right'].filter(side=>!onServer(side)).reduce((sum,side)=>sum+files[side].size,0)},undefined,uploadController.signal);
       if(!space.can_upload)throw Error('Insufficient server disk space for the uploaded copies. Use Storage & queue to clean up old jobs.');
       if(space.free<space.suggested_free_bytes&&!confirm(`${bytes(space.free)} free; at least ${bytes(space.suggested_free_bytes)} is suggested. Reports may need more. Continue uploading?`))return;
-      job = await api('/api/jobs',{delimiter,encoding:$('encoding').value,header:$('headerRow').value,files:Object.fromEntries(['left','right'].map(side=>[side,{name:files[side].name,size:files[side].size}]))},undefined,uploadController.signal);
+      job = await api('/api/jobs',{delimiter,encoding:$('encoding').value,header:$('headerRow').value,files:Object.fromEntries(['left','right'].map(side=>[side,onServer(side)?{path:files[side].serverPath}:{name:files[side].name,size:files[side].size}]))},undefined,uploadController.signal);
       localStorage.setItem('keywise-job',job.id);
     }
     await attachUploadProject(job.id,uploadController.signal);
     if($('quickProfile').value)localStorage.setItem('upload-profile:'+job.id,$('quickProfile').value);
     job=await api(endpoint(),undefined,undefined,uploadController.signal);
     for(const side of ['left','right']) {
+      if(side in (job.source_paths||{}))continue;
       if(files[side].size!==job.files[side].size || files[side].name!==job.files[side].name) throw new Error('To resume, select the same files. Use New comparison to choose different files.');
     }
     $('uploadProgress').hidden = false;
     const identity=job.id;
     for(const side of ['left','right']){
       if(pauseUploadRequested)return;
+      if(side in (job.source_paths||{}))continue;
       const transfer=new UploadTransfer({
         url:offset=>`/api/jobs/${identity}/files/${side}?offset=${offset}`,
         token:()=>token,
@@ -324,15 +332,15 @@ function renderSummary() {
   renderResultChart(s);
   const changes=Object.entries(s.changed_cells_by_column).filter(([,count])=>count>0).sort((a,b)=>b[1]-a[1]);
   $('resultTitle').textContent=s.changed_rows||s.left_only||s.right_only?'Your comparison is ready.':'Both files match within the selected scope.';
-  $('resultSubtitle').textContent=`${number(s.left_rows)} champion rows · ${number(s.right_rows)} challenger rows · Keys: ${s.keys.join(', ')}`;
-  $('scopeSummary').textContent=`${number(s.ignored_columns?.length||0)} columns ignored · ${number(s.left_excluded_rows||0)} champion rows and ${number(s.right_excluded_rows||0)} challenger rows excluded by key. ${number(s.value_overrides?.length||0)} value overrides; ${number((s.override_equivalent_cells||0)+(s.rule_equivalent_cells||0))} unequal cells accepted by rules. Counts refer to the selected scope.`;
+  $('resultSubtitle').textContent=`${number(s.left_rows)} rows in File 1 · ${number(s.right_rows)} rows in File 2 · Keys: ${s.keys.join(', ')}`;
+  $('scopeSummary').textContent=`${number(s.ignored_columns?.length||0)} columns ignored · ${number(s.left_excluded_rows||0)} File 1 rows and ${number(s.right_excluded_rows||0)} File 2 rows excluded by key. ${number(s.value_overrides?.length||0)} value overrides; ${number((s.override_equivalent_cells||0)+(s.rule_equivalent_cells||0))} unequal cells accepted by rules. Counts refer to the selected scope.`;
   const duplicates=(s.left_duplicate_rows_skipped||0)+(s.right_duplicate_rows_skipped||0);
   $('duplicateDownload').hidden=!duplicates;$('duplicateDownload').href=downloadUrl('duplicate_keys.csv');
-  if(duplicates){$('resultTitle').textContent='Comparison complete — duplicate keys found';$('scopeSummary').textContent+=` Warning: ${number(s.left_duplicate_rows_skipped||0)} file 1 rows and ${number(s.right_duplicate_rows_skipped||0)} file 2 rows skipped as duplicates. Kept the ${s.duplicate_policy||'first'} source occurrence per key. Download the duplicate audit for details.`;}
+  if(duplicates){$('resultTitle').textContent='Comparison complete — duplicate keys found';$('scopeSummary').textContent+=` Warning: ${number(s.left_duplicate_rows_skipped||0)} File 1 rows and ${number(s.right_duplicate_rows_skipped||0)} File 2 rows skipped as duplicates. Kept the ${s.duplicate_policy||'first'} source occurrence per key. Download the duplicate audit for details.`;}
   if(s.review_revision){const r=s.review_revision;$('scopeSummary').textContent+=` Review revision: ${number(r.original_mismatches)} original mismatches · ${number(r.accepted_by_rules)} accepted · ${number(r.excluded_from_scope)} excluded · ${number(r.remaining_mismatches)} remaining.`;}
   $('duration').textContent=`${s.elapsed_seconds.toFixed(s.elapsed_seconds<1?3:1)} seconds`;
   $('metrics').replaceChildren();
-  for(const [label,value,style] of [['Equal keys',s.equal_rows,'accent'],['Unequal keys',s.changed_rows,'amber'],['Changed cells',s.changed_cells,'amber'],['Champion-only keys',s.left_only,''],['Challenger-only keys',s.right_only,'']]) {
+  for(const [label,value,style] of [['Equal keys',s.equal_rows,'accent'],['Unequal keys',s.changed_rows,'amber'],['Changed cells',s.changed_cells,'amber'],['Only in File 1',s.left_only,''],['Only in File 2',s.right_only,'']]) {
     const card=document.createElement('div');card.className=`metric ${style}`;
     const title=document.createElement('small');title.textContent=label;
     const count=document.createElement('strong');count.textContent=number(value);card.append(title,count);$('metrics').append(card);
@@ -347,7 +355,7 @@ function renderSummary() {
   for(const [id,file] of [['csvDownload','differences.csv'],['leftDownload','left_only.csv'],['rightDownload','right_only.csv'],['summaryDownload','summary.html']]) $(id).href=downloadUrl(file);
 }
 function renderResultChart(s){
-  const rows=[['Matching keys',s.equal_rows||0,'#009bbd'],['Mismatching keys',s.changed_rows||0,'#d87520'],['Left-only keys',s.left_only||0,'#7857a5'],['Right-only keys',s.right_only||0,'#bd4567']];
+  const rows=[['Matching keys',s.equal_rows||0,'#009bbd'],['Mismatching keys',s.changed_rows||0,'#d87520'],['Only in File 1',s.left_only||0,'#7857a5'],['Only in File 2',s.right_only||0,'#bd4567']];
   const total=rows.reduce((n,r)=>n+r[1],0);let offset=0;
   const slices=rows.filter(r=>r[1]>0).map(([label,value,color])=>{const size=value/total*100;const segment=`<circle cx="80" cy="80" r="62" pathLength="100" fill="none" stroke="${color}" stroke-width="22" stroke-dasharray="${size} ${100-size}" stroke-dashoffset="${-offset}" transform="rotate(-90 80 80)"><title>${label}: ${number(value)} (${(size).toFixed(2)}%)</title></circle>`;offset+=size;return segment;});
   $('resultKeyTotal').textContent=number(total)+' unique keys';
@@ -1637,7 +1645,7 @@ function initUnifiedUpload(){
   if(typeof document.createDocumentFragment!=='function')return;
   $('navJson').hidden=true;
   $('navNew').querySelector('.side-description').textContent='CSV, DAT, Excel, Parquet & JSON';
-  for(const side of ['left','right']){$(`${side}File`).accept='.csv,.dat,.txt,.tsv,.psv,.xlsx,.xlsm,.parquet,.json,text/csv,text/plain,text/tab-separated-values,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';$(`${side}File`).setAttribute('aria-label','Choose '+(side==='left'?'original':'updated')+' CSV, DAT, Excel, Parquet or JSON');$(`${side}Name`).textContent='Choose '+(side==='left'?'champion':'challenger')+' file';}
+  for(const side of ['left','right']){$(`${side}File`).accept='.csv,.dat,.txt,.tsv,.psv,.xlsx,.xlsm,.parquet,.json,text/csv,text/plain,text/tab-separated-values,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';$(`${side}File`).setAttribute('aria-label','Choose '+(side==='left'?'original':'updated')+' CSV, DAT, Excel, Parquet or JSON');$(`${side}Name`).textContent='Choose '+(side==='left'?'File 1':'File 2');}
   $('uploadPanel').querySelector('.section-title').insertAdjacentHTML('afterend','<p id="detectedFileStatus" class="muted detected-file-status" role="status">File format is detected automatically.</p>');
   $('jsonPanel').querySelector('h2').insertAdjacentHTML('afterend','<div class="json-source-bar"><span id="jsonSourceFiles"></span><button id="changeJsonFiles" class="subtle">Change files</button></div>');
   $('changeJsonFiles').addEventListener('click',()=>{panel('uploadPanel');updateDetectedFiles();});

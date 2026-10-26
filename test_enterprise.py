@@ -52,6 +52,30 @@ class EnterpriseTests(unittest.TestCase):
         with self.assertRaises(HTTPError):self.a.request('/api/server-sources/check',dict(files=dict(left=str(outside),right=str(self.sources/'right.csv'))))
         self.server.source_roots=[]
         with self.assertRaises(HTTPError):self.a.request('/api/server-sources',dict(files={s:source['path'] for s in ['left','right']}))
+    def test_one_server_path_and_one_upload(self):
+        # File 1 is read from a server path and File 2 is uploaded from the browser, in either order.
+        (self.sources/'left.csv').write_text('id,v\n1,0\n2,old\n3,old\n');upload=b'id,v\n1,0\n2,new\n3,old\n'
+        for server,uploaded in (('left','right'),('right','left')):
+            with self.subTest(server=server):
+                files={server:{'path':str(self.sources/'left.csv')},uploaded:{'name':'b.csv','size':len(upload)}}
+                job=self.a.request('/api/jobs',dict(files=files));path='/api/jobs/'+job['id']
+                self.assertEqual(set(job['source_paths']),{server})
+                self.assertEqual(job['files'][server]['uploaded'],job['files'][server]['size'])
+                # The server-path file cannot be uploaded over; the other one uploads as usual.
+                with self.assertRaises(HTTPError):self.a.request(path+f'/files/{server}?offset=0',upload,'PUT')
+                self.a.request(path+f'/files/{uploaded}?offset=0',upload,'PUT')
+                self.a.request(path+'/finalize',{})
+                result=self.complete(path)
+                self.assertEqual(result['summary']['changed_cells'],1)
+                directory=self.server.app.directory(job['id'])
+                self.assertFalse((directory/f'{server}.csv').exists())
+        # Paths outside the allowed folders, and a server JSON file paired with an upload, are refused.
+        (self.root/'outside.csv').write_text('id\n1\n');(self.sources/'a.json').write_text('{}')
+        for value in (str(self.root/'outside.csv'),str(self.sources/'a.json')):
+            with self.assertRaises(HTTPError):self.a.request('/api/jobs',dict(files={'left':{'path':value},'right':{'name':'b.csv','size':4}}))
+        # One path can be checked on its own.
+        checked=self.a.request('/api/server-sources/check',dict(files={'right':str(self.sources/'left.csv')}))
+        self.assertEqual(list(checked['files']),['right'])
     def test_shared_completed_history_with_private_active_controls(self):
         path,job=self.sources_job();self.assertEqual(self.b.request('/api/jobs')['jobs'],[])
         with self.assertRaises(HTTPError):self.b.request(path)

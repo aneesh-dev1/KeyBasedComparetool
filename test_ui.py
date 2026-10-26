@@ -27,7 +27,7 @@ class ReportTests(unittest.TestCase):
             for i,column in enumerate(columns,3):
                 root=ET.fromstring(book.read(f'xl/worksheets/sheet{i}.xml'))
                 rows=[[c.find('s:is/s:t',NS).text or '' for c in row] for row in root.findall('s:sheetData/s:row',NS)]
-                self.assertEqual(rows,[['id','part','valueA','valueB','variable','Back to TOC'],['001','A','old','new',column]])
+                self.assertEqual(rows,[['id','part','File 1 value','File 2 value','Column','Back to TOC'],['001','A','old','new',column]])
     def test_only_own_column(self):
         report=self.report(['a','b'],[['01','x','x'],['02','x','same'],['03','same','x']],[['01','y','y'],['02','y','same'],['03','same','y']])
         target=self.root/'result.xlsx';export_excel(report,target)

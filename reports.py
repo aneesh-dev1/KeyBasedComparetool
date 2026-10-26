@@ -13,7 +13,7 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 12
+REPORT_VERSION = 13
 
 def summary_rows(summary):
     yield ['Metric', 'Value']
@@ -195,11 +195,6 @@ td.num,th.num{text-align:right;white-space:nowrap}
 .share{display:inline-block;width:72px;height:6px;margin-left:10px;border-radius:3px;background:var(--line-soft);vertical-align:middle;overflow:hidden}
 .share i{display:block;height:100%;width:0;background:var(--band-high);border-radius:3px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .share.b1 i{background:var(--band-low)}.share.b2 i{background:var(--band-medium)}
-.mismatch-sample summary{cursor:pointer;color:var(--link);font-weight:600;white-space:nowrap}
-.sample-dropdown{margin-top:10px;width:min(640px,70vw);min-width:260px}
-.sample-dropdown p{margin:0 0 8px;font-size:12.5px;color:var(--muted);white-space:normal}
-.sample-dropdown table{font-size:12.5px}
-.sample-before{background:#fdeeea}.sample-after{background:#e8f5ef}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
 .chip{font-size:13px;padding:4px 10px;border-radius:999px;background:#eef6f8;border:1px solid #d3e7ec;color:var(--ink-2)}
 .empty{margin:12px 0 0;color:var(--muted)}
@@ -279,9 +274,7 @@ def barcode_svg(summary, row_of, esc):
     return out + '</svg>'
 
 
-def make_summary_html(summary, samples=None):
-    samples = samples or {}
-    row_notes = comment_lookup(summary)
+def make_summary_html(summary):
     from datetime import datetime, timezone
     esc = lambda value: html.escape(str(value))
     stats = column_stats(summary)
@@ -365,21 +358,12 @@ def make_summary_html(summary, samples=None):
         slices = column_slices(summary)
         out += '<div class="split">' + donut_svg(slices, cells, esc) + '<div><h3 class="visually-hidden">Share of mismatched cells</h3><ul class="slices">' + ''.join(
             f'<li><span class="dot {colour}"></span><span class="name" title="{esc(name)}">{esc(name)}</span><b>{count:,}</b><small>{100 * count / cells:.2f}%</small></li>' for name, count, colour in slices) + '</ul></div></div>'
-    out += '<div class="toolbar"><div><h3>Every column with differences</h3><p>Largest first. Select a row to see its mismatch patterns.</p></div><label class="search-label">Find a column <input id="columnSearch" type="search" placeholder="Column name"></label></div>'
-    out += '<div class="table-wrap"><table id="columnStats"><thead><tr><th>Column</th><th class="num">Mismatched cells</th><th class="num">Mismatch %</th><th class="num">Match %</th><th>Review notes</th><th>Samples</th></tr></thead><tbody>'
+    out += '<div class="toolbar"><div><h3>Every column with differences</h3><p>Largest first. Select a column to see its mismatch patterns and sample keys.</p></div><label class="search-label">Find a column <input id="columnSearch" type="search" placeholder="Column name"></label></div>'
+    out += '<div class="table-wrap"><table id="columnStats"><thead><tr><th>Column</th><th class="num">Mismatched cells</th><th class="num">Mismatch %</th><th class="num">Match %</th><th>Review notes</th></tr></thead><tbody>'
     largest = changed[0][1] if changed else 0
     for index, (name, count, mismatch, match) in enumerate(changed):
         out += (f'<tr id="column-{index}"><td>{esc(name)}</td><td class="num">{count:,}<span class="share b{band_index(count, matched)}" data-share="{count / largest:.4f}"><i></i></span></td>'
-                f'<td class="num">{percent(mismatch)}</td><td class="num">{percent(match)}</td><td>{esc(notes.get(name, ""))}</td><td>')
-        rows = samples.get(name, [])
-        if rows:
-            out += f'<details class="mismatch-sample" id="sample-{index}"><summary>View {len(rows)} keys</summary><div class="sample-dropdown"><p>' + esc(name) + f': {len(rows)} sample keys of {count:,} mismatches. First keys in comparison order; values over 1,000 characters are marked as truncated.</p><div class="table-wrap"><table><thead>' + html_row(summary['keys'] + ['File 1 value', 'File 2 value'] + (['Comments'] if row_notes else []), True) + '</thead><tbody>'
-            for values in rows:
-                out += '<tr>' + ''.join('<td>' + esc(value) + '</td>' for value in values[:-2]) + '<td class="sample-before">' + esc(values[-2]) + '</td><td class="sample-after">' + esc(values[-1]) + '</td>' + ('<td>' + esc(applicable_comments(row_notes, name, values[:-2])) + '</td>' if row_notes else '') + '</tr>'
-            out += '</tbody></table></div></div></details>'
-        else:
-            out += 'Generate HTML report to include samples'
-        out += '</td></tr>'
+                f'<td class="num">{percent(mismatch)}</td><td class="num">{percent(match)}</td><td>{esc(notes.get(name, ""))}</td></tr>')
     out += '</tbody></table></div>'
     if not changed:
         out += '<p class="empty">No mismatching columns in the selected scope.</p>'
@@ -647,7 +631,7 @@ def export_excel(report, destination, notify=lambda message: None, max_rows=None
     with partition_columns(report, columns, destination.parent, notify, limit if capped else None) as paths:
         def rows(column):
             notify(f'Writing sheet for {column}')
-            yield summary['keys']+['valueA','valueB','variable']+(['Comments'] if row_notes else [])+[Link('Back to TOC','TOC')]
+            yield summary['keys']+['File 1 value','File 2 value','Column']+(['Comments'] if row_notes else [])+[Link('Back to TOC','TOC')]
             with paths[column].open(encoding='utf-8') as source:
                 for line in source:
                     values=json.loads(line)
@@ -699,12 +683,11 @@ def mismatch_samples(report, summary, notify=lambda message: None):
 
 
 def export_html(report, destination, notify=lambda message: None):
-    """One self-contained leadership report with bounded per-column samples."""
+    """One self-contained report; sample keys live with each column's mismatch patterns."""
     notify('Preparing leadership summary and column match distribution…')
     summary = report_summary(report)
-    samples = mismatch_samples(report, summary, notify)
-    notify('Rendering all columns, mismatch samples and ignored-key containers…')
-    document = make_summary_html(summary, samples)
+    notify('Rendering all columns and ignored-key containers…')
+    document = make_summary_html(summary)
     from report_patterns import pattern_drawer_chunks
     notify('Writing single-file HTML report…')
     with destination.open('w', encoding='utf-8') as output:

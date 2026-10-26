@@ -45,7 +45,10 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(patterns[0][0][2],2)
         self.assertEqual([a['data-column'] for a,v in parser.payloads if a.get('class')=='column-pattern-data'],[column])
         self.assertNotIn('<script>bad()</script>',text)
-        self.assertIn('20 sample keys of 62 mismatches',text)
+        # Sample keys sit with the 50 most common patterns: up to five each, in file order; the rest have none.
+        self.assertEqual(patterns[0][0][3],[['0'],['again']])
+        self.assertEqual([len(pair) for pair in patterns[0][49:51]],[4,3])
+        self.assertIn('reportPatternSearch',text)
         self.assertIn('reportPatternNext',text)
         # Regeneration reuses immutable pair evidence but includes fresh comments.
         notes[0]['comment']='Updated review note';(self.root/'annotations.json').write_text(json.dumps(notes))
@@ -64,7 +67,7 @@ class DashboardTests(unittest.TestCase):
             detail=ET.fromstring(z.read('xl/worksheets/sheet3.xml'))
             self.assertEqual(detail.find('s:hyperlinks/s:hyperlink',NS).attrib['location'],"'TOC'!A1")
             values=[v.text for v in detail.findall('.//s:t',NS)]
-            for value in ['001','4994','4993','variable']: self.assertIn(value,values)
+            for value in ['001','4994','4993','File 1 value','File 2 value','Column']: self.assertIn(value,values)
             for obsolete in ['typeA','typeB','diffAB']:self.assertNotIn(obsolete,values)
             self.assertFalse(detail.findall('.//s:f',NS))
             self.assertEqual(detail.find('s:autoFilter',NS).attrib['ref'],'A1:E2')
@@ -83,11 +86,11 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn('.zip',text)
         self.assertNotIn('src="http',text)
         self.assertNotIn('column_00001',text)
-        self.assertIn('1 sample keys of 1 mismatches',text)
-        self.assertIn('&lt;script&gt;x&lt;/script&gt;',text)
+        # The column table no longer lists sample keys; they are with each column's patterns.
+        self.assertNotIn('sample keys of',text);self.assertNotIn('View 1 keys',text)
+        self.assertIn('&lt;script&gt;x&lt;/script&gt;'.replace('&lt;','\\u003c').replace('&gt;','\\u003e'),text)
         self.assertNotIn('<script>x</script>',text)
-        self.assertIn('id="sample-0"',text)
-        self.assertIn('<summary>View 1 keys</summary>',text)
+        self.assertIn('[["001"]]',text)
         self.assertNotIn('class="sample-link"',text)
         self.assertIn('#columnStats > tbody > tr',text)
     def test_key_comments_follow_all_mismatch_columns(self):
@@ -104,7 +107,8 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn('Comments',xml)
             self.assertIn('Column explanation',book.read('xl/worksheets/sheet3.xml').decode())
         target=self.root/'report.html';export_html(self.root,target)
-        self.assertGreaterEqual(target.read_text().count('Key-wide explanation'),3)
+        # Key comments are in the comments table and the drawer's comment data.
+        self.assertGreaterEqual(target.read_text().count('Key-wide explanation'),2)
 
     def test_exact_bands_and_escape(self):
         from reports import match_bands

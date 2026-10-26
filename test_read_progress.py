@@ -30,7 +30,6 @@ class ReadProgressTests(unittest.TestCase):
                                     '--output', str(self.root / f'out-{engine}-{workers}'), '--temp-dir', str(self.root),
                                     '--memory-mb', '64'] + ([] if engine == 'auto' else ['--engine', engine]))
         args.parallel_workers = workers
-        args.live_file = self.root / f'live-{engine}.json'
         log = io.StringIO()
         with patch.object(partitioned, 'RANGE_BYTES', 64 * 1024), contextlib.redirect_stdout(log):
             compare(args)

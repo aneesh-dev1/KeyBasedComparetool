@@ -49,18 +49,14 @@ class ReviewAiTests(FeatureTests):
         self.assertEqual(review['summary']['changed_cells'],1)
         self.assertEqual(review['summary']['review_revision']['raw_differences'],1)
 
-    def test_review_writes_live_snapshot(self):
+    def test_review_counts_its_own_patterns(self):
         path=self.upload(b'id,v,x\n1,0,a\n2,-11,b\n3,same,c\n',b'id,v,x\n1,0.00,a\n2,-11.00,B\n3,same,c\n')
         original=self.complete(path)
         url,result=self.review(path,self.config(original,comparison_rules=[{'column':'v','tolerance':'0'}]))
-        # The live view of a re-evaluation ends on the same counts as its final results.
-        live=self.client.request(url+'/live');summary=result['summary']
-        for name in ('changed_cells','changed_rows','equal_rows','matched_keys','left_only','right_only','rule_equivalent_cells'):
-            self.assertEqual(live[name],summary[name],name)
-        self.assertEqual(live['changed_cells_by_column'],{name:count for name,count in summary['changed_cells_by_column'].items() if count})
-        self.assertEqual(live['reviewed'],summary['review_revision']['raw_differences'])
-        self.assertEqual(live['state'],'writing')
-        self.assertEqual([sample[1] for sample in live['samples']],['x'])
+        # Its mismatch patterns are counted during the re-evaluation, from the remaining differences only.
+        import mismatch_patterns
+        saved=mismatch_patterns.load(self.server.app.directory(result['id'])/'report')
+        self.assertEqual({column:[pattern[:3] for pattern in item['patterns']] for column,item in saved['columns'].items()},{'x':[['b','B',1]]})
 
     def test_old_and_unretained_scope_require_full_run(self):
         path=self.upload(b'id,v,x\n1,a,old\n',b'id,v,x\n1,b,new\n');job=self.complete(path,ignore_columns=['x'])

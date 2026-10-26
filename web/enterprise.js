@@ -52,7 +52,7 @@ function syncFilesStage(name){
   if(ready&&filesDetails.dataset.job!==job.id){filesDetails.dataset.job=job.id;setUploadedSourcesOpen(false,false);}
   sourceSummary.textContent=ready?`${job.files.left.name}  ↔  ${job.files.right.name}`:'Choose your source files';
   if(ready){
-    for(const side of ['left','right']){$(side+'Name').textContent=job.files[side].name;$(side+'Size').textContent=bytes(job.files[side].size)+(job.source_paths?' · Server source':' · Uploaded');$(side+'File').disabled=true;}
+    for(const side of ['left','right']){$(side+'Name').textContent=job.files[side].name;$(side+'Size').textContent=bytes(job.files[side].size)+(side in (job.source_paths||{})?' · Server path':' · Uploaded');$(side+'File').disabled=true;}
     fileGrid.hidden=false;$('serverSourceFields').hidden=true;filesDetails.querySelector('.source-mode').hidden=true;
     $('delimiter').disabled=$('encoding').disabled=true;syncCustomDelimiter();
   }
@@ -83,13 +83,13 @@ compactScopeAction($('navPreview'),'Preview files',previewIcons.open);
 compactScopeAction($('openComparisonRules'),'Comparison rules','<path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6"/>');
 for(const node of [...$('keysPanel').childNodes])if(node.nodeType===3&&node.textContent.trim()==='null')node.remove();
 $('keysPanel').querySelector('.panel-footer').hidden=true;
-// Keep preview beside the Keys & scope title after header application.
-const originalPanel=panel;panel=function(name){originalPanel(name);if(name==='keysPanel'){scopeActions.prepend($('navPreview'));$('keysPanel').append(preview);}else if(name==='headersPanel'){$('headersPanel').append(preview);}const active=document.querySelector('#mainWorkspace>section:not([hidden]),#mainWorkspace>#results:not([hidden])');if(active&&!reducedWorkspaceMotion())active.animate([{opacity:.55,transform:'translateY(5px)'},{opacity:1,transform:'none'}],{duration:240,easing:'cubic-bezier(.22,1,.36,1)'});requestAnimationFrame(()=>{fitKeysWorkspace();finishWorkspaceTransition();});};
+// Preview files belongs to Keys & scope only; it stays there, beside the page title.
+const originalPanel=panel;panel=function(name){originalPanel(name);if(name==='keysPanel'){scopeActions.prepend($('navPreview'));$('keysPanel').append(preview);}const active=document.querySelector('#mainWorkspace>section:not([hidden]),#mainWorkspace>#results:not([hidden])');if(active&&!reducedWorkspaceMotion())active.animate([{opacity:.55,transform:'translateY(5px)'},{opacity:1,transform:'none'}],{duration:240,easing:'cubic-bezier(.22,1,.36,1)'});requestAnimationFrame(()=>{fitKeysWorkspace();finishWorkspaceTransition();});};
 // app.js writes plain text into the button on every toggle; put the icon and label back.
 $('navPreview').addEventListener('click',()=>{$('keysPanel').classList.toggle('preview-expanded',previewExpanded);compactScopeAction($('navPreview'),previewExpanded?'Close preview':'Preview files',previewExpanded?previewIcons.close:previewIcons.open);});
 
 // Read server files directly; browser transfers remain resumable and independent.
-uploadedSourcesBody.insertAdjacentHTML('afterbegin','<div class="source-mode" role="group" aria-label="File source"><button id="computerSource" class="subtle" aria-pressed="true">Upload from computer</button><button id="serverSource" class="subtle" aria-pressed="false">Use server paths</button></div><div id="serverSourceFields" class="server-source-workspace" hidden><div class="server-path-grid"><label class="server-path-card"><span class="file-top"><span class="label">CHAMPION DATASET</span><span class="file-symbol">A</span></span><span class="server-path-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="3" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg></span><span class="server-path-copy"><strong>Champion server path</strong><small>CSV, DAT, Excel, Parquet or JSON</small></span><input id="leftServerPath" aria-label="Champion server path" placeholder="/shared/input/champion.csv" autocomplete="off"></label><label class="server-path-card"><span class="file-top"><span class="label">CHALLENGER DATASET</span><span class="file-symbol">B</span></span><span class="server-path-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="3" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg></span><span class="server-path-copy"><strong>Challenger server path</strong><small>CSV, DAT, Excel, Parquet or JSON</small></span><input id="rightServerPath" aria-label="Challenger server path" placeholder="/shared/input/challenger.parquet" autocomplete="off"></label></div><div class="server-source-actions"><span class="server-source-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span id="serverSourceHelp" role="status"></span></span><button id="useServerSources" class="primary">Load server files →</button></div></div>');
+uploadedSourcesBody.insertAdjacentHTML('afterbegin','<div class="source-mode" role="group" aria-label="File source"><button id="computerSource" class="subtle" aria-pressed="true">Upload from computer</button><button id="serverSource" class="subtle" aria-pressed="false">Use server paths</button></div><div id="serverSourceFields" class="server-source-workspace" hidden><div class="server-path-grid"><label class="server-path-card"><span class="file-top"><span class="label">File 1</span><span class="file-symbol">1</span></span><span class="server-path-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="3" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg></span><span class="server-path-copy"><strong>File 1 server path</strong><small>CSV, DAT, Excel, Parquet or JSON</small></span><input id="leftServerPath" aria-label="File 1 server path" placeholder="/shared/extracts/ledger_sep.csv" autocomplete="off"></label><label class="server-path-card"><span class="file-top"><span class="label">File 2</span><span class="file-symbol">2</span></span><span class="server-path-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="3" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg></span><span class="server-path-copy"><strong>File 2 server path</strong><small>CSV, DAT, Excel, Parquet or JSON</small></span><input id="rightServerPath" aria-label="File 2 server path" placeholder="/shared/extracts/ledger_oct.parquet" autocomplete="off"></label></div><div class="server-source-actions"><span class="server-source-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span id="serverSourceHelp" role="status"></span></span><button id="useServerSources" class="primary">Load server files →</button></div></div>');
 $('uploadPanel').querySelector('.enterprise-setup-actions').insertBefore($('useServerSources'),$('upload'));
 $('useServerSources').hidden=true;
 let sourceMode='computer';
@@ -127,7 +127,7 @@ $('useServerSources').onclick=async()=>{
 const originalApi=api;let activeRequests=0,loaderTimer;
 const requestLoader=document.createElement('div');requestLoader.className='tu-request-loader';requestLoader.hidden=true;requestLoader.setAttribute('role','status');requestLoader.innerHTML=dcLoader()+'<span>Loading…</span>';
 // The corner "Loading…" is for requests that follow a click or key press and are still waiting after 0.4 s.
-// Background checks (notifications, live results, job status while a run is going) never show it.
+// Background checks (notifications, job status while a run is going) never show it.
 let lastUserAction=-Infinity,foregroundRequests=0;
 for(const type of ['pointerdown','keydown'])document.addEventListener(type,()=>{lastUserAction=performance.now();},{capture:true,passive:true});
 api=async function(...args){
@@ -457,17 +457,17 @@ installScopeScrollbar($('keyList'));installScopeScrollbar($('ignoreColumnList'))
 // A compact, format-neutral upload experience keeps both sources visible in one view.
 const uploadTitle=$('uploadPanel').querySelector('.section-title>div');
 uploadTitle.querySelector('.upload-intro')?.remove();
-for(const [side,label] of [['left','Champion'],['right','Challenger']]){
+for(const [side,label] of [['left','File 1'],['right','File 2']]){
  const card=$(side+'Card');
  if(!card.querySelector('.file-drop-icon')){
   const icon=document.createElement('span');icon.className='file-drop-icon';icon.innerHTML=lucide('upload');
   const types=document.createElement('span');types.className='file-type-line';types.textContent='CSV · DAT · Excel · Parquet · JSON';
   card.querySelector('.file-top').after(icon);card.querySelector('.muted').after(types);
-  card.querySelector('.label').textContent=label.toUpperCase()+' DATASET';
+  card.querySelector('.label').textContent=label;
   const picker=card.querySelector('input[type=file]');
   const name=card.querySelector('strong');
-  if(picker)picker.setAttribute('aria-label',`Choose ${label.toLowerCase()} CSV, DAT, Excel, Parquet or JSON`);
-  if(name&&!files[side])name.textContent=`Choose ${label.toLowerCase()} file`;
+  if(picker)picker.setAttribute('aria-label',`Choose ${label}: CSV, DAT, Excel, Parquet or JSON`);
+  if(name&&!files[side])name.textContent=`Choose ${label}`;
   const arrow=card.querySelector('.browse>span');if(arrow)arrow.innerHTML=lucide('chevron');
  }
 }
@@ -502,8 +502,8 @@ const analysisMetricMap={
  'Equal keys':['equal','Matched keys with identical values'],
  'Unequal keys':['rows','Matched keys with at least one difference'],
  'Changed cells':['cells','Individual value changes'],
- 'Champion-only keys':['left','Only in champion dataset'],
- 'Challenger-only keys':['right','Only in challenger dataset']
+ 'Only in File 1':['left','Keys found in File 1 only'],
+ 'Only in File 2':['right','Keys found in File 2 only']
 };
 function enhanceAnalysisDashboard(){
  const results=$('results');if(!results||!job?.summary)return;results.classList.add('analysis-dashboard');
@@ -716,7 +716,7 @@ window.addEventListener('DOMContentLoaded',()=>{
  const reusedNote='Reused from original run';
  function describe(li){
   const kind=li.dataset.kind,label=li.querySelector('.pipeline-label')?.textContent||li.textContent;
-  const read=/file 1/i.test(label)?['Read file 1','Champion file']:/file 2/i.test(label)?['Read file 2','Challenger file']:/both/i.test(label)?['Read & sort','Both files']:['Read & index','Keys of both files'];
+  const read=/file 1/i.test(label)?['Read File 1','Rows and keys']:/file 2/i.test(label)?['Read File 2','Rows and keys']:/both/i.test(label)?['Read & sort','Both files']:['Read & index','Keys of both files'];
   const text={validate:['Validate','Check configuration'],read,compare:['Compare','Match keys, find changes'],write:['Write results','Results & HTML report'],complete:['Analysis','View results'],review:['Re-evaluate Differences','Apply rules to retained evidence']}[kind]||[label,''];
   const state=['done','active','failed'].find(name=>li.classList.contains(name))||'pending';
   return {kind,title:text[0],subtitle:text[1],state};
@@ -948,6 +948,61 @@ function redesignAnalysis(){
  health.prepend(pieHead,pie);
 }
 {const previousRender=renderSummary;renderSummary=function(){previousRender();redesignAnalysis();};if(job?.state==='complete')redesignAnalysis();}
+
+// Verdict: the page opens with the answer, as the HTML report does. Overall cell match, a plain sentence, and one
+// mark per compared column in file order, coloured by its match band; a column with mismatches opens its analysis.
+function renderVerdict(){
+ const results=$('results'),summary=job?.summary,heading=results?.querySelector('.result-heading');if(!heading||!summary)return;
+ const byColumn=Object.entries(summary.changed_cells_by_column||{}),total=byColumn.length,matched=Number(summary.matched_keys||0);
+ const cells=Number(summary.changed_cells||0),leftOnly=Number(summary.left_only||0),rightOnly=Number(summary.right_only||0);
+ const band=count=>count===0?'perfect':count*100<=matched?'low':count*20<=matched?'medium':'high';
+ const changed=byColumn.filter(([,count])=>count).length;
+ let rate='N/A',state,tone,sentence;
+ if(matched&&total){
+  const overall=100*(1-cells/(matched*total));
+  // A run with any mismatch never reads as a clean 100%.
+  rate=cells&&overall.toFixed(4)==='100.0000'?'>99.9999%':overall.toFixed(4)+'%';
+ }
+ if(!matched||!total){state='Not enough to compare';tone='is-empty';sentence=!matched?'No keys were found in both files, so match rates cannot be calculated.':'No value columns are in scope.';}
+ else if(changed||leftOnly||rightOnly){
+  state='Differences found';tone='is-diff';
+  const parts=[changed?`<strong>${number(cells)}</strong> mismatched ${cells===1?'cell':'cells'} across <strong>${number(changed)}</strong> of ${number(total)} columns`:'Every compared column matches'];
+  if(leftOnly||rightOnly)parts.push(`<strong>${number(leftOnly)}</strong> keys only in File 1 and <strong>${number(rightOnly)}</strong> only in File 2`);
+  sentence=parts.join('; ')+`. ${number(matched)} keys were found in both files.`;
+ }
+ else{state='No differences';tone='is-clean';sentence=`All ${number(total)} compared columns match for the <strong>${number(matched)}</strong> keys found in both files.`;}
+ let verdict=heading.querySelector('.ds-verdict');
+ if(!verdict){verdict=document.createElement('section');verdict.className='ds-verdict';verdict.setAttribute('aria-label','Verdict');heading.append(verdict);}
+ verdict.innerHTML=`<div class="ds-verdict-rate"><strong></strong><span>Overall cell match</span></div><div class="ds-verdict-copy"><span class="ds-verdict-state"></span><p>${sentence}</p></div><div class="ds-verdict-strip"></div><div class="ds-verdict-key"><p></p><ul></ul></div>`;
+ verdict.querySelector('strong').textContent=rate;
+ const stateNode=verdict.querySelector('.ds-verdict-state');stateNode.textContent=state;stateNode.className='ds-verdict-state '+tone;
+ const strip=verdict.querySelector('.ds-verdict-strip');strip.hidden=!(matched&&total);
+ verdict.querySelector('.ds-verdict-key').hidden=strip.hidden;
+ if(strip.hidden)return;
+ const svgNS='http://www.w3.org/2000/svg',svg=document.createElementNS(svgNS,'svg'),width=total>160?1:.78;
+ svg.setAttribute('viewBox',`0 0 ${total} 1`);svg.setAttribute('preserveAspectRatio','none');svg.setAttribute('role','group');svg.setAttribute('aria-label','Match rate of each column in file order');
+ const counts={perfect:0,low:0,medium:0,high:0};
+ byColumn.forEach(([name,count],index)=>{
+  const key=band(count);counts[key]++;
+  const mark=document.createElementNS(svgNS,'rect');
+  mark.setAttribute('x',String(index+(1-width)/2));mark.setAttribute('y','0');mark.setAttribute('width',String(width));mark.setAttribute('height','1');mark.setAttribute('class','is-'+key);
+  const tip=document.createElementNS(svgNS,'title');tip.textContent=`${name}: ${number(count)} mismatched ${count===1?'cell':'cells'}, ${(100*(matched-count)/matched).toFixed(4)}% match`;mark.append(tip);
+  if(count){
+   mark.setAttribute('tabindex','0');mark.setAttribute('role','button');mark.setAttribute('aria-label',`Analyze ${name}, ${number(count)} mismatches`);
+   const open=()=>showAnalysisDrawer(name).catch(showError);
+   mark.addEventListener('click',open);mark.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open();}});
+  }
+  svg.append(mark);
+ });
+ strip.append(svg);
+ verdict.querySelector('.ds-verdict-key p').textContent=`Each mark is one column, in file order.${changed?' Select a coloured mark to analyse that column.':''}`;
+ const key=verdict.querySelector('.ds-verdict-key ul');
+ for(const [name,label] of [['perfect','100% match'],['low','99% to <100%'],['medium','95% to <99%'],['high','Below 95%']]){
+  const item=document.createElement('li');item.className='is-'+name+(counts[name]?'':' is-empty');item.innerHTML='<span class="ds-dot"></span><span></span><b></b>';
+  item.children[1].textContent=label;item.querySelector('b').textContent=number(counts[name]);key.append(item);
+ }
+}
+{const previousRender=renderSummary;renderSummary=function(){previousRender();renderVerdict();};if(job?.state==='complete')renderVerdict();}
 
 // Keyboard: single keys, no modifiers, so navigation is one press. They work identically on Mac and Windows
 // and are ignored while typing, in a dialog, or when shortcuts are switched off. The existing Alt/⌥
@@ -1733,101 +1788,6 @@ function redesignAnalysis(){
  syncBadge();
 }
 
-// Live results: Analysis opens as soon as a comparison starts. Counts, the column ranking and the latest
-// mismatches update about once a second from the engine's live snapshot; the final results replace them when
-// the comparison finishes. Mismatches can only appear once both files have been read.
-{
- const results=$('results'),view=document.createElement('section');view.id='liveResults';view.className='ds-live';view.hidden=true;results.prepend(view);
- const isLive=()=>!!job&&['queued','running'].includes(job.state);
- view.innerHTML=`<div class="ds-live-head"><div><span class="ds-live-pill"><i></i>Live</span><h2>Live results</h2><p class="ds-live-phase"></p></div><span class="ds-live-elapsed"></span></div>
-  <section class="ds-live-estimate" hidden><div class="ds-live-estimate-head"><span class="ds-live-estimate-tag">Estimate</span><strong></strong><span class="ds-live-estimate-note"></span></div><div class="ds-live-estimate-columns"></div></section>
-  <div class="ds-live-metrics"></div>
-  <div class="ds-live-grid"><section class="ds-live-card"><h3>Differences by column</h3><div class="ds-live-columns"></div></section>
-  <section class="ds-live-card"><h3>Latest mismatches</h3><div class="ds-live-feed table-scroll"><table><thead><tr><th>Key</th><th>Column</th><th>File 1 value</th><th>File 2 value</th></tr></thead><tbody></tbody></table></div></section></div>
-  <p class="ds-live-foot">Counts are provisional until the comparison finishes; final results open here automatically.</p>`;
- const metrics=[['Equal keys','equal_rows','circle-check'],['Unequal keys','changed_rows','triangle-alert'],['Changed cells','changed_cells','table-2'],['Only in champion','left_only','arrow-left'],['Only in challenger','right_only','arrow-right']];
- const metricBox=view.querySelector('.ds-live-metrics');
- for(const [label,field,icon] of metrics){const card=document.createElement('div');card.className='ds-live-metric';card.dataset.field=field;card.append(lucideNode(icon),Object.assign(document.createElement('span'),{textContent:label}),Object.assign(document.createElement('strong'),{textContent:'—'}));metricBox.append(card);}
- let timer=0,polling=false,last=null;
- const keyText=value=>{try{const parts=JSON.parse(value);return Array.isArray(parts)?parts.join(' · '):String(value);}catch{return String(value);}};
- function phaseText(snapshot){
-  const progress=job?.progress||{};
-  if(job?.state==='queued')return 'Waiting for a server worker…';
-  const review=job?.execution_mode==='review';
-  if(snapshot?.state==='writing'||snapshot?.stage==='reports'||progress.stage==='reports')return review?'All retained differences re-evaluated · writing the result files and reports':'All keys compared · writing the result files and reports';
-  // A re-evaluation reads the differences the original comparison kept; the source files are not read again.
-  if(snapshot?.state==='reviewing')return `Re-evaluating retained differences · ${number(snapshot.reviewed)} of ${number(snapshot.review_total)} checked (${Math.floor(100*snapshot.reviewed/Math.max(1,snapshot.review_total))}%)`;
-  if(review)return 'Re-evaluating retained differences · the source files are not read again';
-  if(snapshot?.state==='reading'&&snapshot.ranges_total)return `Reading both files · ${Math.floor(100*snapshot.ranges_read/snapshot.ranges_total)}% read · exact mismatches follow once both files are read`;
-  if(snapshot?.key_ranges)return `Comparing · ${number(snapshot.key_ranges_done)} of ${number(snapshot.key_ranges)} key ranges done`;
-  if(snapshot&&snapshot.matched_keys+snapshot.left_only+snapshot.right_only>0)return `Comparing · ${number(snapshot.matched_keys+snapshot.left_only+snapshot.right_only)} keys compared so far`;
-  return `${progress.phase||'Reading both files'} · mismatches appear once both files have been read`;
- }
- function paint(snapshot){
-  last=snapshot;
-  view.querySelector('.ds-live-phase').textContent=phaseText(snapshot);
-  const started=job?.started?Math.max(0,Date.now()/1000-job.started):0;
-  view.querySelector('.ds-live-elapsed').textContent=started?`${Math.floor(started/60)}:${String(Math.floor(started%60)).padStart(2,'0')} elapsed`:'';
-  const exact=snapshot&&snapshot.state!=='reading';
-  for(const card of metricBox.children){const value=snapshot?.[card.dataset.field];card.querySelector('strong').textContent=exact&&Number.isFinite(value)?number(value):'—';}
-  // Early estimate from sampled keys while the files are read, with a 95% margin of error.
-  const estimate=snapshot?.estimate,estimateBox=view.querySelector('.ds-live-estimate');
-  estimateBox.hidden=!(estimate&&snapshot.state==='reading');
-  if(!estimateBox.hidden){
-   const n=estimate.sampled_keys,rate=estimate.changed_rows/n,margin=1.96*Math.sqrt(Math.max(rate*(1-rate),.25/n)/n);
-   estimateBox.querySelector('strong').textContent=`About ${(rate*100).toFixed(1)}% of matched keys differ (± ${(margin*100).toFixed(1)}%)`;
-   estimateBox.querySelector('.ds-live-estimate-note').textContent=`From ${number(n)} sampled keys found in both files · ${Math.floor(100*snapshot.ranges_read/snapshot.ranges_total)}% of the files read. Exact counts replace this estimate.`;
-   const top=Object.entries(estimate.changed_cells_by_column||{}).sort((a,b)=>b[1]-a[1]).slice(0,6),box=view.querySelector('.ds-live-estimate-columns');box.replaceChildren();
-   for(const [name,count] of top){const chip=document.createElement('span');chip.className='ds-live-estimate-chip';chip.textContent=`${name} · ~${(100*count/n).toFixed(1)}%`;chip.title=`Estimated share of matched keys that differ in ${name}`;box.append(chip);}
-  }
-  const columns=Object.entries(snapshot?.changed_cells_by_column||{}).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,12);
-  const max=Math.max(1,...columns.map(([,count])=>count)),box=view.querySelector('.ds-live-columns');box.replaceChildren();
-  if(!columns.length)box.append(Object.assign(document.createElement('p'),{className:'ds-live-empty',textContent:'No column differences yet.'}));
-  for(const [name,count] of columns){
-   const row=document.createElement('div');row.className='ds-live-column';
-   const bar=document.createElement('span');bar.className='ds-live-bar';const fill=document.createElement('i');fill.style.width=Math.max(2,count*100/max)+'%';bar.append(fill);
-   row.append(Object.assign(document.createElement('span'),{className:'ds-live-name',textContent:name,title:name}),bar,Object.assign(document.createElement('b'),{textContent:number(count)}));box.append(row);
-  }
-  const body=view.querySelector('tbody');body.replaceChildren();
-  const samples=(snapshot?.samples||[]).slice(0,50);
-  if(!samples.length){const tr=document.createElement('tr');const td=Object.assign(document.createElement('td'),{colSpan:4,className:'ds-live-empty',textContent:'Mismatches will appear here as keys are compared.'});tr.append(td);body.append(tr);}
-  for(const [key,column,left,right] of samples){
-   const tr=document.createElement('tr');
-   for(const [value,className] of [[keyText(key),''],[column,''],[left,'analysis-before'],[right,'analysis-after']]){const td=Object.assign(document.createElement('td'),{textContent:value===''?'(empty)':value,className});td.title=value;tr.append(td);}
-   body.append(tr);
-  }
- }
- async function poll(){
-  clearTimeout(timer);if(polling||view.hidden||!isLive())return;polling=true;
-  try{paint(await api(endpoint('/live')));}catch{}finally{polling=false;if(!view.hidden&&isLive())timer=setTimeout(poll,1000);}
- }
- function show(on){
-  const wasLive=!view.hidden;
-  view.hidden=!on;results.classList.toggle('is-live',on);
-  if(on){paint(last);poll();}else clearTimeout(timer);
-  // The comparison finished while its live results were open: open the final results the way a refresh does,
-  // in review mode, so the columns and the Match Mismatch Overview sit side by side. Whichever code notices
-  // the completion first (the page's refresh or the check below) ends up here.
-  if(wasLive&&!on&&job?.state==='complete'&&currentView==='results')setTimeout(()=>{if(currentView==='results'&&job?.state==='complete'&&!$('mainWorkspace').classList.contains('review-rail')){panel('results');renderSummary();renderExports();}},0);
- }
- const syncNavigationBeforeLive=syncNavigation;
- syncNavigation=function(){syncNavigationBeforeLive();if(isLive())$('navResults').disabled=false;};
- const renderSummaryBeforeLive=renderSummary;
- renderSummary=function(){if(isLive()){show(true);return;}show(false);renderSummaryBeforeLive();};
- const renderExportsBeforeLive=renderExports;
- renderExports=function(){if(isLive())return;renderExportsBeforeLive();};
- const panelBeforeLive=panel;
- panel=function(name){panelBeforeLive(name);if(name!=='results')show(false);else if(isLive())show(true);};
- // A shortcut from the pipeline page.
- const liveButton=document.createElement('button');liveButton.type='button';liveButton.id='openLiveResults';liveButton.className='ds-live-open';liveButton.hidden=true;
- liveButton.append(Object.assign(document.createElement('i'),{className:'ds-live-dot'}),Object.assign(document.createElement('span'),{textContent:'View live results'}),lucideNode('arrow-right'));
- liveButton.addEventListener('click',()=>goView('results').catch(showError));
- // The card's action group is built on DOMContentLoaded, after this script runs.
- const placeLive=()=>{const actions=$('runningPanel').querySelector('.pipeline-actions');if(actions)actions.append(liveButton);else $('runningPanel').querySelector('#pipelineErrorCard')?.after(liveButton);};
- if($('runningPanel').querySelector('.pipeline-actions'))placeLive();else window.addEventListener('DOMContentLoaded',placeLive,{once:true});
- setInterval(()=>{liveButton.hidden=!isLive()||currentView!=='runningPanel';if(!view.hidden&&!isLive()&&job?.state==='complete'&&currentView==='results')show(false);},1000);
-}
-
 // Excel options in the Export menu: rows per column sheet, and whether values longer than an Excel cell are
 // shortened (and flagged) instead of failing. Excel is generated only when asked for, never in the pipeline.
 {
@@ -1969,7 +1929,7 @@ loadDiagnostics=async function(){
  if(!result.key)return;
  const key=Array.isArray(result.key)?result.key.join(' · '):String(result.key);
  const text=document.createElement('p');text.className='ds-dup-text';
- text.append(Object.assign(document.createElement('strong'),{textContent:`Duplicate key in the ${result.side==='right'?'challenger':'champion'} file`}),
+ text.append(Object.assign(document.createElement('strong'),{textContent:`Duplicate key in ${result.side==='right'?'File 2':'File 1'}`}),
   document.createTextNode(` ${key} appears ${number(result.count)} times. One row per key is compared; the others are skipped.`));
  const toggle=Object.assign(document.createElement('button'),{type:'button',className:'ds-dup-toggle'});
  toggle.setAttribute('aria-expanded','false');toggle.setAttribute('aria-controls','duplicateSamplePanel');
@@ -2613,4 +2573,89 @@ loadDiagnostics=async function(){
  const show=dialog.showModal;
  dialog.showModal=function(){if(rerunDraft&&job?.columns){ignorePage=0;renderScope();renderOverrides();renderRulesTab();syncSummary();}return show.call(dialog);};
  dialog.addEventListener('change',syncSummary);
+}
+
+// File sources: each file is either uploaded from this computer or read from a server path, so one comparison
+// can mix both. Each file card has its own Upload / Server path switch; a server path is checked on its own as it
+// is typed. The upload button (app.js) sends uploaded files and passes server paths through.
+{
+ const panelRoot=$('uploadPanel'),globalMode=panelRoot.querySelector('.source-mode');
+ globalMode.hidden=true;$('serverSourceFields').hidden=true;$('useServerSources').hidden=true;
+ const sides={};
+ for(const side of ['left','right']){
+  const card=$(side+'Card'),input=$(side+'ServerPath'),serverCard=input.closest('.server-path-card');
+  const column=document.createElement('div');column.className='ds-source-col';column.dataset.side=side;
+  const choice=document.createElement('div');choice.className='ds-segmented ds-side-source';choice.setAttribute('role','group');
+  choice.setAttribute('aria-label',(side==='left'?'File 1':'File 2')+' source');
+  const button=(mode,icon,label)=>{const b=document.createElement('button');b.type='button';b.dataset.mode=mode;b.append(lucideNode(icon),document.createTextNode(label));b.addEventListener('click',()=>setSide(side,mode));choice.append(b);return b;};
+  button('computer','upload','Upload');button('server','server','Server path');
+  const status=document.createElement('small');status.className='ds-path-status';status.setAttribute('role','status');
+  serverCard.append(status);
+  card.before(column);column.append(choice,card,serverCard);
+  input.addEventListener('input',()=>scheduleCheck(side));
+  sides[side]={mode:'computer',card,serverCard,input,status,choice,timer:0,version:0};
+  paint(side);
+ }
+ function paint(side){
+  const item=sides[side];
+  item.card.hidden=item.mode==='server';item.serverCard.hidden=item.mode!=='server';
+  for(const b of item.choice.children)b.setAttribute('aria-pressed',String(b.dataset.mode===item.mode));
+ }
+ function message(side,text,state='idle'){const item=sides[side];item.status.textContent=text;item.serverCard.dataset.state=state;}
+ function setSide(side,mode){
+  if(job||uploading){showError('Start a new comparison to change where a file comes from.');return;}
+  const item=sides[side];if(item.mode===mode)return;
+  item.mode=mode;clearTimeout(item.timer);item.version++;
+  choose(side,null);paint(side);
+  if(mode==='server')scheduleCheck(side,0);
+  (mode==='server'?item.serverCard:item.card).animate?.([{opacity:.3,transform:'translateY(6px)'},{opacity:1,transform:'none'}],{duration:220,easing:'cubic-bezier(.22,1,.36,1)'});
+ }
+ function scheduleCheck(side,delay=350){
+  const item=sides[side];clearTimeout(item.timer);item.version++;
+  files[side]=null;$('upload').disabled=true;
+  item.timer=setTimeout(()=>check(side),delay);
+ }
+ async function check(side){
+  const item=sides[side],version=++item.version,value=item.input.value.trim();
+  if(!serverFilesEnabled){message(side,'Server files are not enabled. Ask your administrator to list the allowed folders in source-roots.txt next to server.py.','error');return;}
+  if(!value){message(side,'Enter the file\'s full path on the server.');return;}
+  message(side,'Checking access…','checking');
+  try{
+   const result=await api('/api/server-sources/check',{files:{[side]:value}});if(version!==item.version)return;
+   const found=result.files[side];files[side]={name:found.name,size:found.size,serverPath:value};
+   message(side,`Access confirmed · ${found.name} · ${bytes(found.size)}`,'valid');
+  }catch(error){if(version!==item.version)return;files[side]=null;message(side,error.message||'This path cannot be read.','error');}
+  $('upload').disabled=!files.left||!files.right;updateDetectedFiles();
+ }
+ // A paused upload that reads one file from a server path resumes with that path already in place.
+ const hydrateBeforeSources=hydrate;
+ hydrate=function(){
+  hydrateBeforeSources();
+  for(const side of ['left','right']){
+   const source=job?.source_paths?.[side],item=sides[side];
+   if(job?.state==='uploading'&&source){item.mode='server';item.input.value=source.path;files[side]={name:job.files[side].name,size:job.files[side].size,serverPath:source.path};message(side,`Access confirmed · ${job.files[side].name} · ${bytes(job.files[side].size)}`,'valid');}
+   else if(job&&job.state!=='uploading'){item.mode='computer';}
+   paint(side);
+  }
+  $('upload').disabled=uploading||!files.left||!files.right;
+ };
+ // Once files are loaded both cards show what was compared; the source switches are only for choosing.
+ const syncBeforeSources=syncFilesStage;
+ syncFilesStage=function(name){
+  syncBeforeSources(name);
+  const ready=!!job&&['ready','queued','running','complete','selecting_sheets','preparing'].includes(job.state);
+  for(const side of ['left','right']){const item=sides[side];item.choice.hidden=ready||!!job;if(ready){item.card.hidden=false;item.serverCard.hidden=true;}else paint(side);}
+  globalMode.hidden=true;
+ };
+}
+
+// Job history header: Refresh is an icon whose label slides out on hover, grouped with New comparison on the right.
+{
+ const title=$('historyPanel').querySelector(':scope>.section-title'),refresh=$('historyRefresh'),create=$('reset');
+ if(title&&refresh&&create){
+  const actions=document.createElement('div');actions.className='ds-history-head-actions';
+  refresh.classList.remove('subtle');refresh.classList.add('ds-expand-action');refresh.type='button';refresh.setAttribute('aria-label','Refresh job history');refresh.title='Refresh job history';
+  refresh.replaceChildren(Object.assign(document.createElement('span'),{className:'ds-action-label',textContent:'Refresh'}),lucideNode('refresh-cw'));
+  title.append(actions);actions.append(refresh,create);
+ }
 }
