@@ -120,6 +120,24 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn('<script>column</script>',text)
         self.summary['matched_keys']=0
         self.assertEqual(sum(b[1] for b in match_bands(self.summary)),0)
+    def test_compact_distribution_and_detail_order(self):
+        text = make_summary_html(self.summary)
+        self.assertIn('aria-label="Column match distribution:', text)
+        self.assertIn('columns compared</text>', text)
+        self.assertNotIn('class="barcode"', text)
+        self.assertEqual(text.count('<svg class="donut"'), 1)
+        self.assertLess(text.index('id="summary"'), text.index('id="statistics"'))
+        self.assertLess(text.index('id="columnStats"'), text.index('id="keys"'))
+        # A single occupied band renders a full ring without degenerate arcs.
+        clean = dict(self.summary, changed_cells=0, changed_cells_by_column={'a': 0, 'b': 0})
+        text = make_summary_html(clean)
+        self.assertIn('<circle class="slice b0"', text)
+        self.assertIn('100% match: 2', text)
+        for empty in (dict(clean, matched_keys=0), dict(clean, changed_cells_by_column={})):
+            text = make_summary_html(empty)
+            self.assertNotIn('<svg class="donut"', text)
+            self.assertIn('Insufficient comparable data', text)
+
     def test_no_matched_rows_not_reported_as_full_match(self):
         self.summary.update(matched_keys=0,changed_cells=0,changed_cells_by_column={'value':0})
         text=make_summary_html(self.summary)

@@ -86,6 +86,11 @@ class PackedRows:
             self.parsed_rows+=1
             row=next(csv.reader(itertools.chain((line,),lines),delimiter=delimiter,strict=True))
             if len(row)!=len(self.names):
-                raise ValueError(f'{self.path}: record {self.count}: expected {len(self.names)} fields, got {len(row)}')
+                from invalid_rows import record
+                location = f'record {self.count}'
+                if getattr(self.args, 'range_start', None) is not None:
+                    location = f'byte range {self.args.range_start}, record {self.count} within range'
+                yield record(row, len(self.names), self.key_positions, location, self.path)
+                continue
             values=row if full_order else project(row) if project is not None else [row[self.order[0]]]
             yield tuple(row[i] for i in self.key_positions),pack_values(values)

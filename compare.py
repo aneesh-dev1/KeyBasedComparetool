@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 from file_io import atomic_write_text
+from invalid_rows import invalid, combine as combine_invalid, FIELDS as SKIP_FIELDS, COUNTERS as SKIP_COUNTERS
 from task_control import check_cancel
 from comparison_rules import validate_rules, equivalent
 from parquet_input import is_parquet
@@ -371,19 +372,21 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
                     if fraction is not None:
                         reading.update(offset + fraction * file_size)
                 if not native and len(row) != len(names):
-                    raise ValueError(f'{path}: record {count}: expected {len(names)} fields, got {len(row)}')
-                key = row[0] if native else [row[i] for i in key_positions]
+                    from invalid_rows import record
+                    row = record(row, len(names), key_positions, f'record {count}', path)
+                malformed = isinstance(row, tuple) and len(row) == 2 and isinstance(row[1], bytes) and invalid(row[1])
+                key = row[0] if native or malformed else [row[i] for i in key_positions]
                 encoded_key = encode(key)
                 if encoded_key in args.excluded_keys:
                     excluded += 1
                     if count % 50000 == 0:
                         progress(args, f'{prefix} read progress', rows=count, excluded=excluded, batch=serial+1, batch_rows=len(chunk), status='ongoing')
                     continue
-                if not args.allow_empty_keys and any(value is None or value == '' for value in key):
+                if not malformed and not args.allow_empty_keys and any(value is None or value == '' for value in key):
                     raise ValueError(f'{path}: record {count}: empty key component')
                 if not chunk:
                     progress(args, f'{prefix} sort batch started', batch=serial+1, rows=count-1, status='ongoing')
-                if native:item=(encoded_key,row[1])
+                if native or malformed:item=(encoded_key,row[1])
                 else:
                     values = row if same_order else project(row) if project is not None else [row[order[0]]]
                     item = (encoded_key, pack_values(values))
@@ -520,10 +523,15 @@ def unique(rows, label, diagnostics=None, args=None, stats=None, audit=None):
         for item in group:
             count += 1
             if count % 10000 == 0: check_cancel(getattr(args, 'cancel_file', None))
-            if capture_sample:
+            if capture_sample and not invalid(first[1]) and not invalid(item[1]):
                 if count == 2: samples.append(unpack_values(first[1]))
                 if len(samples) < 3: samples.append(unpack_values(item[1]))
-            if policy == 'last': selected = item
+            bad = combine_invalid(selected[1], item[1], count)
+            if bad is not None: selected = (key, bad)
+            elif policy == 'last': selected = item
+        if invalid(selected[1]):
+            yield selected
+            continue
         if count > 1:
             if stats is not None:
                 stats[label + '_duplicate_keys'] += 1
@@ -568,6 +576,8 @@ def compare_pair_stream(pairs, column_count, policies, writers, stats, columns, 
     left_write=writers['left_only'].writerow
     right_write=writers['right_only'].writerow
     processed=0
+    from invalid_rows import filter_pairs
+    pairs = filter_pairs(pairs, writers, stats, cancel_file)
     for a,b,differences in differences_for_pairs(pairs,column_count):
         if on_row is not None:on_row(processed,False)
         processed+=1
@@ -665,7 +675,7 @@ def _compare(args):
     checkpoint_dir=getattr(args,'checkpoint_dir',None)
     if checkpoint_dir:
         from checkpoints import validate
-        configuration=dict(keys=args.keys,headers=aligned,canonical=canonical,excluded=sorted(k.decode('utf-8') for k in args.excluded_keys),overrides=overrides,rules=rules,duplicate_policy=args.duplicate_policy,delimiter=args.delimiter,encoding=args.encoding,allow_empty_keys=args.allow_empty_keys)
+        configuration=dict(malformed_policy=1,keys=args.keys,headers=aligned,canonical=canonical,excluded=sorted(k.decode('utf-8') for k in args.excluded_keys),overrides=overrides,rules=rules,duplicate_policy=args.duplicate_policy,delimiter=args.delimiter,encoding=args.encoding,allow_empty_keys=args.allow_empty_keys)
         # Effective per-file settings, so equivalent shared and per-file configurations resume each other.
         effective={side:list(dialect(args,side)) for side in ('left','right')}
         if any(value!=[args.delimiter,args.encoding,True] for value in effective.values()):configuration['dialects']=effective
@@ -682,6 +692,7 @@ def _compare(args):
     stats = dict(left_rows=0, right_rows=0, matched_keys=0, equal_rows=0,
                  changed_rows=0, changed_cells=0, left_only=0, right_only=0, override_equivalent_cells=0, rule_equivalent_cells=0)
     stats.update({side + suffix: 0 for side in ('left', 'right') for suffix in ('_duplicate_keys', '_duplicate_rows_skipped')})
+    stats.update({name: 0 for name in SKIP_COUNTERS})
     columns = {name: 0 for name in canonical if name not in args.keys}
     with contextlib.ExitStack() as resources, (contextlib.nullcontext(str(checkpoint_dir)) if checkpoint_dir else tempfile.TemporaryDirectory(prefix='csv-compare-', dir=args.temp_dir)) as work:
         temp = Path(work)
@@ -714,7 +725,7 @@ def _compare(args):
             progress(args, 'Comparing keys', rows=0)
             with contextlib.ExitStack() as stack:
                 writers = {}
-                for name, fields in [('differences', ['key_json', 'column', 'left_value', 'right_value']),
+                for name, fields in [('skipped_keys', SKIP_FIELDS), ('differences', ['key_json', 'column', 'left_value', 'right_value']),
                                      ('left_only', args.keys), ('right_only', args.keys),
                                      ('matched_keys', ['key_json']),
                                      ('raw_differences', ['key_json','column','left_value','right_value','left_null','right_null']),
@@ -759,6 +770,8 @@ def _compare(args):
 
     if stats['left_duplicate_keys'] or stats['right_duplicate_keys']:
         progress(args, 'WARNING: duplicate keys found; extra rows skipped', policy=args.duplicate_policy, left_skipped=stats['left_duplicate_rows_skipped'], right_skipped=stats['right_duplicate_rows_skipped'])
+    if stats['malformed_records']:
+        progress(args, 'WARNING: malformed records excluded; see skipped_keys.csv', skipped_keys=stats['skipped_keys'], malformed_records=stats['malformed_records'], unidentified_records=stats['unidentified_records'])
     progress(args, 'Writing reports')
     stats.update(settings)
     stats.update(input_formats={side:('parquet' if is_parquet(path) else 'csv') for side,path in [('left',args.left),('right',args.right)]}, comparison_rules=rules, unmatched_columns=unmatched_columns, keys=args.keys, comparison='exact text with configured rules and/or overrides' if rules or overrides else 'exact text', changed_cells_by_column=columns,
@@ -766,8 +779,8 @@ def _compare(args):
                  column_headers=aligned, header_layout_changes=layout_changes,
                  header_changes=[dict(side=side, **change) for side, changes in (("left", left_header_changes), ("right", right_header_changes)) for change in changes],
                  ignored_columns=ignored_columns, ignored_keys_count=len(args.excluded_keys),
-                 left_compared_rows=stats['left_rows']-stats['left_excluded_rows']-stats['left_duplicate_rows_skipped'],
-                 right_compared_rows=stats['right_rows']-stats['right_excluded_rows']-stats['right_duplicate_rows_skipped'],
+                 left_compared_rows=stats['left_rows']-stats['left_excluded_rows']-stats['left_duplicate_rows_skipped']-stats['left_skipped_rows'],
+                 right_compared_rows=stats['right_rows']-stats['right_excluded_rows']-stats['right_duplicate_rows_skipped']-stats['right_skipped_rows'],
                  elapsed_seconds=round(time.monotonic() - started, 3))
     if checkpoint_dir: verify_sources(checkpoint_dir)
     atomic_write_text(out / 'summary.json', json.dumps(stats, indent=2))

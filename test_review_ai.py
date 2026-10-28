@@ -41,6 +41,30 @@ class ReviewAiTests(FeatureTests):
         self.assertEqual(again['summary']['changed_cells'],3)
         full=self.client.request(path+'/review-plan',self.config(original,keys=['x']))
         self.assertEqual(full['mode'],'full')
+    def test_comments_survive_exclusions_and_full_recompare(self):
+        path=self.upload(b'id,v,x\n1,a,old\n2,b,old\n',b'id,v,x\n1,A,new\n2,B,new\n')
+        original=self.complete(path)
+        for column,key,comment in [('v',None,'Column finding'),('', ['1'],'Key finding'),('v',['1'],'Cell finding')]:
+            self.client.request(path+'/annotations',dict(column=column,key=key,status='Expected',comment=comment))
+        expected=self.client.request(path+'/annotations')['notes']
+        revised,result=self.review(path,self.config(original,ignore_columns=['v'],ignore_keys='1'))
+        self.assertEqual(self.client.request(revised+'/annotations')['notes'],expected)
+        # Excluded columns remain editable through saved comments.
+        self.client.request(revised+'/annotations',dict(column='v',key=None,status='Resolved',comment='Updated excluded column'))
+        expected=self.client.request(revised+'/annotations')['notes']
+        config=self.config(result,duplicate_policy='last')
+        copied=self.client.request(revised+'/review-copy',config)
+        self.assertEqual(copied['execution_mode'],'full')
+        url='/api/jobs/'+copied['id']
+        self.client.request(url+'/start',config)
+        done=self.client.wait(url,lambda j:j['state'] in ('complete','error'))
+        self.assertEqual(done['state'],'complete',done)
+        self.assertEqual(self.client.request(url+'/annotations')['notes'],expected)
+        from reports import report_summary
+        report=self.server.app.directory(done['id'])/'report'
+        self.assertEqual(report_summary(report)['analysis_notes'],expected)
+        self.assertEqual(self.client.request(path+'/annotations')['notes'][0]['comment'],'Column finding')
+
     def test_remove_original_rules_restores_raw_differences(self):
         path=self.upload(b'id,v\n1,0\n',b'id,v\n1,0.00\n')
         job=self.complete(path,comparison_rules=[dict(column='v',tolerance='0')])

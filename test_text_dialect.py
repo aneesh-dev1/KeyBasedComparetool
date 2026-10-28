@@ -41,10 +41,40 @@ class DetectionTests(unittest.TestCase):
         found = self.detect(b'a|b\n1|2\n', delimiter=',', encoding='utf-8-sig', header='no')
         self.assertEqual((found['delimiter'], found['header'], found['detected']), (',', False, []))
 
-    def test_numeric_first_row_is_data_and_duplicate_names_are_data(self):
+    def test_numeric_first_row_is_data_and_imperfect_headers_are_preserved(self):
         self.assertFalse(self.detect(b'100,200\n300,400\n')['header'])
-        self.assertFalse(self.detect(b'a,a\nx,y\n')['header'])
+        self.assertTrue(self.detect(b'a,a\nx,y\n')['header'])
         self.assertTrue(self.detect(b'name,city\nAnn,Paris\n')['header'])
+
+    def test_blank_headers_keep_named_columns_and_first_data_row(self):
+        from compare import read_header
+        cases = [
+            (b'id,,amount\n1,Ann,10\n2,Bob,20\n', True, ['id', 'column2', 'amount']),
+            (b',name,amount\n1,Ann,10\n2,Bob,20\n', True, ['column1', 'name', 'amount']),
+            (b'id,name,\n1,Ann,10\n2,Bob,20\n', True, ['id', 'name', 'column3']),
+            (b'1,,10\n2,Bob,20\n3,Cy,30\n', False, ['column1', 'column2', 'column3']),
+        ]
+        for content, expected, names in cases:
+            with self.subTest(content=content):
+                dialect = self.detect(content)
+                self.assertEqual(dialect['header'], expected)
+                path = Path(self.temporary.name) / 'sample.dat'
+                self.assertEqual(read_header(path, dialect['delimiter'], dialect['encoding'], dialect['header'])[0], names)
+
+
+    def test_csv_blank_header_comparison_keeps_all_data_rows(self):
+        from compare import compare, parser
+        root = Path(self.temporary.name)
+        left, right = root / 'left.csv', root / 'right.csv'
+        left.write_text('id,,amount\n001,Ann,10\n002,Bob,20\n')
+        right.write_text('id,,amount\n002,Bob,21\n001,Ann,10\n')
+        args = parser().parse_args([str(left), str(right), '--keys', 'id', '--output', str(root / 'out')])
+        args.dialects = {side: text_dialect.detect(path) for side, path in [('left', left), ('right', right)]}
+        result = compare(args)
+        self.assertEqual(result['matched_keys'], 2)
+        self.assertEqual(result['changed_cells'], 1)
+        self.assertEqual(result['changed_cells_by_column'], {'column2': 0, 'amount': 1})
+
 
 
 class DialectWorkflowTests(unittest.TestCase):
@@ -76,6 +106,20 @@ class DialectWorkflowTests(unittest.TestCase):
         # Values compare as exact text: 10.00 and 10.0 differ.
         self.assertEqual(result['summary']['changed_cells'], 2)
         self.assertEqual((result['summary']['left_only'], result['summary']['right_only']), (1, 1))
+
+    def test_short_csv_rows_finish_and_have_downloadable_audit(self):
+        left = b'id,,amount\n1,Ann\n2,Bob,20\n'
+        right = b'id,,amount\n1,Ann,10\n2,Bob,20\n'
+        path, job = self.upload({'left': ('left.csv', left), 'right': ('right.csv', right)},
+                               delimiter='auto', encoding='auto', header='auto')
+        self.assertEqual(job['columns'], ['id', 'column2', 'amount'])
+        self.request(path + '/start', {'keys': ['id'], 'memory_mb': 64})
+        result = self.wait(path, lambda j: j['state'] in ('complete', 'error'))
+        self.assertEqual(result['state'], 'complete', result)
+        self.assertEqual(result['summary']['matched_keys'], 1)
+        self.assertEqual(result['summary']['skipped_keys'], 1)
+        self.assertIn(b'1 fields missing', self.request(path + '/download/skipped_keys.csv'))
+        self.assertIn(b'Completed with skipped records', self.request(path + '/download/comparison-report.html'))
 
     def test_changing_a_file_dialect_rereads_its_columns(self):
         left = b'id;name\n1;Ann\n2;Bob\n'

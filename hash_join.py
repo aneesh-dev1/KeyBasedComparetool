@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+from invalid_rows import invalid, combine as combine_invalid
 from task_control import check_cancel
 
 
@@ -42,7 +43,9 @@ def _packed_source(path, names, canonical, keys, args, side=None):
         def packed(reader):
             for number, row in enumerate(reader, 1):
                 if len(row) != len(source_names):
-                    raise ValueError(f'{path}: record {number}: expected {len(source_names)} fields, got {len(row)}')
+                    from invalid_rows import record
+                    yield record(row, len(source_names), key_positions, f'record {number}', path)
+                    continue
                 yield tuple(row[i] for i in key_positions), pack_values([row[i] for i in order])
         with input_rows(path, args, 0, projection, side) as (stream, reader):
             yield stream, packed(reader)
@@ -71,7 +74,7 @@ class HashJoin:
         policy = getattr(args, 'duplicate_policy', 'first')
         for side, rows in (('left', self.left), ('right', self.right)):
             # Only duplicate keys need ordering for this small audit.
-            for index, key in enumerate(sorted(k for k, entry in rows.items() if entry[1] > 1)):
+            for index, key in enumerate(sorted(k for k, entry in rows.items() if entry[1] > 1 and not invalid(entry[0]))):
                 if index % 1000 == 0:
                     check_cancel(getattr(args, 'cancel_file', None))
                 count = rows[key][1]
@@ -79,7 +82,7 @@ class HashJoin:
                 stats[side + '_duplicate_rows_skipped'] = stats.get(side + '_duplicate_rows_skipped', 0) + count - 1
                 if audit is not None:
                     audit.writerow([side, key.decode('utf-8'), count, count - 1, policy])
-                if diagnostics and not Path(diagnostics).exists():
+                if diagnostics and not Path(diagnostics).exists() and side in self.samples and self.samples[side][0] == key:
                     sample_key, payloads = self.samples[side]
                     assert sample_key == key
                     samples = [unpack_values(payload) for payload in payloads]
@@ -172,13 +175,18 @@ def _build(args, left_names, right_names, canonical, stats, progress):
                             retained += sys.getsizeof(key) + sys.getsizeof(payload) + entry_overhead
                         else:
                             occurrences = previous[1] + 1
-                            if capture:
+                            if capture and not invalid(previous[0]) and not invalid(payload):
                                 sample = samples.get(side)
                                 if occurrences == 2 and (sample is None or key < sample[0]):
                                     samples[side] = (key, [previous[0], payload])
                                 elif sample is not None and sample[0] == key and len(sample[1]) < 3:
                                     sample[1].append(payload)
-                            if policy == 'last':
+                            previous_size = sys.getsizeof(previous[0])
+                            bad = combine_invalid(previous[0], payload, occurrences)
+                            if bad is not None:
+                                retained += sys.getsizeof(bad) - previous_size
+                                rows[key] = (bad, occurrences)
+                            elif policy == 'last':
                                 retained += sys.getsizeof(payload) - sys.getsizeof(previous[0])
                                 rows[key] = (payload, occurrences)
                             else:

@@ -54,8 +54,10 @@ class ComparisonTests(unittest.TestCase):
     def test_bad_row(self):
         left = self.write('a.csv', ['id', 'v'], [['1']])
         right = self.write('b.csv', ['id', 'v'], [])
-        with self.assertRaisesRegex(ValueError, 'expected 2 fields'):
-            self.run_comparison(left, right)
+        result = self.run_comparison(left, right)
+        self.assertEqual(result['malformed_records'], 1)
+        self.assertEqual(result['skipped_keys'], 1)
+        self.assertEqual(result['left_only'], 0)
 
     def test_empty_key(self):
         left = self.write('a.csv', ['id'], [['']])

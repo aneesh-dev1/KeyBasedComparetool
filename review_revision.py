@@ -90,7 +90,7 @@ def revise(baseline,output,config,columns,notify):
             db.commit()
     finally:dbpath.unlink(missing_ok=True)
     s.update(changed_cells=sum(counts.values()),changed_cells_by_column=counts,equal_rows=s['matched_keys']-s['changed_rows'],comparison_rules=list(rules.values()),value_overrides=config.get('value_overrides',[]),ignored_columns=list(config.get('ignore_columns',[])),ignore_key_containers=audit,ignored_keys_count=len(excluded),elapsed_seconds=round(time.monotonic()-started,3),review_revision=dict(original_mismatches=original,raw_differences=raw_count,accepted_by_rules=accepted,excluded_from_scope=filtered,remaining_mismatches=sum(counts.values())))
-    for name in ('duplicate_keys.csv','annotations.json'):
+    for name in ('duplicate_keys.csv','skipped_keys.csv','annotations.json'):
         if (baseline/name).exists():shutil.copy2(baseline/name,output/name)
     save_patterns(patterns,output)
     (output/'summary.json').write_text(json.dumps(s,indent=2),encoding='utf-8')

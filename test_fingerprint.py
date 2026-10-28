@@ -116,13 +116,14 @@ class FingerprintTests(unittest.TestCase):
         write(self.root / 'right.csv', header, right)
         with open(self.root / 'right.csv', 'ab') as stream:
             stream.write(b'R9999,a\rb,1,2,3,4,5,6,7,8,9,10,11\n')
+        results = []
         for fingerprint in ('off', 'on'):
-            with self.subTest(fingerprint=fingerprint), self.assertRaises(ValueError) as caught:
-                self.run_engine('cr', fingerprint=fingerprint)
-            messages = getattr(self, 'messages', [])
-            messages.append(str(caught.exception))
-            self.messages = messages
-        self.assertEqual(self.messages[0], self.messages[1])
+            with self.subTest(fingerprint=fingerprint):
+                _, result, _ = self.run_engine('cr', fingerprint=fingerprint)
+                results.append(result)
+        for key in ('malformed_records', 'skipped_keys', 'matched_keys', 'changed_cells'):
+            self.assertEqual(results[0][key], results[1][key], key)
+        self.assertEqual(results[0]['malformed_records'], 2)
 
     def test_changed_source_is_detected_when_rows_are_read_again(self):
         path = self.root / 'one.csv'

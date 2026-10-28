@@ -13,12 +13,12 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 13
+REPORT_VERSION = 14
 
 def summary_rows(summary):
     yield ['Metric', 'Value']
     for key, value in summary.items():
-        if key not in ('changed_cells_by_column', 'ignore_key_containers','analysis_notes','review_revision'):
+        if key not in ('changed_cells_by_column', 'ignore_key_containers','analysis_notes','review_revision','skipped_records_preview'):
             yield [key.replace('_', ' ').capitalize(), json.dumps(value, ensure_ascii=False) if isinstance(value, list) else value]
     for key,value in summary.get('review_revision',{}).items():yield ['Review: '+key.replace('_',' '),value]
     yield ['Column', 'Changed cells']
@@ -43,6 +43,9 @@ def report_summary(report):
     summary=json.loads((report/'summary.json').read_text())
     notes=report/'annotations.json'
     summary['analysis_notes']=json.loads(notes.read_text()) if notes.exists() else []
+    if summary.get('malformed_records') and (report/'skipped_keys.csv').exists():
+        with (report/'skipped_keys.csv').open(encoding='utf-8', newline='') as stream:
+            summary['skipped_records_preview'] = list(itertools.islice(csv.DictReader(stream), 20))
     return summary
 
 
@@ -111,10 +114,11 @@ a{color:var(--link)}
 .masthead time{display:block;font-size:13px;color:var(--muted);font-weight:400;margin-top:2px}
 .print{font:inherit;font-size:14px;font-weight:600;background:var(--ink);color:#fff;border:0;border-radius:6px;padding:10px 16px;cursor:pointer;white-space:nowrap}
 .print:hover{background:#004364}
-.files{grid-column:1/-1;margin:14px 0 0;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;font-size:14px;color:var(--ink-2)}
+.files{grid-column:1/-1;margin:14px 0 0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px 24px;align-items:baseline;font-size:14px;color:var(--ink-2)}
+.files .file-source{grid-column:1;display:grid;grid-template-columns:44px minmax(0,1fr);gap:10px;align-items:baseline}
+.files .file-source:first-child{grid-row:1}
 .files strong{color:var(--ink);font-weight:600;overflow-wrap:anywhere}
-.files .vs{color:var(--muted)}
-.files .keys{margin-left:auto;color:var(--muted)}
+.files .keys{grid-column:2;grid-row:1;justify-self:end;color:var(--muted);overflow-wrap:anywhere}
 .files .keys strong{color:var(--ink)}
 .toc{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--canvas) 92%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
 .toc ol{max-width:1160px;margin:0 auto;padding:0 32px;list-style:none;display:flex;gap:4px;overflow-x:auto;scrollbar-width:none}
@@ -134,13 +138,12 @@ a{color:var(--link)}
 .state::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--band-high)}
 .state.is-clean::before{background:var(--key-equal)}
 .state.is-empty::before{background:var(--s-other)}
-.barcode-head{display:flex;justify-content:space-between;gap:16px;align-items:baseline;flex-wrap:wrap}
-.barcode-head h3{margin:0;font-size:15px;font-weight:600}
-.barcode-head p{margin:0;font-size:13px;color:var(--muted)}
-.barcode{display:block;width:100%;height:56px;margin:12px 0 10px;border-radius:4px;background:var(--line-soft)}
-.barcode rect{shape-rendering:crispEdges}
-.barcode rect[data-row]{cursor:pointer}
-.barcode:hover rect{opacity:.55}.barcode rect:hover{opacity:1}
+.distribution{display:grid;grid-template-columns:120px minmax(0,1fr);gap:24px;align-items:center}
+.distribution .donut{width:120px;margin:0}
+.distribution h3{margin:0 0 12px;font-size:15px;font-weight:600}
+.distribution .bands{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 24px}
+.distribution .bands b{margin-left:auto}
+@media(max-width:520px){.distribution{grid-template-columns:88px minmax(0,1fr);gap:16px}.distribution .donut{width:88px}.distribution .bands{grid-template-columns:1fr}}
 .b0{fill:var(--band-perfect)}.b1{fill:var(--band-low)}.b2{fill:var(--band-medium)}.b3{fill:var(--band-high)}
 .bands{display:flex;flex-wrap:wrap;gap:6px 22px;margin:0;padding:0;list-style:none;font-size:13px;color:var(--ink-2)}
 .bands li{display:flex;align-items:center;gap:7px}
@@ -208,9 +211,9 @@ td.num,th.num{text-align:right;white-space:nowrap}
 .defs dd{overflow-wrap:anywhere;color:var(--ink)}
 .scope-text p{max-width:78ch;color:var(--ink-2)}
 footer{max-width:1160px;margin:0 auto;padding:20px 32px 40px;font-size:12.5px;color:var(--muted)}
-@media (max-width:900px){.masthead img{width:120px}.print{font-size:13px;padding:8px 12px}.page,.masthead-inner,.toc ol,footer{padding-left:16px;padding-right:16px}.masthead-inner{grid-template-columns:auto 1fr}.masthead h1{grid-column:1/-1;border-left:0;padding-left:0}.print{grid-row:1;grid-column:2;justify-self:end}.files .keys{margin-left:0;flex-basis:100%}.block{padding:22px 18px}.verdict{grid-template-columns:1fr;gap:16px}.rate{font-size:48px}.figures{grid-template-columns:1fr 1fr;row-gap:18px}.figures>div:nth-child(3){padding-left:0;border-left:0}.split{grid-template-columns:1fr}.donut{max-width:200px;margin:0 auto}.sources{grid-template-columns:1fr}.defs{grid-template-columns:1fr}.defs dd{border-top:0;padding-top:0}}
+@media (max-width:900px){.masthead img{width:120px}.print{font-size:13px;padding:8px 12px}.page,.masthead-inner,.toc ol,footer{padding-left:16px;padding-right:16px}.masthead-inner{grid-template-columns:auto 1fr}.masthead h1{grid-column:1/-1;border-left:0;padding-left:0}.print{grid-row:1;grid-column:2;justify-self:end}.block{padding:22px 18px}.verdict{grid-template-columns:1fr;gap:16px}.rate{font-size:48px}.figures{grid-template-columns:1fr 1fr;row-gap:18px}.figures>div:nth-child(3){padding-left:0;border-left:0}.split{grid-template-columns:1fr}.donut{max-width:200px;margin:0 auto}.sources{grid-template-columns:1fr}.defs{grid-template-columns:1fr}.defs dd{border-top:0;padding-top:0}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}#columnStats>tbody>tr.flash{animation:none}}
-@media print{body{background:#fff;font-size:11.5px}.toc,.print,.search-label,.report-drawer{display:none!important}.masthead{border-bottom-width:3px}.block{border:0;border-top:1px solid var(--line);border-radius:0;padding:16px 0;margin:0;break-inside:auto}.verdict,.split,.notice,.container,tr{break-inside:avoid}.table-wrap{overflow:visible}thead{display:table-header-group}[hidden]{display:table-row!important}.chip[hidden]{display:inline-block!important}.barcode,.donut,.keybar{-webkit-print-color-adjust:exact;print-color-adjust:exact}a{color:inherit;text-decoration:none}#columnStats{min-width:0}}
+@media print{body{background:#fff;font-size:11.5px}.toc,.print,.search-label,.report-drawer{display:none!important}.masthead{border-bottom-width:3px}.block{border:0;border-top:1px solid var(--line);border-radius:0;padding:16px 0;margin:0;break-inside:auto}.verdict,.split,.notice,.container,tr{break-inside:avoid}.table-wrap{overflow:visible}thead{display:table-header-group}[hidden]{display:table-row!important}.chip[hidden]{display:inline-block!important}.donut,.keybar{-webkit-print-color-adjust:exact;print-color-adjust:exact}a{color:inherit;text-decoration:none}#columnStats{min-width:0}}
 '''
 
 # Column slices use a fixed, colour-blind-checked order; the same one the results page pie uses.
@@ -240,12 +243,12 @@ def column_slices(summary):
     return slices
 
 
-def donut_svg(slices, total, esc):
+def donut_svg(slices, total, esc, label="mismatched cells", description="Mismatched cells by column"):
     import math
-    out = '<svg class="donut" viewBox="0 0 200 200" role="img" aria-label="' + esc('Mismatched cells by column: ' + '; '.join(f'{name}: {count:,}' for name, count, _ in slices)) + '">'
+    out = '<svg class="donut" viewBox="0 0 200 200" role="img" aria-label="' + esc(description + ': ' + '; '.join(f'{name}: {count:,}' for name, count, _ in slices)) + '">'
     start = -math.pi / 2
     for name, count, colour in slices:
-        tip = f'<title>{esc(name)}: {count:,} mismatched cells ({100 * count / total:.2f}%)</title>'
+        tip = f'<title>{esc(name)}: {count:,} {esc(label)} ({100 * count / total:.2f}%)</title>'
         if count == total:
             out += f'<circle class="slice {colour}" cx="100" cy="100" r="96">{tip}</circle>'
             continue
@@ -257,21 +260,8 @@ def donut_svg(slices, total, esc):
         start = end
     if slices and slices[0][1] == total:
         out += '<circle cx="100" cy="100" r="60" fill="#fff"/>'
-    out += f'<text class="total" x="100" y="102" text-anchor="middle">{total:,}</text><text class="total-label" x="100" y="122" text-anchor="middle">mismatched cells</text></svg>'
+    out += f'<text class="total" x="100" y="102" text-anchor="middle">{total:,}</text><text class="total-label" x="100" y="122" text-anchor="middle">{esc(label)}</text></svg>'
     return out
-
-
-def barcode_svg(summary, row_of, esc):
-    """One mark per compared column, in file order, coloured by its match-rate band."""
-    matched = summary.get('matched_keys', 0)
-    names = list(summary['changed_cells_by_column'].items())
-    width = 1 if len(names) > 160 else 0.82
-    out = f'<svg class="barcode" viewBox="0 0 {len(names)} 1" preserveAspectRatio="none" role="img" aria-label="Match rate of each column in file order">'
-    for index, (name, count) in enumerate(names):
-        rate = f'{100 * (matched - count) / matched:.4f}% match' if matched else 'no matched keys'
-        row = f' data-row="{row_of[name]}"' if name in row_of else ''
-        out += f'<rect x="{index + (1 - width) / 2:.3f}" y="0" width="{width}" height="1" class="b{band_index(count, matched) if matched else 0}"{row}><title>{esc(name)}: {count:,} mismatched cells, {rate}</title></rect>'
-    return out + '</svg>'
 
 
 def make_summary_html(summary):
@@ -287,24 +277,28 @@ def make_summary_html(summary):
     overall = 100 * (1 - cells / (matched * total)) if matched and total else None
     generated = datetime.now(timezone.utc)
     files = source_labels(summary)
-    row_of = {row[0]: index for index, row in enumerate(changed)}
 
     out = html_start('TransUnion | Data comparison report')
     out += ('<h1>Data comparison report<time datetime="' + generated.isoformat(timespec='seconds') + '">Generated '
             + generated.strftime('%d %b %Y, %H:%M UTC') + '</time></h1><button class="print" type="button" onclick="window.print()">Print or save as PDF</button>'
-            + '<p class="files">' + ''.join(('<span class="vs">compared with</span>' if index else '') + ('' if name == label else f'<span>{label}</span>') + f'<strong>{esc(name)}</strong>'
-                                       for index, (label, name) in enumerate(zip(('File 1', 'File 2'), files))) + '<span class="keys">Matched on <strong>' + esc(', '.join(summary['keys'])) + '</strong></span></p></div></header>')
-    sections = [('summary', 'Summary', None), ('keys', 'Keys', None), ('statistics', 'Mismatching columns', len(changed)), ('matching', 'Matching columns', len(equal)), ('scope', 'Exclusions', None), ('interpretation', 'Scope', None)]
+            + '<div class="files">' + ''.join(f'<div class="file-source"><span>{label}</span><strong>{esc(name)}</strong></div>'
+                                       for label, name in zip(('File 1', 'File 2'), files)) + '<div class="keys">Matched on <strong>' + esc(', '.join(summary['keys'])) + '</strong></div></div></div></header>')
+    sections = [('summary', 'Summary', None), ('statistics', 'Mismatching columns', len(changed)), ('keys', 'Keys', None), ('matching', 'Matching columns', len(equal)), ('scope', 'Exclusions', None), ('interpretation', 'Scope', None)]
+    if summary.get('malformed_records'):
+        sections.insert(1, ('skipped-records', 'Skipped keys', summary.get('skipped_keys', 0)))
     if summary.get('analysis_notes'):
         sections.append(('comments', 'Review comments', len(summary['analysis_notes'])))
     out += '<nav class="toc" aria-label="Report sections"><ol>' + ''.join(
         f'<li><a href="#{anchor}">{label}' + (f'<span class="count">{count:,}</span>' if count is not None else '') + '</a></li>' for anchor, label, count in sections) + '</ol></nav>'
     out += '<main class="page">'
 
-    # Summary: the overall answer first, then every column as one mark so the shape of the problem is visible.
+    # Summary: the overall answer and a compact distribution of column match rates.
     if not (matched and total):
         state, state_class = 'Insufficient comparable data', 'is-empty'
         sentence = 'No matched rows; match rates cannot be calculated.' if not matched else 'No non-key columns in comparison scope.'
+    elif summary.get('malformed_records') and not (changed or left_only or right_only):
+        state, state_class = 'Compared values match; records were excluded', 'is-empty'
+        sentence = f'{matched:,} keys were compared. Review the skipped-record audit before approving this comparison.'
     elif changed or left_only or right_only:
         state, state_class = 'Differences identified', ''
         parts = [f'<strong>{cells:,}</strong> mismatched cells across <strong>{len(changed):,}</strong> of {total:,} columns'] if changed else ['Every compared column matches']
@@ -317,19 +311,36 @@ def make_summary_html(summary):
     out += ('<section class="block" id="summary"><div class="verdict"><p class="rate">' + percent(overall)
             + '<small>Overall cell match across matched keys and compared columns</small></p><div><span class="state ' + state_class + '">'
             + state + '</span><p class="verdict-text">' + sentence + '</p></div></div>')
-    out += '<div class="barcode-head"><h3>Column match distribution</h3><p>Each mark is one column, in file order. Select a column with differences to find it in the table.</p></div>'
     if matched and total:
-        out += barcode_svg(summary, row_of, esc)
-        out += '<ul class="bands">' + ''.join(f'<li><span class="dot b{index}"></span>{esc(name)} <b>{count:,}</b></li>' for index, (name, count, _) in enumerate(match_bands(summary))) + '</ul>'
-        out += '<p class="rate-note">100% means zero mismatches. Bands use exact counts before display rounding and do not overlap.</p>'
+        bands = match_bands(summary)
+        slices = [(name, count, f'b{index}') for index, (name, count, _) in enumerate(bands) if count]
+        out += '<div class="distribution">' + donut_svg(slices, total, esc, 'columns compared', 'Column match distribution')
+        out += '<div><h3>Column match distribution</h3><ul class="bands">' + ''.join(f'<li><span class="dot b{index}"></span>{esc(name)} <b>{count:,}</b></li>' for index, (name, count, _) in enumerate(bands)) + '</ul>'
+        out += '<p class="rate-note">100% means zero mismatches. Bands use exact counts before display rounding and do not overlap.</p></div></div>'
     else:
         out += '<p class="empty">' + ('No matched rows; match rates cannot be calculated.' if not matched else 'No non-key columns in comparison scope.') + '</p>'
+    if summary.get('malformed_records'):
+        out += '<div class="notice"><h2>Completed with skipped records</h2><p>' + f"{summary.get('malformed_records', 0):,} malformed records; {summary.get('skipped_keys', 0):,} identifiable keys excluded from both files. " + f"{summary.get('unidentified_records', 0):,} records had no readable key, so their counterparts could not be identified." + '</p><p>Skipped records are excluded from match rates. <a href="#skipped-records">Review reasons</a>.</p></div>'
     if summary.get('review_revision'):
         out += '<div class="notice"><h2>Review revision</h2><p>' + esc(', '.join(k.replace('_', ' ') + ': ' + str(v) for k, v in summary['review_revision'].items())) + '</p><p>Re-evaluated retained evidence; the original comparison is preserved.</p></div>'
     if summary.get('left_duplicate_keys') or summary.get('right_duplicate_keys'):
         out += '<div class="notice"><h2>Warning: duplicate keys</h2><p>' + esc(
             f"Kept the {summary.get('duplicate_policy', 'first')} source occurrence per key. File 1: {summary.get('left_duplicate_keys', 0):,} duplicate keys, {summary.get('left_duplicate_rows_skipped', 0):,} skipped rows. "
             f"File 2: {summary.get('right_duplicate_keys', 0):,} duplicate keys, {summary.get('right_duplicate_rows_skipped', 0):,} skipped rows.") + '</p><p>Skipped duplicates are outside the match-rate denominator. The detailed duplicate audit remains available in the app and the Excel workbook.</p></div>'
+    out += '</section>'
+
+    # Mismatching columns: where the differences concentrate, then the complete ranked list.
+    notes = {n['column']: n['status'] + ': ' + n['comment'] for n in summary.get('analysis_notes', []) if n['key'] is None}
+    out += '<section class="block" id="statistics"><h2>All mismatching columns (' + str(len(changed)) + ')</h2><p class="lede">Where the mismatched cells are. Percentages use ' + f'{matched:,}' + ' matched keys.</p>'
+    out += '<div class="toolbar"><div><h3>Every column with differences</h3><p>Largest first. Select a column to see its mismatch patterns and sample keys.</p></div><label class="search-label">Find a column <input id="columnSearch" type="search" placeholder="Column name"></label></div>'
+    out += '<div class="table-wrap"><table id="columnStats"><thead><tr><th>Column</th><th class="num">Mismatched cells</th><th class="num">Mismatch %</th><th class="num">Match %</th><th>Review notes</th></tr></thead><tbody>'
+    largest = changed[0][1] if changed else 0
+    for index, (name, count, mismatch, match) in enumerate(changed):
+        out += (f'<tr id="column-{index}"><td>{esc(name)}</td><td class="num">{count:,}<span class="share b{band_index(count, matched)}" data-share="{count / largest:.4f}"><i></i></span></td>'
+                f'<td class="num">{percent(mismatch)}</td><td class="num">{percent(match)}</td><td>{esc(notes.get(name, ""))}</td></tr>')
+    out += '</tbody></table></div>'
+    if not changed:
+        out += '<p class="empty">No mismatching columns in the selected scope.</p>'
     out += '</section>'
 
     # Keys: every key lands in exactly one group, so the bar adds up to all keys in both files.
@@ -351,23 +362,14 @@ def make_summary_html(summary):
         out += f'<p>{label}: <strong>{esc(name)}</strong><br>Source rows: <strong>{esc(f"{rows:,}" if isinstance(rows, int) else rows)}</strong></p>'
     out += '</div></section>'
 
-    # Mismatching columns: where the differences concentrate, then the complete ranked list.
-    notes = {n['column']: n['status'] + ': ' + n['comment'] for n in summary.get('analysis_notes', []) if n['key'] is None}
-    out += '<section class="block" id="statistics"><h2>All mismatching columns (' + str(len(changed)) + ')</h2><p class="lede">Where the mismatched cells are. Percentages use ' + f'{matched:,}' + ' matched keys.</p>'
-    if changed:
-        slices = column_slices(summary)
-        out += '<div class="split">' + donut_svg(slices, cells, esc) + '<div><h3 class="visually-hidden">Share of mismatched cells</h3><ul class="slices">' + ''.join(
-            f'<li><span class="dot {colour}"></span><span class="name" title="{esc(name)}">{esc(name)}</span><b>{count:,}</b><small>{100 * count / cells:.2f}%</small></li>' for name, count, colour in slices) + '</ul></div></div>'
-    out += '<div class="toolbar"><div><h3>Every column with differences</h3><p>Largest first. Select a column to see its mismatch patterns and sample keys.</p></div><label class="search-label">Find a column <input id="columnSearch" type="search" placeholder="Column name"></label></div>'
-    out += '<div class="table-wrap"><table id="columnStats"><thead><tr><th>Column</th><th class="num">Mismatched cells</th><th class="num">Mismatch %</th><th class="num">Match %</th><th>Review notes</th></tr></thead><tbody>'
-    largest = changed[0][1] if changed else 0
-    for index, (name, count, mismatch, match) in enumerate(changed):
-        out += (f'<tr id="column-{index}"><td>{esc(name)}</td><td class="num">{count:,}<span class="share b{band_index(count, matched)}" data-share="{count / largest:.4f}"><i></i></span></td>'
-                f'<td class="num">{percent(mismatch)}</td><td class="num">{percent(match)}</td><td>{esc(notes.get(name, ""))}</td></tr>')
-    out += '</tbody></table></div>'
-    if not changed:
-        out += '<p class="empty">No mismatching columns in the selected scope.</p>'
-    out += '</section>'
+
+    if summary.get('malformed_records'):
+        out += '<section class="block" id="skipped-records"><h2>Skipped keys and records</h2><p class="lede">Correct the source records and run a new comparison to include them. Empty values are valid; an unexpected number of fields is not.</p>'
+        out += '<p>Preview of up to 20 malformed records. The Excel workbook and skipped_keys.csv contain the complete audit.</p>'
+        out += '<div class="table-wrap"><table><thead>' + html_row(['File', 'Key', 'Location', 'Expected fields', 'Actual fields', 'Reason', 'Action'], True) + '</thead><tbody>'
+        for entry in summary.get('skipped_records_preview', []):
+            out += html_row(['File 1' if entry['side'] == 'left' else 'File 2', entry['key_json'] or 'Key unavailable', entry['location'], entry['expected_fields'], entry['actual_fields'], entry['reason'], entry['action']])
+        out += '</tbody></table></div></section>'
 
     out += ('<section class="block" id="matching"><div class="toolbar"><div><h2>Attributes with 100% match (' + str(len(equal)) + ')</h2><p>Each listed column has ' + f'{matched:,}'
             + ' matched cells and zero mismatches.</p></div>' + ('<label class="search-label">Find a column <input id="matchingSearch" type="search" placeholder="Column name"></label>' if equal else '')
@@ -404,12 +406,6 @@ const chipSearch=document.getElementById('matchingSearch');
 if(chipSearch)chipSearch.addEventListener('input',()=>{const q=chipSearch.value.toLowerCase();document.querySelectorAll('#matching .chip').forEach(c=>c.hidden=!c.textContent.toLowerCase().includes(q));});
 for(const bar of document.querySelectorAll('.share'))bar.firstChild.style.width=Math.max(2,100*Number(bar.dataset.share))+'%';
 for(const part of document.querySelectorAll('.keybar span'))part.style.flexGrow=part.dataset.grow;
-// A mark on the column strip finds that column's row in the ranked table.
-for(const mark of document.querySelectorAll('.barcode rect[data-row]'))mark.addEventListener('click',()=>{
- const row=document.getElementById('column-'+mark.dataset.row);if(!row)return;
- search.value='';search.dispatchEvent(new Event('input'));
- row.scrollIntoView({block:'center'});row.classList.remove('flash');void row.offsetWidth;row.classList.add('flash');row.focus({preventScroll:true});
-});
 // The section index follows the reader down the page.
 const links=[...document.querySelectorAll('.toc a')],targets=links.map(a=>document.querySelector(a.getAttribute('href')));
 function mark(){let current=0;targets.forEach((t,i)=>{if(t&&t.getBoundingClientRect().top<120)current=i;});links.forEach((a,i)=>a.setAttribute('aria-current',String(i===current)));}
@@ -575,7 +571,8 @@ def export_excel(report, destination, notify=lambda message: None, max_rows=None
     capped = {name: summary['changed_cells_by_column'][name] for name in columns if summary['changed_cells_by_column'][name] > limit}
     truncated = {} if truncate else None
     has_duplicates = bool(summary.get('left_duplicate_keys') or summary.get('right_duplicate_keys'))
-    reserved = ['Comparison Summary', 'TOC'] + (['Duplicate keys'] if has_duplicates else []) + (['Ignored key containers'] if summary.get('ignore_key_containers') else []) + (['Analysis notes'] if summary.get('analysis_notes') else [])
+    audit_sheets = ['Skipped keys' + (f' ({i + 1})' if i else '') for i in range((summary.get('malformed_records', 0) + EXCEL_DATA_ROWS - 1) // EXCEL_DATA_ROWS)]
+    reserved = audit_sheets + ['Comparison Summary', 'TOC'] + (['Duplicate keys'] if has_duplicates else []) + (['Ignored key containers'] if summary.get('ignore_key_containers') else []) + (['Analysis notes'] if summary.get('analysis_notes') else [])
     names = sheet_names(reserved + columns)
     mapped = dict(zip(columns, names[len(reserved):]))
     column_notes={n['column']:n['status']+': '+n['comment'] for n in summary.get('analysis_notes',[]) if n['key'] is None}
@@ -599,6 +596,10 @@ def export_excel(report, destination, notify=lambda message: None, max_rows=None
             yield ['Excluded rows — File 2',summary.get('right_excluded_rows',0)]
             for item in summary['ignore_key_containers']:
                 yield [item['name'],item['reason']]
+        if audit_sheets:
+            yield ['WARNING: malformed records skipped', Link('Review keys, field counts and reasons', 'Skipped keys')]
+            yield ['Identifiable keys excluded from both files', summary.get('skipped_keys', 0)]
+            yield ['Unidentified records (counterparts cannot be identified)', summary.get('unidentified_records', 0)]
         if has_duplicates:
             yield ['WARNING: duplicate keys',Link('Review skipped rows; kept '+summary.get('duplicate_policy','first')+' source occurrence','Duplicate keys')]
         if capped:
@@ -614,6 +615,21 @@ def export_excel(report, destination, notify=lambda message: None, max_rows=None
             else:
                 yield row
     sheets = [('Comparison Summary',summary_sheet()), ('TOC',toc())]
+    if audit_sheets:
+        def full_audit():
+            with (report/'skipped_keys.csv').open(encoding='utf-8', newline='') as stream:
+                reader = csv.reader(stream)
+                next(reader)
+                yield from reader
+        audit = full_audit()
+        from invalid_rows import FIELDS
+        def audit_page(count):
+            yield FIELDS
+            for row in itertools.islice(audit, count):
+                # Excel's cell limit cannot hold arbitrarily large keys; keep the CSV exact.
+                yield [value if len(value) <= 32767 else value[:32700] + ' [TRUNCATED; see skipped_keys.csv]' for value in row]
+        for index, name in enumerate(audit_sheets):
+            sheets.append((name, audit_page(min(EXCEL_DATA_ROWS, summary['malformed_records'] - index * EXCEL_DATA_ROWS))))
     if has_duplicates:
         def duplicate_rows():
             with (report / 'duplicate_keys.csv').open(encoding='utf-8', newline='') as stream:
@@ -623,7 +639,7 @@ def export_excel(report, destination, notify=lambda message: None, max_rows=None
         sheets.append(('Ignored key containers',exclusion_rows(summary)))
     if summary.get('analysis_notes'):
         sheets.append(('Analysis notes',note_rows(summary)))
-    options = {name: {'header_rows':1} for name in ['Comparison Summary','TOC','Analysis notes','Duplicate keys']+list(mapped.values())}
+    options = {name: {'header_rows':1} for name in ['Comparison Summary','TOC','Analysis notes','Duplicate keys']+audit_sheets+list(mapped.values())}
     if summary.get('ignore_key_containers'):
         options['Ignored key containers']={'header_rows':2,'audit':True}
     for name in mapped.values():
@@ -690,7 +706,7 @@ def export_html(report, destination, notify=lambda message: None):
     document = make_summary_html(summary)
     from report_patterns import pattern_drawer_chunks
     notify('Writing single-file HTML report…')
-    with destination.open('w', encoding='utf-8') as output:
+    with destination.open('w', encoding='utf-8', buffering=1024*1024) as output:
         head,_,tail=document.rpartition('</body>')
         for offset in range(0,len(head),1024*1024):
             notify('Writing single-file HTML report…');output.write(head[offset:offset+1024*1024])

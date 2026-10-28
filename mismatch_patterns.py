@@ -99,12 +99,60 @@ class Tracker:
         return dict(version=VERSION, columns=columns)
 
 
-def save(tracker, folder):
+def save_result(data, folder):
+    """Write standard JSON plus a small byte-offset index for HTML exports.
+
+    Patterns are serialized once. The index references only the pattern arrays;
+    consumers can still load the original JSON without knowing about the index.
+    """
     target = Path(folder) / FILE
     temporary = target.with_suffix('.part')
-    temporary.write_text(json.dumps(tracker.result(), ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+    entries = {}
+    encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    with temporary.open('wb') as stream:
+        stream.write(b'{"version":' + encode(data['version']) + b',"columns":{')
+        for index, (column, item) in enumerate(data['columns'].items()):
+            if index:
+                stream.write(b',')
+            metadata = {key: value for key, value in item.items() if key != 'patterns'}
+            stream.write(encode(column) + b':' + encode(metadata)[:-1] + b',"patterns":')
+            offset = stream.tell()
+            payload = encode(item['patterns'])
+            stream.write(payload)
+            entries[column] = dict(metadata, offset=offset, length=len(payload))
+            stream.write(b'}')
+        stream.write(b'}}')
     temporary.replace(target)
+    stat = target.stat()
+    index_path = Path(folder) / (FILE + '.index')
+    part = index_path.with_suffix('.part')
+    part.write_bytes(encode(dict(version=VERSION, size=stat.st_size, mtime_ns=stat.st_mtime_ns, columns=entries)))
+    part.replace(index_path)
     return target
+
+
+def save(tracker, folder):
+    return save_result(tracker.result(), folder)
+
+
+def report_index(folder):
+    """Return an index only when it belongs to the current pattern artifact."""
+    try:
+        path = Path(folder) / FILE
+        stat = path.stat()
+        index = json.loads((Path(folder) / (FILE + '.index')).read_text(encoding='utf-8'))
+        if index['version'] != VERSION or (index['size'], index['mtime_ns']) != (stat.st_size, stat.st_mtime_ns):
+            return None
+        for entry in index['columns'].values():
+            if not (isinstance(entry['offset'], int) and isinstance(entry['length'], int)
+                    and entry['offset'] >= 0 and entry['length'] >= 2
+                    and entry['offset'] + entry['length'] <= stat.st_size):
+                return None
+            if not all(name in entry for name in ('more_patterns', 'more_cells', 'partial')):
+                return None
+        return index
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def load(folder):

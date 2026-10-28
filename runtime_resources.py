@@ -104,6 +104,7 @@ def size_worker(job, directory, snapshot=None):
         memory_mb = max(64, (available - reserve) // (MIB * parallel_slots))
     if cap:
         memory_mb = min(memory_mb, cap)
+    assigned_cpus = max(1, min(int(snapshot['cpu_count']), int(allocation.get('cpus') or int(snapshot['cpu_count']) // parallel_slots)))
     columns = max(1, len(job.get('columns') or job.get('source_headers', {}).get('left') or ['']))
     # Wide tables need smaller blocks even when their source compresses very well.
     row_estimate = max(128, columns * 16)
@@ -113,9 +114,9 @@ def size_worker(job, directory, snapshot=None):
                 sort_workers=1, read_batch_size=read_rows, compare_batch_size=compare_rows,
                 native_batch_bytes=max(MIB, min(64 * MIB, memory_mb * MIB // 64)),
                 io_buffer_bytes=max(64 * 1024, min(4 * MIB, memory_mb * MIB // 256)),
-                cpu_threads=max(1, min(4, int(allocation.get('cpus') or int(snapshot['cpu_count']) // parallel_slots))),
+                cpu_threads=min(4, assigned_cpus),
                 # Partitioned comparisons use the CPUs allocated to this run.
-                parallel_workers=max(1, min(16, int(allocation.get('cpus') or int(snapshot['cpu_count']) // parallel_slots))), automatic=True)
+                parallel_workers=min(16, assigned_cpus), automatic=True)
 
 
 def prepare_worker(job, directory):

@@ -12,6 +12,16 @@ from projects import Store
 from test_team_features import FeatureTests
 
 class ParquetTests(unittest.TestCase):
+    def test_blank_schema_name_preserves_other_headers_and_data(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'blank.parquet'
+            pq.write_table(pa.table({'id': ['001', '002'], '': ['Ann', 'Bob'], 'amount': [10, 20]}), path)
+            names, changes = read_header(path, ',', 'utf-8', has_header=False)
+            self.assertEqual(names, ['id', 'column2', 'amount'])
+            self.assertEqual(changes, [dict(column=2, original='', normalized='column2')])
+            with Rows(path, [0, 1], batch_rows=1) as rows:
+                self.assertEqual(list(rows), [['001', 'Ann'], ['002', 'Bob']])
+
     def test_native_projection_nulls_rules_and_resume(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)

@@ -395,6 +395,7 @@ function enhanceSelect(select){
   else if(event.key==='End'){event.preventDefault();items.at(-1)?.focus();}
  });
  select.addEventListener('change',sync);
+ select.addEventListener('input',sync);
  new MutationObserver(sync).observe(select,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','selected','label']});
  sync();
 }
@@ -1266,7 +1267,7 @@ function renderVerdict(){
 {
  const delimiterNames={',':'Comma (,)','|':'Pipe (|)','\t':'Tab',';':'Semicolon (;)','\x01':'Ctrl-A (\\x01)','\x1f':'Unit separator','~':'Tilde (~)','^':'Caret (^)'};
  const encodingNames={'utf-8-sig':'UTF-8','utf-16':'UTF-16','cp1252':'Windows-1252'};
- const fileFormat=side=>job?.files?.[side]?.format||'csv';
+ const fileFormat=side=>job?.files?.[side]?.format||(/\.parquet$/i.test(job?.files?.[side]?.name||'')?'parquet':/\.xls[xm]$/i.test(job?.files?.[side]?.name||'')?'excel':'csv');
  function dialectEditor(side){
   const form=document.createElement('form');form.className='ds-dialect-editor';form.hidden=true;
   const option=(value,label)=>Object.assign(document.createElement('option'),{value,textContent:label});
@@ -1375,7 +1376,7 @@ function renderVerdict(){
    const singleColumn=text&&!chosen.fixed&&/\.(dat|txt)$/i.test(job.files[side].name)&&(job.source_headers?.[side]?.length===1);
    hint.dataset.mode=singleColumn?'fixed':'borrow';
    hint.hidden=!(singleColumn||(headerless&&!borrowed));
-   hint.querySelector('.ds-dialect-hint-text').textContent=singleColumn?'Read as a single column. If this is a fixed-width file, define its layout.':sameWidth?'No header row, so columns are numbered.':`No header row, so columns are numbered. Rename them to match File ${otherNumber}.`;
+   hint.querySelector('.ds-dialect-hint-text').textContent=!(singleColumn||headerless)?'':singleColumn?'Read as a single column. If this is a fixed-width file, define its layout.':sameWidth?'No header row, so columns are numbered.':`No header row, so columns are numbered. Rename them to match File ${otherNumber}.`;
    const borrow=hint.querySelector('.ds-dialect-borrow');borrow.hidden=job.state!=='ready'||(!singleColumn&&!sameWidth);borrow.textContent=singleColumn?'Define layout':`Use File ${otherNumber} names`;
   }
  }

@@ -129,13 +129,13 @@ class PartitionedEngineTests(unittest.TestCase):
         lines = '\n'.join(['h1,h2,h3'] + samples) + '\n'
         (self.root / 'q.csv').write_text(lines, encoding='utf-8')
         options = SimpleNamespace(delimiter=',', encoding='utf-8')
-        packed = []
-        with self.assertRaises(ValueError):
-            with PackedRows(self.root / 'q.csv', ['h1', 'h2', 'h3'], [0, 1, 2], [0], options) as rows:
-                for key, payload in rows:
-                    packed.append((key, payload))
-        expected = list(csv.reader(samples[:4]))
+        from invalid_rows import invalid
+        with PackedRows(self.root / 'q.csv', ['h1', 'h2', 'h3'], [0, 1, 2], [0], options) as rows:
+            packed = list(rows)
+        self.assertTrue(invalid(packed[4][1]))
+        expected = list(csv.reader(samples))
         self.assertEqual([key[0] for key, _ in packed], [row[0] for row in expected])
+
 
 
 if __name__ == '__main__':

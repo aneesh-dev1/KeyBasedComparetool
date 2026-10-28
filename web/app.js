@@ -514,12 +514,27 @@ $('reset').addEventListener('click',async()=>{
   if(uploading)return;
   try{await saveDraft();localStorage.removeItem('keywise-job');localStorage.removeItem(workspaceViewKey);softReload();}catch(error){showError(error);}
 });
+function recoverComparisonRestore(error,id,saved){
+  clearTimeout(pollTimer);job=null;hydratedId=null;renderedId=null;headerDraftJob=null;
+  const missing=error?.message==='Comparison not found'&&[400,404].includes(error.status);
+  if(missing){
+    // Browser storage outlives deleted jobs and even a different server data directory.
+    localStorage.removeItem('keywise-job');
+    localStorage.removeItem('upload-profile:'+id);
+  }
+  panel('uploadPanel');
+  if(!missing){
+    // A temporary connection/server failure must not discard the user's resume target.
+    localStorage.setItem(workspaceViewKey,saved);
+    showError(error);
+  }
+}
 async function restoreCurrentComparison(){
   const id=localStorage.getItem('keywise-job');
   if(id&&/^[a-f0-9]{32}$/.test(id)){
     job={id};
     try{job=await api(endpoint());currentView=job.state==='complete'?'results':['running','queued','error','cancelled'].includes(job.state)?'runningPanel':job.state==='ready'?(job.headers_reviewed===false?'headersPanel':'keysPanel'):'uploadPanel';panel(currentView);await refresh();if(job.state==='uploading')showError(`Upload not finished. Reselect ${job.files.left.name} and ${job.files.right.name} to resume, or start a new comparison.`);}
-    catch(error){job=null;showError(error);$('reset').hidden=false;}
+    catch(error){recoverComparisonRestore(error,id,localStorage.getItem(workspaceViewKey)||'uploadPanel');}
   }
 }
 
@@ -548,14 +563,14 @@ async function restoreWorkspaceOnReload(){
     return;
   }
   const id=localStorage.getItem('keywise-job');
-  if(!id||!/^[a-f0-9]{32}$/.test(id)){panel('uploadPanel');return;}
+  if(!id||!/^[a-f0-9]{32}$/.test(id)){localStorage.removeItem('keywise-job');panel('uploadPanel');return;}
   try{
     job={id};job=await api(endpoint());
     currentView=restorableView(saved,job);panel(currentView);await refresh();
     if(currentView==='headersPanel')renderHeaders();
     if(currentView==='keysPanel'){renderKeys();renderIgnoredColumns();await loadContainers();}
     if(job.state==='uploading')showError(`Upload not finished. Reselect ${job.files.left.name} and ${job.files.right.name} to resume, or start a new comparison.`);
-  }catch(error){job=null;localStorage.removeItem('keywise-job');panel('uploadPanel');showError(error);}
+  }catch(error){recoverComparisonRestore(error,id,saved);}
 }
 
 $('scopeNext').addEventListener('click',startComparison);
@@ -1189,9 +1204,13 @@ function selectedCommentTarget(){
 function commentLabel(note){return (note.column?'Column '+note.column:'All columns')+' · '+(note.key?job.keys.map((k,i)=>k+': '+note.key[i]).join(', '):'All keys');}
 function commentsFor(column,key){return analysisNotesCache.filter(n=>(!n.column||n.column===column)&&(n.key===null||key!==null&&JSON.stringify(n.key)===JSON.stringify(key))).map(n=>`${n.key?(n.column?'Key + column':'Key comment'):'Column comment'} · ${n.status}: ${n.comment}`).join('\n')||'—';}
 function renderCommentScope(){const target=selectedCommentTarget(),kind=$('noteTarget').value;const valid=kind==='key'?!!target.key:kind==='column'?!!target.column:!!target.key&&!!target.column;$('saveNote').disabled=!valid;$('noteScope').textContent=valid?'Comment applies to '+commentLabel(target)+'.':'Select '+(kind==='key'?'a key':kind==='column'?'a column':'a key and column')+' above to add a comment.';}
-function fillCommentEditor(){const target=selectedCommentTarget(),note=analysisNotesCache.find(n=>n.column===target.column&&JSON.stringify(n.key)===JSON.stringify(target.key));$('noteComment').value=note?.comment||'';$('noteStatus').value=note?.status||'Needs investigation';renderCommentScope();}
+function fillCommentEditor(){const target=selectedCommentTarget(),note=analysisNotesCache.find(n=>n.column===target.column&&JSON.stringify(n.key)===JSON.stringify(target.key));$('noteComment').value=note?.comment||'';$('noteStatus').value=note?.status||'Needs investigation';
+  // Property assignments do not emit native events or trigger MutationObserver.
+  // Refresh the displayed dropdowns without firing change handlers that reload the editor.
+  for(const id of ['noteTarget','noteStatus'])$(id).dispatchEvent(new Event('input',{bubbles:true}));
+  renderCommentScope();}
 $('noteTarget').addEventListener('change',fillCommentEditor);
-async function loadNotes(){const result=await api(endpoint('/annotations'));analysisNotesCache=result.notes;$('analysisNotes').replaceChildren();for(const note of result.notes.slice(0,100)){const p=document.createElement('p'),label=document.createElement('span'),edit=document.createElement('button');label.textContent=commentLabel(note)+' · '+note.status+': '+note.comment;edit.textContent='View / edit';edit.className='subtle';edit.addEventListener('click',async()=>{$('analysisMode').value=note.key?'keys':'columns';$('analysisColumnSearch').value='';analysisColumns();$('analysisColumn').value=note.column;selectAnalysisKey(note.key);analysisOffset=0;await loadAnalysis();$('noteTarget').value=note.key?(note.column?'cell':'key'):'column';fillCommentEditor();document.querySelector('.review-comments').open=true;$('noteComment').focus();});p.append(label,edit);$('analysisNotes').append(p);}if(!result.notes.length)$('analysisNotes').textContent='No comments yet. Select a column or key to begin.';if(result.notes.length>100){const p=document.createElement('p');p.textContent=`Showing 100 of ${result.notes.length} saved comments. Applicable comments still appear on every mismatch row.`;$('analysisNotes').append(p);}}
+async function loadNotes(){const result=await api(endpoint('/annotations'));analysisNotesCache=result.notes;$('analysisNotes').replaceChildren();for(const note of result.notes.slice(0,100)){const p=document.createElement('p'),label=document.createElement('span'),edit=document.createElement('button');label.textContent=commentLabel(note)+' · '+note.status+': '+note.comment;edit.textContent='View / edit';edit.className='subtle';edit.addEventListener('click',async()=>{$('analysisMode').value=note.key?'keys':'columns';$('analysisColumnSearch').value='';analysisColumns();if(note.column&&![...$('analysisColumn').options].some(option=>option.value===note.column))$('analysisColumn').add(new Option(note.column,note.column));$('analysisColumn').value=note.column;selectAnalysisKey(note.key);analysisOffset=0;await loadAnalysis();$('noteTarget').value=note.key?(note.column?'cell':'key'):'column';fillCommentEditor();document.querySelector('.review-comments').open=true;$('noteComment').focus();});p.append(label,edit);$('analysisNotes').append(p);}if(!result.notes.length)$('analysisNotes').textContent='No comments yet. Select a column or key to begin.';if(result.notes.length>100){const p=document.createElement('p');p.textContent=`Showing 100 of ${result.notes.length} saved comments. Applicable comments still appear on every mismatch row.`;$('analysisNotes').append(p);}}
 $('saveNote').addEventListener('click',async()=>{try{await api(endpoint('/annotations'),{...selectedCommentTarget(),status:$('noteStatus').value,comment:$('noteComment').value});await loadNotes();await loadAnalysis();job=await api(endpoint());renderExports();}catch(e){showError(e);}});
 
 let notificationSnapshot=null,notificationPolling=false,notificationSince=Date.now()/1000;

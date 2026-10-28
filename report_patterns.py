@@ -8,17 +8,40 @@ def pattern_drawer_chunks(report,summary,notify):
     """The drawer's data and markup. Patterns are counted while comparing (mismatch_patterns); runs from before
     that are grouped once from differences.csv and the result is kept with the run."""
     import mismatch_patterns
-    data=mismatch_patterns.load(report)
-    if data is None:
-        notify('Grouping mismatch patterns for an older run…')
-        data=mismatch_patterns.save(mismatch_patterns.from_differences(report,notify),report) and mismatch_patterns.load(report)
-    # Each column's most common patterns as [File 1 value, File 2 value, count], plus up to five sample keys for
-    # its 50 most common. Scripts are inert JSON until their column is opened.
-    yield ('<style>'+DRAWER_STYLE+'</style>')
-    for c,count in summary['changed_cells_by_column'].items():
-        if not count:continue
-        item=data['columns'].get(c,dict(patterns=[],more_patterns=0,more_cells=count,partial=True))
-        yield ('<script type="application/json" class="column-pattern-data" data-column="'+html.escape(c,quote=True)+f'" data-total="{count}" data-more-patterns="{item["more_patterns"]}" data-more-cells="{item["more_cells"]}" data-partial="{int(item["partial"])}">'+safe_json(item['patterns'])+'</script>')
+    index = mismatch_patterns.report_index(report)
+    data = None
+    if index is None:
+        data = mismatch_patterns.load(report)
+        if data is None:
+            notify('Grouping mismatch patterns for an older run…')
+            mismatch_patterns.save(mismatch_patterns.from_differences(report, notify), report)
+            index = mismatch_patterns.report_index(report)
+            if index is None:
+                data = mismatch_patterns.load(report)
+    # Saved offsets avoid rebuilding millions of Python values just to encode
+    # them back to JSON. Escape script delimiters even on this direct-copy path.
+    yield '<style>' + DRAWER_STYLE + '</style>'
+    import contextlib
+    source = (report / mismatch_patterns.FILE).open('rb') if index else contextlib.nullcontext()
+    with source as stream:
+        for number, (c, count) in enumerate(summary['changed_cells_by_column'].items()):
+            if not count:
+                continue
+            if number % 32 == 0:
+                notify('Writing column mismatch patterns…')
+            item = (index if index else data)['columns'].get(c)
+            if item is None:
+                item = dict(patterns=[], more_patterns=0, more_cells=count, partial=True)
+                patterns = '[]'
+            elif index:
+                stream.seek(item['offset'])
+                raw = stream.read(item['length'])
+                if len(raw) != item['length'] or not raw.startswith(b'[') or not raw.endswith(b']'):
+                    raise ValueError('Saved mismatch patterns changed during report generation. Retry the export.')
+                patterns = raw.decode('utf-8').replace('&', '\\u0026').replace('<', '\\u003c').replace('>', '\\u003e')
+            else:
+                patterns = safe_json(item['patterns'])
+            yield ('<script type="application/json" class="column-pattern-data" data-column="'+html.escape(c,quote=True)+f'" data-total="{count}" data-more-patterns="{item["more_patterns"]}" data-more-cells="{item["more_cells"]}" data-partial="{int(item["partial"])}">'+patterns+'</script>')
     yield ('<script type="application/json" id="report-comment-data">'+safe_json(summary.get('analysis_notes',[]))+'</script>')
     yield (DRAWER_HTML)
 

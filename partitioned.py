@@ -16,6 +16,7 @@ range that ends inside a quoted line break fails its strict parse, so it is merg
 and re-read from the last proven boundary. Genuine errors are reported with the same global record
 number as the sequential engines.
 """
+from invalid_rows import invalid, combine as combine_invalid, FIELDS as SKIP_FIELDS, COUNTERS as SKIP_COUNTERS
 import base64
 import bisect
 import csv
@@ -57,7 +58,8 @@ def encode_key(values):
 
 def worker_count(args):
     explicit = int(getattr(args, 'parallel_workers', 0) or 0)
-    return max(1, explicit or min(16, os.cpu_count() or 1))
+    from runtime_resources import cpu_capacity
+    return max(1, min(explicit or 16, cpu_capacity()))
 
 
 def _wide_text(args):
@@ -243,6 +245,14 @@ def _init_worker(max_field_mb, progress=None):
     global _PROGRESS
     csv.field_size_limit(max_field_mb * MIB)
     _PROGRESS = progress
+    # Each process is already a CPU worker: native thread pools must not multiply
+    # the broker's allocation by the host core count.
+    try:
+        import pyarrow as pa
+        pa.set_cpu_count(1)
+        pa.set_io_thread_count(1)
+    except ImportError:
+        pass
 
 
 def _report(task, done):
@@ -525,7 +535,7 @@ def _read_fingerprints(task):
             span_end[0] = offset + len(line)
             row = next(csv.reader(itertools.chain((text(line, newline),), continuation()), delimiter=delimiter, strict=True))
             if len(row) != width:
-                raise ValueError(f'{path}: record {count}: expected {width} fields, got {len(row)}')
+                raise _NotSimple  # Re-read this range with the audited CSV parser.
             key_values = tuple(row[i] for i in key_positions)
             payload = pack_values(row if full else [row[i] for i in order])
         key = encode_key(key_values)
@@ -578,6 +588,8 @@ def _resolve(left, right, samples, task):
         if other is None:
             continue
         a, b = entry[0], other[0]
+        if invalid(a) or invalid(b):
+            continue
         if a[:1] == REF and b[:1] == REF and a[2:18] == b[2:18] and (mode == 'canonical' or a[1:2] == b[1:2]):
             entry[0] = other[0] = SAME
             continue
@@ -613,7 +625,7 @@ def _partition_range(task):
                             task['memory_mb'], task['native_batch_bytes'], row_groups=task['groups'])
     else:
         from csv_input import PackedRows
-        options = SimpleNamespace(dialects={side: task['dialect']}, io_buffer_bytes=4 * MIB)
+        options = SimpleNamespace(dialects={side: task['dialect']}, io_buffer_bytes=4 * MIB, range_start=None if task['whole'] else task['start'])
         opener = None if task['whole'] else (lambda: open_range(path, task['start'], task['end'], task['dialect']['encoding']))
         reader = PackedRows(path, task['names'], task['order'], task['key_positions'], options, side=side, opener=opener)
     buffers = [[] for _ in range(len(bounds) + 1)]
@@ -678,12 +690,15 @@ def _load_partition(segments, policy, capture):
                 continue
             occurrences = previous[1] + 1
             # Same diagnostic sample as the other engines: the smallest duplicated key, first three rows.
-            if capture:
+            if capture and not invalid(previous[0]) and not invalid(payload):
                 if occurrences == 2 and (sample is None or key < sample[0]):
                     sample = (key, [previous[0], payload])
                 elif sample is not None and sample[0] == key and len(sample[1]) < 3:
                     sample[1].append(payload)
-            if policy == 'last':
+            bad = combine_invalid(previous[0], payload, occurrences)
+            if bad is not None:
+                previous[0] = bad
+            elif policy == 'last':
                 previous[0] = payload
             previous[1] = occurrences
     return rows, sample
@@ -701,15 +716,16 @@ def _join_partition(task):
     stats = dict(matched_keys=0, equal_rows=0, changed_rows=0, changed_cells=0, left_only=0, right_only=0,
                  override_equivalent_cells=0, rule_equivalent_cells=0, left_duplicate_keys=0,
                  left_duplicate_rows_skipped=0, right_duplicate_keys=0, right_duplicate_rows_skipped=0)
+    stats.update({name: 0 for name in SKIP_COUNTERS})
     columns = {name: 0 for name in task['columns']}
     from mismatch_patterns import Tracker
     tracker = Tracker()
-    names = ('differences', 'left_only', 'right_only', 'matched_keys', 'raw_differences', 'dup_left', 'dup_right')
+    names = ('skipped_keys', 'differences', 'left_only', 'right_only', 'matched_keys', 'raw_differences', 'dup_left', 'dup_right')
     streams = {name: open(out / f'{name}-{part:05d}.csv', 'w', encoding='utf-8', newline='', buffering=4 * MIB) for name in names}
     try:
         writers = {name: csv.writer(stream) for name, stream in streams.items()}
         for side, rows in (('left', left), ('right', right)):
-            for key in sorted(key for key, entry in rows.items() if entry[1] > 1):
+            for key in sorted(key for key, entry in rows.items() if entry[1] > 1 and not invalid(entry[0])):
                 count = rows[key][1]
                 stats[side + '_duplicate_keys'] += 1
                 stats[side + '_duplicate_rows_skipped'] += count - 1
@@ -730,7 +746,7 @@ def _join_partition(task):
     patterns_file = out / f'patterns-{part:05d}.json'
     patterns_file.with_suffix('.part').write_text(json.dumps(tracker.state(), ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
     patterns_file.with_suffix('.part').replace(patterns_file)
-    samples = {name: (sample[0], sample[1], rows[sample[0]][1]) for name, sample, rows in (('left', left_sample, left), ('right', right_sample, right)) if sample}
+    samples = {name: (sample[0], sample[1], rows[sample[0]][1]) for name, sample, rows in (('left', left_sample, left), ('right', right_sample, right)) if sample and not invalid(rows[sample[0]][0])}
     return dict(part=part, stats=stats, columns=columns, samples=samples)
 
 
@@ -966,7 +982,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
     work = Path(temp) / (WORK_DIR if checkpointed else f'partitioned-{os.getpid()}')
     journal = None
     if checkpointed:
-        journal = _Journal(work, dict(version=1, range_bytes=RANGE_BYTES, canonical=list(canonical), keys=list(args.keys)))
+        journal = _Journal(work, dict(version=2, range_bytes=RANGE_BYTES, canonical=list(canonical), keys=list(args.keys)))
     else:
         shutil.rmtree(work, ignore_errors=True)
         (work / 'spill').mkdir(parents=True)
@@ -1164,7 +1180,7 @@ def run(args, left_names, right_names, canonical, temp, stats, columns, out, pol
 
 def _assemble(out, parts, count, keys):
     """Concatenate partial outputs in key-range order under the same headers as the other engines."""
-    layout = [('differences', ['key_json', 'column', 'left_value', 'right_value'], ['differences']),
+    layout = [('skipped_keys', SKIP_FIELDS, ['skipped_keys']), ('differences', ['key_json', 'column', 'left_value', 'right_value'], ['differences']),
               ('left_only', keys, ['left_only']), ('right_only', keys, ['right_only']),
               ('matched_keys', ['key_json'], ['matched_keys']),
               ('raw_differences', ['key_json', 'column', 'left_value', 'right_value', 'left_null', 'right_null'], ['raw_differences']),

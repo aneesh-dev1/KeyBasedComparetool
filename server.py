@@ -133,6 +133,7 @@ class Application:
         self.pool = ThreadPoolExecutor(max_workers=max_jobs)
         self.light_pool = ThreadPoolExecutor(max_workers=2)
         self.allocations = {}
+        self.resource_ready = threading.Condition(self.lock)
         self.json_lock = threading.Lock()
         self.tasks = {}
         self.max_jobs = max_jobs
@@ -180,26 +181,27 @@ class Application:
             self.tasks[(identity,kind)]={'future':future,'queued_at':time.time()}
 
     def allocate(self, identity, weight):
-        """Share CPUs and comparison memory between running comparisons in proportion to their input size.
+        """Reserve non-overlapping CPU and memory shares; None means stay queued.
 
-        A comparison keeps what it was given when it started; a new one gets its weighted share of the CPUs,
-        limited to what is free (at least one), and the same weighted share of the memory budget.
+        Leave one CPU for requests/reports on multi-core hosts. A running job keeps
+        its allocation; another job waits instead of oversubscribing the same cores.
         """
         from runtime_resources import cpu_capacity
         with self.lock:
-            cpus = cpu_capacity()
-            running = dict(self.allocations)
-            total_weight = sum(item['weight'] for item in running.values()) + weight
-            share = weight / total_weight if total_weight else 1.0
-            free = cpus - sum(item['cpus'] for item in running.values())
-            given = cpus if not running else max(1, min(max(1, round(cpus * share)), free))
-            allocation = dict(weight=weight, cpus=given, memory_share=round(share, 4) if running else 1.0, concurrent=len(running) + 1)
+            capacity = max(1, cpu_capacity() - 1)
+            free = capacity - sum(item['cpus'] for item in self.allocations.values())
+            if free <= 0:
+                return None
+            given = min(16, free)
+            allocation = dict(weight=weight, cpus=given, memory_share=given / capacity,
+                              concurrent=len(self.allocations) + 1)
             self.allocations[identity] = allocation
             return allocation
 
     def release(self, identity):
-        with self.lock:
+        with self.resource_ready:
             self.allocations.pop(identity, None)
+            self.resource_ready.notify_all()
 
     def mark_cancelled(self,identity,kind):
         job=self.load(identity)
@@ -642,7 +644,13 @@ class Application:
         if self.load(identity).get('execution_mode')=='review':return self.run_review(identity)
         job = self.load(identity)
         weight = max(1, sum(int(item.get('size') or 0) for item in job['files'].values()))
-        allocation = self.allocate(identity, weight)
+        with self.resource_ready:
+            allocation = None
+            while allocation is None:
+                check_cancel(self.directory(identity)/'cancel-comparison')
+                allocation = self.allocate(identity, weight)
+                if allocation is None:
+                    self.resource_ready.wait(timeout=0.25)
         try:
             self._run_comparison(identity, allocation)
         finally:
@@ -668,6 +676,8 @@ class Application:
             summary['source_types']={side:dict(zip(job.get('source_headers',{}).get(side,[]),job['files'][side].get('parquet',{}).get('types',[]))) if job['files'][side].get('format')=='parquet' else {'values':'stored Excel values converted to text' if job['files'][side].get('format')=='excel' else 'text'} for side in ('left','right')}
             atomic_write_text(directory / 'report/summary.json',json.dumps(summary, indent=2))
             (directory / 'report/summary.html').write_text(make_summary_html(summary), encoding='utf-8')
+            inherited_notes=directory/'inherited-annotations.json'
+            if inherited_notes.exists():shutil.copy2(inherited_notes,directory/'report/annotations.json')
             # The HTML report is part of Write results, so a completed comparison opens with its report ready.
             # Excel is generated on request from the Analysis page with the options the user chooses.
             self.write_html_report(identity)
@@ -1138,9 +1148,13 @@ class Handler(BaseHTTPRequestHandler):
                         draft['value_overrides']=rules
                         copy.update(owner=self.workspace,id=new_id,state='ready',created=time.time(),exports={},headers_reviewed=True,draft=draft,review_of=identity)
                         copy['execution_mode']=decision['mode']
+                        # Snapshot review notes independently of execution mode and scope.
+                        # The full worker recreates report artifacts, so restore this snapshot afterwards.
+                        notes_source=directory/'report/annotations.json'
+                        if notes_source.exists():shutil.copy2(notes_source,target/'inherited-annotations.json')
                         if decision['mode']=='review':
                             retained=target/'baseline';retained.mkdir()
-                            for name in ('summary.json','differences.csv','raw_differences.csv','matched_keys.csv','left_only.csv','right_only.csv','duplicate_keys.csv'):
+                            for name in ('summary.json','differences.csv','raw_differences.csv','matched_keys.csv','left_only.csv','right_only.csv','duplicate_keys.csv','skipped_keys.csv'):
                                 if (baseline/name).exists():os.link(baseline/name,retained/name)
                             if (directory/'report/annotations.json').exists():shutil.copy2(directory/'report/annotations.json',retained/'annotations.json')
                         self.app.save(copy)
@@ -1204,7 +1218,7 @@ class Handler(BaseHTTPRequestHandler):
                     if self.command=='POST':
                         current=self.app.load(identity)
                         config=self.body();column=config.get('column','');key=config.get('key');comment=config.get('comment','');status=config.get('status')
-                        if column and column not in job['summary']['changed_cells_by_column']:raise ValueError('Choose a compared column')
+                        if column and column not in job['columns']:raise ValueError('Choose a valid column')
                         if key is not None and (not isinstance(key,list) or len(key)!=len(job['keys']) or any(not isinstance(v,str) or len(v)>1000 for v in key)):raise ValueError('Invalid annotation key')
                         if not column and key is None:raise ValueError('Choose a column or an exact key for this note')
                         if status not in ('Expected','Needs investigation','Resolved') or not isinstance(comment,str) or len(comment)>2000:raise ValueError('Choose a classification and use at most 2,000 comment characters')
@@ -1580,7 +1594,7 @@ class Handler(BaseHTTPRequestHandler):
                     target = directory / name
                 elif kind and job['exports'].get(kind, {}).get('state') == 'complete':
                     target = directory / name
-                elif name in ('duplicate_keys.csv', 'differences.csv', 'left_only.csv', 'right_only.csv', 'summary.html', 'summary.json'):
+                elif name in ('skipped_keys.csv', 'duplicate_keys.csv', 'differences.csv', 'left_only.csv', 'right_only.csv', 'summary.html', 'summary.json'):
                     target = directory / 'report' / name
                 else:
                     raise ValueError('Report not available yet')

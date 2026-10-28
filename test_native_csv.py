@@ -122,8 +122,10 @@ class NativeCSVTests(unittest.TestCase):
                 path = self.root / 'invalid.csv'
                 path.write_text('id,v\n' + record, encoding='utf-8')
                 with PackedRows(path, ['id', 'v'], [0, 1], [0], args) as source:
-                    with self.assertRaisesRegex(ValueError, 'expected 2 fields'):
-                        list(source)
+                    from invalid_rows import invalid
+                    values=list(source)
+                    self.assertEqual(len(values),1)
+                    self.assertTrue(invalid(values[0][1]))
         for record in ('1,"unterminated\n', '1,"quoted"junk\n'):
             with self.subTest(record=repr(record)):
                 path.write_text('id,v\n' + record, encoding='utf-8')

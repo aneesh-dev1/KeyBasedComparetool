@@ -69,6 +69,7 @@ class CompactRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);(root/'a.csv').write_text('id,v\n1,x,extra\n');(root/'b.csv').write_text('id,v\n1,x\n')
             args=parser().parse_args(['--engine','sort',str(root/'a.csv'),str(root/'b.csv'),'--keys','id','--output',str(root/'out'),'--temp-dir',str(root),'--sort-workers','2'])
-            with contextlib.redirect_stdout(io.StringIO()),self.assertRaisesRegex(ValueError,'expected 2 fields'):compare(args)
+            with contextlib.redirect_stdout(io.StringIO()):result=compare(args)
+            self.assertEqual(result['malformed_records'],1)
             self.assertFalse(list(root.glob('csv-compare-*')))
-            self.assertFalse((root/'out'/'summary.json').exists())
+            self.assertTrue((root/'out'/'summary.json').exists())

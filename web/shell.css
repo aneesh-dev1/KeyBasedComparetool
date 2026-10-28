@@ -50,7 +50,8 @@ body:not(.sidebar-collapsed) #workspaceSidebar #comparisonMenu.is-closing>.ds-me
 @media (max-width:800px){body:not(.sidebar-collapsed) #workspaceSidebar .brand-logo{margin-left:4.5px}}
 
 /* ───────────── Top bar ───────────── */
-/* Below the sidebar (z-index 30) so the hover-expanded sidebar overlays it. */
+/* Keep refresh and normal navigation in the same layer order: loader 20, topbar 25, backdrop 28, sidebar 30. */
+#sidebarBackdrop{z-index:28}
 .workspace-topbar.ds{position:sticky;top:0;z-index:25;display:flex;align-items:center;justify-content:space-between;gap:var(--space-4);height:var(--topbar-height);margin:0 calc(-1 * var(--space-8)) var(--space-6);padding:0 var(--space-8);background:rgb(255 255 255/.86);backdrop-filter:saturate(1.4) blur(10px);border-bottom:1px solid var(--border-default)}
 .workspace-topbar.ds>div:first-child{display:flex;align-items:center;gap:var(--space-2);min-width:0;font-size:var(--text-sm);color:var(--text-muted)}
 .workspace-topbar.ds>div:first-child>strong{font-weight:500;color:var(--text-muted)}
@@ -140,9 +141,9 @@ body:not(.sidebar-collapsed) #workspaceSidebar #comparisonMenu.is-closing>.ds-me
 /* In-app restart: the loader covers the content area only; the sidebar stays visible and still. */
 /* After Refresh the loader covers only the page content: the sidebar and the top bar stay in place. Until the
    top bar is rebuilt, the loader's own strip holds its place so nothing else shows there. */
-.soft-reload #appPreloader{left:60px;top:var(--topbar-height);z-index:50;background:var(--surface-canvas)}
+.soft-reload #appPreloader{left:60px;top:var(--topbar-height);z-index:20;background:var(--surface-canvas)}
 .soft-reload #appPreloader::before{content:"";position:absolute;left:0;right:0;top:calc(-1 * var(--topbar-height));height:var(--topbar-height);box-sizing:border-box;background:#fff;border-bottom:1px solid var(--border-subtle,#d9e3e9)}
-.soft-reload .workspace-topbar.ds{z-index:60}
+.soft-reload .workspace-topbar.ds{z-index:25}
 .soft-reload #appPreloader img{width:56px;height:56px}
 .soft-reload #appPreloader strong{display:none}
 
@@ -768,7 +769,7 @@ body.reduce-motion #recompareFab,body.reduce-motion #recompareFab *{transition:n
 #headersPanel.ds :is(.ds-dialect-change,.ds-dialect-borrow):focus-visible{outline:none;box-shadow:var(--focus-ring)}
 #headersPanel.ds .ds-dialect-change .lucide{width:12px;height:12px}
 #headersPanel.ds .ds-dialect-change[aria-expanded=true]{background:var(--tu-cyan-50);border-color:var(--tu-cyan-300);color:var(--tu-cyan-700)}
-#headersPanel.ds :is(.ds-dialect-change,.ds-dialect-borrow,.ds-dialect-hint)[hidden]{display:none}
+#headersPanel.ds :is(.ds-dialect-change,.ds-dialect-borrow,.ds-dialect-hint)[hidden]{display:none!important}
 #headersPanel.ds .ds-dialect-editor{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:var(--space-2) var(--space-3);padding:var(--space-2) var(--space-4) var(--space-3);background:var(--surface-sunken);border-top:1px dashed var(--border-default);animation:ds-dialect-in var(--dur-2) var(--ease-out)}
 #headersPanel.ds .ds-dialect-editor[hidden]{display:none}
 #headersPanel.ds .ds-dialect-editor label{display:grid;gap:4px;min-width:0;font:600 var(--text-2xs)/1.4 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint)}

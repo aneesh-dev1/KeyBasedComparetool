@@ -86,12 +86,12 @@ def detect_header(text, delimiter):
     if not rows:
         return True
     first, body = rows[0], [row for row in rows[1:] if len(row) == len(rows[0])]
-    if any(not name.strip() for name in first) or len({name.strip().casefold() for name in first}) != len(first):
-        return False
     if not body:
         return True
     votes = 0
     for index, name in enumerate(first):
+        if not name.strip():
+            continue
         kinds = {_kind(row[index]) for row in body} - {'empty'}
         if len(kinds) != 1:
             continue
@@ -99,7 +99,11 @@ def detect_header(text, delimiter):
         if kind in ('number', 'date'):
             votes += 1 if _kind(name) != kind else -1
     # Column names are text; a first row with no evidence either way is treated as a header.
-    return votes >= 0 and not all(_kind(name) in ('number', 'date') for name in first)
+    # Blank or repeated labels are valid imperfect headers: read_header normalizes
+    # them without discarding the named columns. Only data-type evidence should
+    # classify the first row as data; blanks do not provide that evidence.
+    named = [name for name in first if name.strip()]
+    return votes >= 0 and any(_kind(name) == 'text' for name in named)
 
 
 def detect(path, delimiter='auto', encoding='auto', header='auto'):
