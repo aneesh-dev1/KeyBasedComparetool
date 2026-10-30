@@ -9,6 +9,14 @@ import itertools
 from operator import itemgetter
 
 
+def located(error, path, record):
+    """A CSV parse error with the file and record it happened in, and a hint for the usual cause."""
+    message = str(error)
+    if 'end of data' in message or 'EOF' in message:
+        message += ': a quoted value is probably missing its closing quote'
+    return csv.Error(f'{path}: record {record}: {message}')
+
+
 class PackedRows:
     def __init__(self,path,names,order,key_positions,args,position=0,count=0,side=None,opener=None):
         from compare import dialect
@@ -84,7 +92,8 @@ class PackedRows:
                         yield key,b'\x00'+'\x1f'.join(values).encode('utf-8')
                         continue
             self.parsed_rows+=1
-            row=next(csv.reader(itertools.chain((line,),lines),delimiter=delimiter,strict=True))
+            try:row=next(csv.reader(itertools.chain((line,),lines),delimiter=delimiter,strict=True))
+            except csv.Error as error:raise located(error,self.path,self.count) from None
             if len(row)!=len(self.names):
                 from invalid_rows import record
                 location = f'record {self.count}'

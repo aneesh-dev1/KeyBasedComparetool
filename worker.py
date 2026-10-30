@@ -50,6 +50,12 @@ if __name__ == '__main__':
                            column_headers=job.get('column_headers'),
                            ignore_key_containers=job.get('ignore_key_containers', []),
                            progress_file=directory / 'progress.json')
+    if job.get('sample'):
+        # A project round: compare a sample of File 1's keys, re-checking an earlier round's keys when asked.
+        from sampling import load_keys
+        sample = job['sample']
+        carry = load_keys(directory.parent / sample['from'] / 'report') if sample.get('from') else None
+        args.sample = dict(size=sample['size'], seed=sample['seed'], carry=carry or [])
     try:
         compare(args)
     except Exception as error:

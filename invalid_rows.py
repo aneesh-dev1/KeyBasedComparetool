@@ -42,6 +42,15 @@ def record(row, width, positions, location, source):
     return key, _pack(evidence)
 
 
+def blank_key(location, source, names=(), values=()):
+    """A well-formed record with a blank key value. Its counterpart cannot be identified, so it is audited as
+    "key unavailable" and kept out of the join, like an unidentifiable malformed record."""
+    blank = [name for name, value in zip(names, values) if value in ('', None)]
+    evidence = dict(key=None, location=location, expected='', actual='',
+                    reason='Blank key value' + (f" in {', '.join(blank)}" if blank else ''))
+    return ({'invalid_source': str(source), 'location': location},), _pack(evidence)
+
+
 def combine(previous, payload, occurrences):
     """Malformed occurrences take precedence over either duplicate-selection policy."""
     if not (invalid(previous) or invalid(payload)):

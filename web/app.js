@@ -118,6 +118,8 @@ function panel(name) {
 }
 function duplicatePolicyValue(){return $('duplicatePolicy')?.value||'first';}
 function configuration(){return {duplicate_policy:duplicatePolicyValue(),keys:[...selected],ignore_columns:[...ignoredColumns],ignore_keys:$('ignoreKeys').value,ignore_container_ids:[...selectedContainers],value_overrides:overrideRules,comparison_rules:valueRules.filter(r=>!selected.has(r.column)&&!ignoredColumns.has(r.column))};}
+// The start request; project rounds add their sample and project (enterprise.js).
+function startConfiguration(){return configuration();}
 async function saveDraft(){if(job?.state==='ready')await api(endpoint('/config'),configuration());}
 async function goView(name){
   // Once files are loaded, the Files step always shows the header table (read-only after a run starts).
@@ -323,7 +325,7 @@ $('ignoreNext').addEventListener('click',()=>{ignorePage++;renderIgnoredColumns(
 async function startComparison(){
   if(job?.state!=='ready'||!selected.size||$('compare').disabled)return;
   clearError();$('compare').disabled=$('scopeNext').disabled=true;
-  try {job=await api(endpoint('/start'),configuration());panel('runningPanel');await refresh();}
+  try {job=await api(endpoint('/start'),startConfiguration());panel('runningPanel');await refresh();}
   catch(error){showError(error);$('compare').disabled=$('scopeNext').disabled=false;}
 }
 $('compare').addEventListener('click',startComparison);
@@ -331,9 +333,11 @@ function renderSummary() {
   const s=job.summary;
   renderResultChart(s);
   const changes=Object.entries(s.changed_cells_by_column).filter(([,count])=>count>0).sort((a,b)=>b[1]-a[1]);
-  $('resultTitle').textContent=s.changed_rows||s.left_only||s.right_only?'Your comparison is ready.':'Both files match within the selected scope.';
-  $('resultSubtitle').textContent=`${number(s.left_rows)} rows in File 1 · ${number(s.right_rows)} rows in File 2 · Keys: ${s.keys.join(', ')}`;
-  $('scopeSummary').textContent=`${number(s.ignored_columns?.length||0)} columns ignored · ${number(s.left_excluded_rows||0)} File 1 rows and ${number(s.right_excluded_rows||0)} File 2 rows excluded by key. ${number(s.value_overrides?.length||0)} value overrides; ${number((s.override_equivalent_cells||0)+(s.rule_equivalent_cells||0))} unequal cells accepted by rules. Counts refer to the selected scope.`;
+  $('resultTitle').textContent=s.changed_rows||s.left_only||s.right_only?'Your comparison is ready.':s.malformed_records?'Compared values match, but some records were skipped.':'Both files match within the selected scope.';
+  $('resultSubtitle').textContent=`${number(s.left_rows)} rows in File 1 · ${number(s.right_rows)} rows in File 2 · Keys: ${s.keys.join(', ')}`+(s.sample?` · Sample of ${number(s.sample.size)} keys`:'');
+  // A project round compares a sample of keys; rows outside it are left out, not excluded by the user.
+  const sampled=s.sample?` Compared a random sample of ${number(s.sample.size)} keys from File 1 (seed ${s.sample.seed}${s.sample.carried?`, ${number(s.sample.carried)} carried from the previous round`:''}); other rows are not compared.`:'';
+  $('scopeSummary').textContent=`${number(s.ignored_columns?.length||0)} columns ignored · `+(s.sample?`${number(s.ignored_keys_count||0)} keys excluded.${sampled}`:`${number(s.left_excluded_rows||0)} File 1 rows and ${number(s.right_excluded_rows||0)} File 2 rows excluded by key.`)+` ${number(s.value_overrides?.length||0)} value overrides; ${number((s.override_equivalent_cells||0)+(s.rule_equivalent_cells||0))} unequal cells accepted by rules. Counts refer to the selected scope.`;
   const duplicates=(s.left_duplicate_rows_skipped||0)+(s.right_duplicate_rows_skipped||0);
   $('duplicateDownload').hidden=!duplicates;$('duplicateDownload').href=downloadUrl('duplicate_keys.csv');
   if(duplicates){$('resultTitle').textContent='Comparison complete — duplicate keys found';$('scopeSummary').textContent+=` Warning: ${number(s.left_duplicate_rows_skipped||0)} File 1 rows and ${number(s.right_duplicate_rows_skipped||0)} File 2 rows skipped as duplicates. Kept the ${s.duplicate_policy||'first'} source occurrence per key. Download the duplicate audit for details.`;}
@@ -410,7 +414,7 @@ $('headerSearch').addEventListener('blur',()=>{if(!$('headerSearch').value)setHe
 $('headerSearch').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();$('headerSearch').value='';headerPage=0;renderHeaders();setHeaderSearchOpen(false);$('headerSearchToggle').focus();}});
 function headerSources(){return job.source_headers||{left:job.columns,right:job.columns};}
 function renderHeaders(){
-  if(headerDraftJob!==job.id){headerDraft=structuredClone(job.column_headers||headerSources());headerDraftJob=job.id;headerDirty=false;headerPage=0;}
+  if(headerDraftJob!==job.id){headerDraft=structuredClone(job.column_headers||headerSources());headerDraftJob=job.id;headerDirty=false;headerPage=0;$('headerSearch').value='';}
   const search=$('headerSearch').value.toLowerCase();
   const source=headerSources();
   const matches=Object.fromEntries(['left','right'].map(side=>[side,source[side].map((name,i)=>i).filter(i=>(source[side][i]+' '+headerDraft[side][i]).toLowerCase().includes(search))]));
@@ -592,7 +596,7 @@ $('reviewCompare').addEventListener('click',async()=>{
   try{
     job=await api(endpoint('/review-copy'),{value_overrides:overrideRules});
     localStorage.setItem('keywise-job',job.id);hydratedId=null;headerDraftJob=null;renderedId=null;hydrate();
-    job=await api(endpoint('/start'),configuration());panel('runningPanel');await refresh();
+    job=await api(endpoint('/start'),startConfiguration());panel('runningPanel');await refresh();
   }catch(error){if(job?.state==='ready'){panel('keysPanel');renderKeys();renderIgnoredColumns();}showError(error);}finally{$('reviewCompare').disabled=job?.state!=='complete';}
 });
 function renderOverrideColumns(){
@@ -1138,7 +1142,7 @@ async function loadAnalysis(){
       td.append(button);if(isDetails){const comment=document.createElement('button');comment.className='subtle';comment.textContent='Comment';comment.addEventListener('click',()=>{selectAnalysisKey(row.slice(0,job.keys.length));$('noteTarget').value='key';fillCommentEditor();$('analysisPanel').querySelector('.review-comments').open=true;$('noteComment').focus();});td.append(comment);}tr.append(td);table.append(tr);
     });
     {const th=document.createElement('th');th.textContent=mode==='patterns'?'Review':headers.at(-1)==='Inspect'?'Open':'Explore record';head.append(th);}
-    $('analysisStatus').textContent=total?`${number(total)} ${mode==='patterns'?'value-change patterns':headers.at(-1)==='Inspect'?(mode==='columns'?'columns':'keys'):'mismatched cells'}. ${headers.at(-1)==='Inspect'?'Choose a result below to review it.':'File 1 values are shaded red; File 2 values are shaded green.'}`:keyStatus==='left_only'?'This key exists only in File 1.':keyStatus==='right_only'?'This key exists only in File 2.':keyText?'No recorded differences for this key. It may be equal, excluded, or absent from both files.':column?'No mismatches in this column.':'No results for this view. Try a different column search or switch views.';
+    $('analysisStatus').textContent=total?`${number(total)} ${mode==='patterns'?'value-change patterns':headers.at(-1)==='Inspect'?(mode==='columns'?'columns':'keys'):'mismatched cells'}. ${headers.at(-1)==='Inspect'?'Choose a result below to review it.':'File 1 values are shaded green; File 2 values are shaded red.'}`:keyStatus==='left_only'?'This key exists only in File 1.':keyStatus==='right_only'?'This key exists only in File 2.':keyText?'No recorded differences for this key. It may be equal, excluded, or absent from both files.':column?'No mismatches in this column.':'No results for this view. Try a different column search or switch views.';
     $('analysisRange').textContent=total?`${analysisOffset+1}–${Math.min(analysisOffset+50,total)} of ${number(total)}`:'0 results';
     $('analysisPrev').disabled=!analysisOffset;$('analysisNext').disabled=analysisOffset+50>=total;
   }catch(error){$('analysisStatus').classList.remove('loading-status');$('analysisStatus').textContent=error.message;showError(error);}
@@ -1157,7 +1161,7 @@ $('analysisRetry').addEventListener('click',async()=>{try{$('analysisRetry').hid
 
 let valueRules=[];
 $('profileControls').insertAdjacentHTML('beforeend',`<section class="feature-box"><h3>Template library</h3><div class="preview-controls"><select id="profileSelect" aria-label="Saved profile"><option value="">Choose profile</option></select><button id="applyProfile" class="subtle">Apply profile</button><input id="profileName" placeholder="Profile name" aria-label="Profile name"><button id="saveProfile" class="subtle">Save current settings</button><button id="deleteProfile" class="subtle">Delete profile</button></div><p id="profileStatus" role="status"></p></section>`);
-$('analysisPanel').insertAdjacentHTML('beforeend',`<details class="feature-box review-comments"><summary>Comments</summary><label>Apply comment to<select id="noteTarget"><option value="column">Column — all mismatching keys</option><option value="key">Key — all mismatching columns</option><option value="cell">This key and column</option></select></label><p id="noteScope" class="analysis-note-scope"></p><p class="muted">Comments appear in regenerated reports.</p><div class="preview-controls"><select id="noteStatus" aria-label="Classification"><option>Needs investigation</option><option>Expected</option><option>Resolved</option></select><textarea id="noteComment" maxlength="2000" aria-label="Analysis comment" placeholder="Describe your finding"></textarea><button id="saveNote" class="subtle">Save comment</button></div><div id="analysisNotes"></div></details>`);
+$('analysisPanel').insertAdjacentHTML('beforeend',`<details class="feature-box review-comments"><summary>Comments</summary><label>Apply comment to<select id="noteTarget"><option value="column">Column — all mismatching keys</option><option value="key">Key — all mismatching columns</option><option value="cell">This key and column</option></select></label><p id="noteScope" class="analysis-note-scope"></p><div class="preview-controls"><select id="noteStatus" aria-label="Classification"><option>Needs investigation</option><option>Expected</option><option>Resolved</option></select><textarea id="noteComment" maxlength="2000" aria-label="Analysis comment" placeholder="Describe your finding"></textarea><button id="saveNote" class="subtle">Save comment</button></div><div id="analysisNotes"></div></details>`);
 function renderValueRules(){}
 async function loadProfiles(){const result=await api('/api/profiles');for(const id of ['profileSelect','quickProfile']){const previous=$(id).value;$(id).replaceChildren(new Option(id==='quickProfile'?'No template — configure manually':'Choose profile',''));result.profiles.forEach(p=>$(id).add(new Option(p.name,p.id)));$(id).value=previous;}const ready=job?.state==='ready';$('applyProfile').disabled=!ready;$('saveProfile').disabled=!job||!['ready','complete'].includes(job.state);}
 $('saveProfile').addEventListener('click',async()=>{try{if(headerDirty&&job?.state==='ready')await applyHeaders();await saveDraft();await api('/api/profiles',{job_id:job.id,name:$('profileName').value});await loadProfiles();$('profileStatus').textContent='Template saved with headers, keys, scope, value overrides and column rules.';}catch(e){showError(e);}});
@@ -1516,7 +1520,7 @@ function initEnterpriseShell(){
   $('docsSearch').addEventListener('input',()=>{for(const detail of document.querySelectorAll('.docs-card>details'))detail.open=!!$('docsSearch').value;});
   // Find columns locally from the already-loaded summary, without fetching source rows.
   const search=document.createElement('input');search.id='resultColumnSearch';search.type='search';search.placeholder='Find column';search.setAttribute('aria-label','Find mismatching column');search.className='search';$('changedColumnCount').before(search);
-  const filterColumns=()=>{const q=search.value.toLowerCase();for(const row of $('columnSummary').children)row.hidden=!row.querySelector('span').textContent.toLowerCase().includes(q);};search.addEventListener('input',filterColumns);new MutationObserver(filterColumns).observe($('columnSummary'),{childList:true});
+  const filterColumns=()=>{const q=search.value.toLowerCase();for(const row of $('columnSummary').children)row.hidden=!(row.querySelector('.ds-col-name')||row.querySelector('span')).textContent.toLowerCase().includes(q);};search.addEventListener('input',filterColumns);new MutationObserver(filterColumns).observe($('columnSummary'),{childList:true});
 
   // Column review is a focused drawer, with the mismatch table taking priority.
   const analysis=$('analysisPanel'),workbench=analysis.querySelector('.analysis-workbench');
@@ -1676,7 +1680,8 @@ initUnifiedUpload();
 function projectEscape(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 let projectCatalog=[],activeProject=null,projectOffset=0,projectDetail=null,projectDrawerReturn=null,projectRecordPage=0;
 const auditColors={'Unreviewed':'#a8bac4','In review':'#009bbd','Approved':'#2b8b65','Changes requested':'#d7922b'};
-function projectTime(value){return value?new Date(value*1000).toLocaleString(): '—';}
+// Project times (attach, audit, activity) are shown in India Standard Time.
+function projectTime(value){return value?new Date(value*1000).toLocaleString(undefined,{timeZone:'Asia/Kolkata',day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})+' IST':'—';}
 function projectButton(text,action,className='subtle'){const button=document.createElement('button');button.textContent=text;button.className=className;button.addEventListener('click',()=>Promise.resolve(action()).catch(error=>{$('projectDrawer').open?$('projectDrawerError').textContent=error.message:showError(error);}));return button;}
 async function loadProjects(){
   const result=await api('/api/projects');projectCatalog=result.projects;renderProjectLibrary();
@@ -1700,7 +1705,7 @@ async function selectProject(identity,offset=0){
   const prev=projectButton('← Previous',()=>selectProject(identity,Math.max(0,offset-25))),next=projectButton('Next →',()=>selectProject(identity,offset+25));prev.disabled=offset===0;next.disabled=offset+25>=detail.total;$('projectRecordPager').append(prev,next);animateWorkspacePane(d);
 }
 function openProjectDrawer(title){projectDrawerReturn=document.activeElement;$('projectDrawerTitle').textContent=title;$('projectDrawerError').textContent='';$('projectDrawerBody').replaceChildren();if(!$('projectDrawer').open)$('projectDrawer').showModal();}
-function createProjectDrawer(onCreated){openProjectDrawer('New project');const body=$('projectDrawerBody');body.innerHTML='<label>Project name<input id="newProjectName" maxlength="100" placeholder="e.g. Monthly reconciliation"></label><label>Description<textarea id="newProjectDescription" maxlength="2000" rows="4" placeholder="Purpose and scope"></textarea></label>';body.append(projectButton('Create project',async()=>{const result=await api('/api/projects',{name:$('newProjectName').value,description:$('newProjectDescription').value});activeProject=result.id;projectOffset=0;$('projectDrawer').close();if(typeof onCreated==='function')await onCreated(result.id);else await loadProjects();},'primary'));$('newProjectName').focus();}
+function createProjectDrawer(onCreated){openProjectDrawer('New project');const body=$('projectDrawerBody');body.innerHTML='<label>Project name<input id="newProjectName" maxlength="100" placeholder="e.g. Monthly reconciliation"></label><label>Description<textarea id="newProjectDescription" maxlength="2000" rows="4" placeholder="Purpose and scope"></textarea></label><label>Start from a template<select id="newProjectTemplate"><option value="">No template</option></select><span class="muted">Each round starts with the template’s mapping, keys and rules.</span></label>';api('/api/profiles').then(result=>{for(const p of result.profiles)$('newProjectTemplate')?.add(new Option(p.name,p.id));}).catch(()=>{});body.append(projectButton('Create project',async()=>{const result=await api('/api/projects',{name:$('newProjectName').value,description:$('newProjectDescription').value,profile_id:$('newProjectTemplate').value||null});activeProject=result.id;projectOffset=0;$('projectDrawer').close();if(typeof onCreated==='function')await onCreated(result.id);else await loadProjects();},'primary'));$('newProjectName').focus();}
 async function showProjectCandidates(offset=0){
   projectRecordPage=offset;openProjectDrawer('Attach comparison');const result=await api('/api/projects/records?offset='+offset);const body=$('projectDrawerBody');
   const hint=document.createElement('p');hint.className='muted';hint.textContent='Select a comparison to attach and review. JSON entries retain audit summaries, not source documents.';body.append(hint);

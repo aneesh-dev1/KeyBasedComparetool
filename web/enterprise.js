@@ -523,7 +523,7 @@ function enhanceAnalysisDashboard(){
   const matchRate=matched?Math.max(0,100-count*100/matched):0;
   row.dataset.risk=matchRate<95?'high':matchRate<99?'medium':'low';
   const meta=document.createElement('span');meta.className='analysis-column-rate';meta.textContent=matched?`${matchRate.toFixed(matchRate>99?2:1)}% match`:'No matched keys';
-  const meter=document.createElement('span');meter.className='analysis-column-meter';meter.innerHTML=`<i style="width:${Math.max(3,count*100/maxChange)}%"></i>`;
+  const meter=document.createElement('span');meter.className='analysis-column-meter';const fill=document.createElement('i');fill.style.width=Math.max(3,count*100/maxChange)+'%';meter.append(fill);
   row.append(meta,meter);
  }
  const columnTitle=results.querySelector('.column-panel .section-title h2');if(columnTitle)columnTitle.innerHTML=analysisSvg('columns')+'<span>Differences by column</span>';
@@ -902,6 +902,10 @@ function redesignAnalysis(){
   const go=document.createElement('span');go.className='ds-go';go.innerHTML=lucide('chevron-right');
   row.replaceChildren(rank,label,pill,bar,value,go);
  });
+ // The changes column fits the widest count, so large numbers never run into the share bars; one width for
+ // every row and the header keeps the table aligned.
+ const fitCounts=()=>{const widths=[...list.querySelectorAll('.ds-count')].map(cell=>[...cell.children].reduce((sum,part)=>sum+part.getBoundingClientRect().width,4));const widest=Math.max(0,...widths);if(widest)list.parentElement.style.setProperty('--ds-count-col',Math.max(92,Math.ceil(widest))+'px');};
+ fitCounts();requestAnimationFrame(fitCounts);
  // Column health replaces the donut with a stacked bar and per-band rows.
  const panel=results.querySelector('.result-chart-panel');if(!panel)return;
  const all=Object.values(summary.changed_cells_by_column||{}),total=all.length;
@@ -909,8 +913,8 @@ function redesignAnalysis(){
  if(matched)for(const count of all)bands[count===0?0:count*100<=matched?1:count*20<=matched?2:3].count++;
  let health=panel.querySelector('.ds-health');
  if(!health){health=document.createElement('div');health.className='ds-health';panel.append(health);}
- const perfect=bands[0].count,pct=total?Math.round(perfect*100/total):0;
- health.innerHTML=`<div class="ds-health-hero"><strong>${number(perfect)}<span> / ${number(total)}</span></strong><p>value columns match 100%</p><em>${pct}% fully matching</em></div><div class="ds-stack" role="img"></div><ul class="ds-bands"></ul><p class="ds-health-foot"></p>`;
+ const perfect=bands[0].count;
+ health.innerHTML=`<div class="ds-health-hero"><strong>${number(perfect)}<span> / ${number(total)}</span></strong><p>value columns match 100%</p></div><div class="ds-stack" role="img"></div><ul class="ds-bands"></ul><p class="ds-health-foot"></p>`;
  const stack=health.querySelector('.ds-stack'),list2=health.querySelector('.ds-bands');
  stack.setAttribute('aria-label',bands.map(b=>`${b.label}: ${b.count}`).join(', '));
  for(const band of bands){
@@ -950,14 +954,12 @@ function redesignAnalysis(){
 }
 {const previousRender=renderSummary;renderSummary=function(){previousRender();redesignAnalysis();};if(job?.state==='complete')redesignAnalysis();}
 
-// Verdict: the page opens with the answer, as the HTML report does. Overall cell match, a plain sentence, and one
-// mark per compared column in file order, coloured by its match band; a column with mismatches opens its analysis.
+// Verdict: the page opens with the answer, as the HTML report does: overall cell match and a plain sentence.
 function renderVerdict(){
  const results=$('results'),summary=job?.summary,heading=results?.querySelector('.result-heading');if(!heading||!summary)return;
  const byColumn=Object.entries(summary.changed_cells_by_column||{}),total=byColumn.length,matched=Number(summary.matched_keys||0);
  const cells=Number(summary.changed_cells||0),leftOnly=Number(summary.left_only||0),rightOnly=Number(summary.right_only||0);
- const band=count=>count===0?'perfect':count*100<=matched?'low':count*20<=matched?'medium':'high';
- const changed=byColumn.filter(([,count])=>count).length;
+ const changed=byColumn.filter(([,count])=>count).length,malformed=Number(summary.malformed_records||0);
  let rate='N/A',state,tone,sentence;
  if(matched&&total){
   const overall=100*(1-cells/(matched*total));
@@ -965,6 +967,7 @@ function renderVerdict(){
   rate=cells&&overall.toFixed(4)==='100.0000'?'>99.9999%':overall.toFixed(4)+'%';
  }
  if(!matched||!total){state='Not enough to compare';tone='is-empty';sentence=!matched?'No keys were found in both files, so match rates cannot be calculated.':'No value columns are in scope.';}
+ else if(malformed&&!(changed||leftOnly||rightOnly)){state='Values match; records were skipped';tone='is-warn';sentence=`All ${number(total)} compared columns match for the <strong>${number(matched)}</strong> keys found in both files. Review the skipped records before approving this comparison.`;}
  else if(changed||leftOnly||rightOnly){
   state='Differences found';tone='is-diff';
   const parts=[changed?`<strong>${number(cells)}</strong> mismatched ${cells===1?'cell':'cells'} across <strong>${number(changed)}</strong> of ${number(total)} columns`:'Every compared column matches'];
@@ -974,34 +977,21 @@ function renderVerdict(){
  else{state='No differences';tone='is-clean';sentence=`All ${number(total)} compared columns match for the <strong>${number(matched)}</strong> keys found in both files.`;}
  let verdict=heading.querySelector('.ds-verdict');
  if(!verdict){verdict=document.createElement('section');verdict.className='ds-verdict';verdict.setAttribute('aria-label','Verdict');heading.append(verdict);}
- verdict.innerHTML=`<div class="ds-verdict-rate"><strong></strong><span>Overall cell match</span></div><div class="ds-verdict-copy"><span class="ds-verdict-state"></span><p>${sentence}</p></div><div class="ds-verdict-strip"></div><div class="ds-verdict-key"><p></p><ul></ul></div>`;
+ verdict.innerHTML=`<div class="ds-verdict-rate"><strong></strong><span>Overall cell match</span></div><div class="ds-verdict-copy"><span class="ds-verdict-state"></span><p>${sentence}</p></div>`;
+ // Skipped records are never folded into a clean result: say how many, why, and where the audit is.
+ if(malformed){
+  const skipped=Number(summary.skipped_keys||0),unknown=Number(summary.unidentified_records||0);
+  const note=document.createElement('div');note.className='ds-verdict-skipped';note.setAttribute('role','note');
+  const copy=document.createElement('p');
+  // Two reasons share this notice: a row with the wrong number of fields, or a row whose key is blank.
+  const parts=[skipped&&`${number(skipped)} ${skipped===1?'key':'keys'}`,unknown&&`${number(unknown)} ${unknown===1?'row':'rows'} with no usable key`].filter(Boolean);
+  copy.append(Object.assign(document.createElement('strong'),{textContent:`Skipped ${parts.join(' and ')||number(malformed)+' rows'}`}),
+   ` because ${malformed===1?'a row':'some rows'} could not be read for comparison. ${skipped+unknown===1?'It is':'They are'} left out of every count above, in both files. The download lists the reason for each.`);
+  const link=Object.assign(document.createElement('a'),{href:downloadUrl('skipped_keys.csv'),className:'ds-verdict-skipped-link',textContent:'Download skipped records'});
+  note.append(lucideNode('triangle-alert'),copy,link);verdict.querySelector('.ds-verdict-copy').after(note);
+ }
  verdict.querySelector('strong').textContent=rate;
  const stateNode=verdict.querySelector('.ds-verdict-state');stateNode.textContent=state;stateNode.className='ds-verdict-state '+tone;
- const strip=verdict.querySelector('.ds-verdict-strip');strip.hidden=!(matched&&total);
- verdict.querySelector('.ds-verdict-key').hidden=strip.hidden;
- if(strip.hidden)return;
- const svgNS='http://www.w3.org/2000/svg',svg=document.createElementNS(svgNS,'svg'),width=total>160?1:.78;
- svg.setAttribute('viewBox',`0 0 ${total} 1`);svg.setAttribute('preserveAspectRatio','none');svg.setAttribute('role','group');svg.setAttribute('aria-label','Match rate of each column in file order');
- const counts={perfect:0,low:0,medium:0,high:0};
- byColumn.forEach(([name,count],index)=>{
-  const key=band(count);counts[key]++;
-  const mark=document.createElementNS(svgNS,'rect');
-  mark.setAttribute('x',String(index+(1-width)/2));mark.setAttribute('y','0');mark.setAttribute('width',String(width));mark.setAttribute('height','1');mark.setAttribute('class','is-'+key);
-  const tip=document.createElementNS(svgNS,'title');tip.textContent=`${name}: ${number(count)} mismatched ${count===1?'cell':'cells'}, ${(100*(matched-count)/matched).toFixed(4)}% match`;mark.append(tip);
-  if(count){
-   mark.setAttribute('tabindex','0');mark.setAttribute('role','button');mark.setAttribute('aria-label',`Analyze ${name}, ${number(count)} mismatches`);
-   const open=()=>showAnalysisDrawer(name).catch(showError);
-   mark.addEventListener('click',open);mark.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open();}});
-  }
-  svg.append(mark);
- });
- strip.append(svg);
- verdict.querySelector('.ds-verdict-key p').textContent=`Each mark is one column, in file order.${changed?' Select a coloured mark to analyse that column.':''}`;
- const key=verdict.querySelector('.ds-verdict-key ul');
- for(const [name,label] of [['perfect','100% match'],['low','99% to <100%'],['medium','95% to <99%'],['high','Below 95%']]){
-  const item=document.createElement('li');item.className='is-'+name+(counts[name]?'':' is-empty');item.innerHTML='<span class="ds-dot"></span><span></span><b></b>';
-  item.children[1].textContent=label;item.querySelector('b').textContent=number(counts[name]);key.append(item);
- }
 }
 {const previousRender=renderSummary;renderSummary=function(){previousRender();renderVerdict();};if(job?.state==='complete')renderVerdict();}
 
@@ -2015,8 +2005,10 @@ loadDiagnostics=async function(){
  const panelRoot=$('projectsPanel');panelRoot?.classList.add('pj');
  const statusClass={'Unreviewed':'is-unreviewed','In review':'is-review','Approved':'is-approved','Changes requested':'is-changes'};
  const statusOrder=['Approved','In review','Changes requested','Unreviewed'];
- const shortDate=value=>value?new Date(value*1000).toLocaleDateString(undefined,{day:'numeric',month:'short'}):'—';
- const longDate=value=>value?new Date(value*1000).toLocaleString(undefined,{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
+ // Project times are shown in India Standard Time, whatever the viewer's own time zone.
+ const IST={timeZone:'Asia/Kolkata'};
+ const shortDate=value=>value?new Date(value*1000).toLocaleDateString(undefined,{...IST,day:'numeric',month:'short'}):'—';
+ const longDate=value=>value?new Date(value*1000).toLocaleString(undefined,{...IST,day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})+' IST':'—';
  const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;};
  const reduced=()=>typeof reducedWorkspaceMotion==='function'&&reducedWorkspaceMotion();
  // The drawer's all-caps label and text close button follow the rest of the app.
@@ -2046,7 +2038,7 @@ loadDiagnostics=async function(){
   if(!runs.length){section.append(el('p','pj-empty-line','Runs appear here once a comparison in this project completes.'));return section;}
   const max=Math.max(1,...runs.map(run=>run.changed_cells||0));
   const days=runs.map(run=>shortDate(run.finished||run.created));
-  const label=(run,index)=>days.filter(day=>day===days[index]).length>1?new Date((run.finished||run.created)*1000).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}):days[index];
+  const label=(run,index)=>days.filter(day=>day===days[index]).length>1?new Date((run.finished||run.created)*1000).toLocaleTimeString(undefined,{...IST,hour:'2-digit',minute:'2-digit'})+' IST':days[index];
   const strip=el('ol','pj-strip');
   runs.forEach((run,index)=>{
    const value=run.changed_cells||0,item=el('li');
@@ -2152,7 +2144,7 @@ loadDiagnostics=async function(){
  // when two runs finished in the same minute.
  function runLabels(runs){
   const minute=run=>longDate(run.finished),seen=new Map();for(const run of runs)seen.set(minute(run),(seen.get(minute(run))||0)+1);
-  return new Map(runs.map((run,index)=>{const when=seen.get(minute(run))>1?new Date(run.finished*1000).toLocaleString(undefined,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'}):minute(run);
+  return new Map(runs.map((run,index)=>{const when=seen.get(minute(run))>1?new Date(run.finished*1000).toLocaleString(undefined,{...IST,day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'}):minute(run);
    return [run.id,`Run ${index+1} · ${when} · ${number(run.changed_cells||0)} differences`];}));
  }
  async function openRunCompare(base='',target='',status='new',column='',offset=0,focusCells=false){
@@ -2283,6 +2275,8 @@ loadDiagnostics=async function(){
   return section;
  }
 
+ // The rounds page (below) opens Compare runs and Activity from its own buttons.
+ window.pjOpenRunCompare=openRunCompare;window.pjOpenActivity=openActivity;
  selectProject=async function(identity,offset=0){
   activeProject=identity;projectOffset=offset;renderProjectLibrary();
   const detail=await api('/api/projects/'+identity+'?offset='+offset);if(activeProject!==identity)return;projectDetail=detail;
@@ -2659,5 +2653,591 @@ loadDiagnostics=async function(){
   refresh.classList.remove('subtle');refresh.classList.add('ds-expand-action');refresh.type='button';refresh.setAttribute('aria-label','Refresh job history');refresh.title='Refresh job history';
   refresh.replaceChildren(Object.assign(document.createElement('span'),{className:'ds-action-label',textContent:'Refresh'}),lucideNode('refresh-cw'));
   title.append(actions);actions.append(refresh,create);
+ }
+}
+
+// Projects as rounds of mismatch testing. A team compares a few random keys (5, 10, 50…), fixes the source, then
+// compares a bigger sample, until every key is checked. The dashboard shows where every project stands, each with a
+// small journey. A project page answers one question per section: where it stands (status band), how it got there
+// (the journey: keys checked against mismatching columns, heading for the goal of all keys and none mismatching),
+// what's left to fix, and every round in a table.
+{
+ const projectsRoot=$('projectsPanel');
+ if(projectsRoot){
+ projectsRoot.classList.add('pr');
+ const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;};
+ const plural=(count,word,many=word+'s')=>`${number(count)} ${count===1?word:many}`;
+ // Every project time is India Standard Time, labelled IST where a clock time is shown.
+ const IST={timeZone:'Asia/Kolkata'};
+ const day=value=>value?new Date(value*1000).toLocaleDateString(undefined,{...IST,day:'numeric',month:'short'}):'—';
+ const istDay=date=>date.toLocaleDateString('en-CA',IST);
+ const fullTime=value=>value?new Date(value*1000).toLocaleString(undefined,{...IST,day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})+' IST':'—';
+ const when=value=>{if(!value)return '—';const date=new Date(value*1000);
+  return istDay(date)===istDay(new Date())?'Today, '+date.toLocaleTimeString(undefined,{...IST,hour:'2-digit',minute:'2-digit'})+' IST':day(value);};
+ const icon=(name,label)=>{const node=lucideNode(name);if(label){node.setAttribute('aria-label',label);node.removeAttribute('aria-hidden');}return node;};
+ const STATES=[['fixing','Fixing'],['ready','Ready for all keys'],['clean','Ready to sign off'],['signed_off','Signed off'],['running','Running'],['empty','No rounds yet']];
+ const statusTag=(status,label)=>el('span','pr-tag is-'+status,label);
+ // Secondary actions use the app's slide-on-hover button: the Lucide icon alone, its label sliding out on hover.
+ const expand=(name,label,action,extra='',shown=label)=>{const button=projectButton('',action,'ds-expand-action pr-expand'+(extra?' '+extra:''));button.setAttribute('aria-label',label);button.title=label;
+  button.append(el('span','ds-action-label',shown),icon(name));return button;};
+ // The project page fits one screen where there's room: the journey takes the free height, the lists scroll inside.
+ const oneView=matchMedia('(min-width:1100px) and (min-height:640px)');
+ const ROUND_KEY='ds-project-round';
+ const pendingRound=()=>{try{return JSON.parse(sessionStorage.getItem(ROUND_KEY)||'null');}catch{return null;}};
+ let filter='all',query='';
+ const NS='http://www.w3.org/2000/svg';
+ const svgEl=(tag,attrs,text)=>{const node=document.createElementNS(NS,tag);for(const key in attrs)node.setAttribute(key,attrs[key]);if(text!==undefined)node.textContent=text;return node;};
+ const COLOR={bad:'#b8433a',ok:'#007b99',goal:'#002b40',path:'#193a50',ahead:'#8a9ba6'};
+ // Keys checked run left to right on a log scale (10 and 100 keys are as far apart as 10,000 and 100,000), so
+ // early small rounds don't all pile up at the left edge.
+ const keyScale=(population,from,to)=>keys=>from+Math.log10(Math.max(1,keys))/Math.log10(Math.max(10,population))*(to-from);
+ const coverageText=(round,population)=>!round?'No rounds yet':population&&round.keys_checked>=population?`Round ${round.n} · all ${number(population)} keys`:`Round ${round.n} · ${number(round.keys_checked)}${population?` of ${number(population)}`:''} keys`;
+
+ // The dashboard row's journey: the same path as the project page, small. A dashed line runs on to the goal
+ // (all keys, nothing mismatching) until a round reaches it.
+ function miniJourney(rounds,population){
+  const svg=svgEl('svg',{class:'pr-mini','aria-hidden':'true',preserveAspectRatio:'none'});
+  const draw=()=>{
+   const W=svg.clientWidth||220,H=40,all=population||Math.max(10,...rounds.map(r=>r.keys_checked)),x=keyScale(all,5,W-6),max=Math.max(1,...rounds.map(r=>r.mismatching)),y=c=>5+(1-c/max)*(H-11);
+   svg.setAttribute('viewBox',`0 0 ${W} ${H}`);svg.replaceChildren(svgEl('line',{x1:5,x2:W-5,y1:y(0),y2:y(0),stroke:'#e4ecef','stroke-width':1}));
+   const last=rounds.at(-1);
+   if(last&&(last.keys_checked<all||last.mismatching))svg.append(svgEl('path',{d:`M${x(last.keys_checked)},${y(last.mismatching)}L${x(all)},${y(0)}`,fill:'none',stroke:'#b7c4cb','stroke-width':1.5,'stroke-dasharray':'3 3'}));
+   if(rounds.length)svg.append(svgEl('path',{d:rounds.map((r,i)=>`${i?'L':'M'}${x(r.keys_checked)},${y(r.mismatching)}`).join(''),fill:'none',stroke:COLOR.path,'stroke-width':1.5,'stroke-linejoin':'round'}));
+   for(const r of rounds)svg.append(svgEl('circle',{cx:x(r.keys_checked),cy:y(r.mismatching),r:4,fill:r.clean?COLOR.ok:COLOR.bad,stroke:'#fff','stroke-width':1.5}));
+   svg.append(svgEl('circle',{cx:x(all),cy:y(0),r:4,fill:COLOR.goal,stroke:'#fff','stroke-width':1.5}));
+  };
+  new ResizeObserver(()=>{if(svg.isConnected)draw();}).observe(svg);
+  return svg;
+ }
+
+ renderProjectLibrary=function(){};
+ loadProjects=async function(){
+  const result=await api('/api/projects');projectCatalog=result.projects;
+  if(activeProject&&projectCatalog.some(project=>project.id===activeProject))await selectProject(activeProject,projectOffset);
+  else{activeProject=null;renderOverview();}
+ };
+
+ function renderOverview(){
+  activeProject=null;document.body.classList.remove('pr-project-open');
+  const dashboard=$('projectDashboard');dashboard.replaceChildren();
+  // The page heading already says Projects.
+  const head=el('div','pr-head pr-dash-head'),lede=el('p','pr-lede','Each project checks two files in rounds, from a few random keys up to all of them.');
+  const create=projectButton('',()=>createProjectDrawer(),'primary pr-cta');create.append(icon('plus'),document.createTextNode('New project'));
+  // Search sits beside New project, so the list starts right under the status cards.
+  const search=el('input','pr-search');search.type='search';search.placeholder='Find a project';search.setAttribute('aria-label','Find a project');search.value=query;
+  const tools=el('div','pr-dash-tools');tools.append(search,importButton(),create);
+  head.append(lede,tools);dashboard.append(head);
+  if(!projectCatalog.length){
+   const empty=el('div','pr-empty');empty.append(el('h3','','Start your first project'),el('p','','Create a project for two files, then compare them in rounds that grow from a few keys to all of them.'));
+   const start=projectButton('',()=>createProjectDrawer(),'primary pr-cta');start.append(icon('plus'),document.createTextNode('New project'));
+   const starts=el('div','pr-empty-actions');starts.append(start,importButton());empty.append(starts);
+   dashboard.append(empty);return;
+  }
+  const counts={};for(const project of projectCatalog)counts[project.status]=(counts[project.status]||0)+1;
+  // The four outcomes are always shown, so their counts can be compared; running and empty only when present.
+  const cards=el('div','pr-summary');cards.setAttribute('role','group');cards.setAttribute('aria-label','Show projects by status');
+  for(const [key,label] of STATES){
+   if(!counts[key]&&['running','empty'].includes(key))continue;
+   const card=el('button','pr-sum is-'+key);card.type='button';card.setAttribute('aria-pressed',String(filter===key));
+   card.append(el('b','',number(counts[key]||0)),el('span','',label));
+   card.addEventListener('click',()=>{filter=filter===key?'all':key;renderOverview();});cards.append(card);
+  }
+  dashboard.append(cards);
+  if(filter!=='all'){const showing=el('p','pr-showing');const clear=projectButton('Show all projects',()=>{filter='all';renderOverview();},'pr-link');showing.append(document.createTextNode(`Showing ${STATES.find(s=>s[0]===filter)[1].toLowerCase()} projects. `),clear);dashboard.append(showing);}
+  const table=el('div','pr-list');table.setAttribute('role','table');table.setAttribute('aria-label','Projects');dashboard.append(table);
+  search.addEventListener('input',()=>{query=search.value;rows();});
+  function rows(){
+   table.replaceChildren();
+   const headRow=el('div','pr-row pr-row-head');headRow.setAttribute('role','row');
+   for(const label of ['Project','Status','Journey: keys checked → mismatching columns','Latest round','Last run']){const cell=el('span','',label);cell.setAttribute('role','columnheader');headRow.append(cell);}
+   table.append(headRow);
+   const shown=projectCatalog.filter(project=>(filter==='all'||project.status===filter)&&project.name.toLowerCase().includes(query.toLowerCase()));
+   for(const project of shown){
+    const row=el('button','pr-row');row.type='button';row.setAttribute('role','row');
+    row.addEventListener('click',()=>selectProject(project.id).catch(showError));
+    const latest=project.latest_round,rounds=project.rounds||[];
+    const name=el('span','pr-name');name.append(el('b','',project.name),el('small','',project.feed||project.description||'No comparisons yet'));
+    const journey=el('span','pr-journey');journey.append(miniJourney(rounds,project.population),el('small','',coverageText(latest,project.population)));
+    const last=el('span','pr-last');
+    if(project.status==='running')last.append(el('span','','A round is running'),el('small','',latest?`Round ${latest.n} was the last to finish`:'First round'));
+    else if(!latest)last.append(el('span','','No rounds yet'),el('small','','Start with a few random keys'));
+    else{
+     last.append(el('span','',latest.mismatching?plural(latest.mismatching,'column')+' mismatch':latest.clean?'No mismatches':plural(latest.left_only+latest.right_only,'key')+' in only one file'));
+     last.append(el('small','',project.status==='signed_off'?`${project.signoff?.mode==='exceptions'?'Signed off with reasons':'Signed off at 100% match'} · ${project.signoff?.reviewer||''}`:project.status==='clean'?`Next: sign off round ${latest.n}`:project.status==='ready'?'Next: check all keys':latest.n>1&&latest.fixed?`${number(latest.fixed)} fixed since round ${latest.n-1}`:latest.n===1?'First round':'No columns fixed since the last round'));
+    }
+    // The date the latest round ran, not when a comparison was attached or its record changed.
+    const ran=el('span','pr-when',project.last_run?when(project.last_run):'—');if(project.last_run)ran.title=fullTime(project.last_run);
+    row.append(name,statusTag(project.status,project.status_label),journey,last,ran);
+    for(const cell of row.children)cell.setAttribute('role','cell');
+    table.append(row);
+   }
+   if(!shown.length)table.append(el('p','pr-none',query?'No project matches that name.':'No projects with this status.'));
+  }
+  rows();
+ }
+
+ selectProject=async function(identity,offset=0){
+  activeProject=identity;projectOffset=offset;
+  const detail=await api('/api/projects/'+identity+'?offset='+offset);if(activeProject!==identity)return;projectDetail=detail;
+  renderProject(detail);
+ };
+
+ // Where the project stands, in one status, one sentence and one next step.
+ function statusBand(detail,next){
+  const progress=detail.progress,latest=progress.rounds.at(-1),population=progress.population,all=population?`all ${number(population)} keys`:'all keys';
+  const ran=latest?` on ${day(latest.finished||latest.created)}`:'';
+  const checked=latest?(population&&latest.keys_checked>=population?`Round ${latest.n} ran${ran} and checked ${all}.`:`Round ${latest.n} ran${ran} and checked ${number(latest.keys_checked)}${population?` of ${number(population)}`:''} keys.`):'';
+  const outside=latest?latest.left_only+latest.right_only:0;
+  const text={
+   empty:['No rounds yet','Start round 1 with a few random keys, for example 10. Each round after that checks a bigger sample, until every key is checked.'],
+   running:[`Round ${next-1} is running`,'Its results appear here when it finishes.'],
+   fixing:[latest?.mismatching?`${plural(latest.mismatching,'column')} still ${latest.mismatching===1?'mismatches':'mismatch'} after round ${latest?.n}`:`${plural(outside,'key')} ${outside===1?'is':'are'} in only one file after round ${latest?.n}`,
+           `${checked} Fix ${latest?.mismatching?'these columns':'the missing keys'} in the source, then `+(population&&latest?.keys_checked>=population?`check ${all} again in round ${next}.`:`check a bigger sample in round ${next}.`)],
+   ready:[`Round ${latest?.n} is clean`,`${checked} Next, check ${all} in round ${next}.`],
+   clean:[`Round ${latest?.n} is clean on ${all}`,'Sign off the project to finish it and create the final report.'],
+   signed_off:[progress.signoff?.mode==='exceptions'?'Signed off with reasons for the remaining mismatches':'Signed off at 100% match',
+               `By ${progress.signoff?.reviewer||'—'} on ${when(progress.signoff?.at)}, on round ${latest?.n}. ${checked} A new round reopens the project.`],
+  }[progress.status];
+  const band=el('section','pr-band is-'+progress.status);band.setAttribute('aria-labelledby','prBandTitle');
+  const copy=el('div','pr-band-copy'),line=el('div','pr-band-line'),title=el('h2','',text[0]);title.id='prBandTitle';
+  // The state seal leads the band: one icon in the state's colour, named for screen readers and on hover.
+  const seal=el('span','pr-band-seal');seal.append(icon({fixing:'triangle-alert',ready:'layers',clean:'circle-check',signed_off:'badge-check',running:'loader-circle'}[progress.status]||'circle',progress.status_label));seal.title=progress.status_label;
+  line.append(title);copy.append(line,el('p','',text[1]));
+  // The figures someone asks first: how many rounds, how much of the data, what's open and what's been fixed.
+  const figures=el('dl','pr-figures');
+  const figure=(label,value,note)=>{const item=el('div');item.append(el('dt','',label),el('dd','',value));if(note)item.append(el('dd','pr-figure-note',note));figures.append(item);};
+  if(latest){
+   figure('Rounds',number(progress.rounds.length));
+   figure('Keys checked',number(latest.keys_checked),population?(latest.keys_checked>=population?'all keys':`${(latest.keys_checked*100/population).toFixed(latest.keys_checked*100/population<1?2:1)}% of ${number(population)}`):'');
+   figure('Mismatching now',number(latest.mismatching),latest.mismatching?'columns':'none');
+   figure('Fixed so far',number(progress.rounds.reduce((sum,round)=>sum+round.fixed,0)),'columns');
+  }
+  band.append(seal,copy,figures);
+  // One yellow button for the main next step. Signing off is always possible once a round has finished: directly
+  // at 100% match, otherwise with a reason for each remaining mismatch.
+  const buttons=el('div','pr-band-actions');
+  const button=(name,label,action,primary)=>{const node=projectButton('',action,primary?'primary pr-cta':'subtle pr-ghost');node.append(icon(name),document.createTextNode(label));return node;};
+  const signOff=()=>openSignoffDrawer(detail);
+  if(progress.status==='clean')buttons.append(button('badge-check','Sign off project',signOff,true));
+  else if(progress.status==='signed_off')buttons.append(button('download','Download sign-off report',()=>{location.href=`/api/projects/${detail.project.id}/signoff/report?token=${encodeURIComponent(token)}`;},true));
+  else if(progress.status==='running')buttons.append(expand('activity','Open pipeline',()=>openJob(progress.running[0].id),'is-labelled'));
+  else{
+   if(latest)buttons.append(button('badge-check',progress.status==='ready'?'Sign off project':'Sign off with reasons',signOff,false));
+   buttons.append(button('play',`Start round ${next}`,()=>openRoundDrawer(detail,next),true));
+  }
+  band.append(buttons);
+  return band;
+ }
+
+ // The journey: each round is a numbered stop placed by keys checked (left to right) and mismatching columns
+ // (top to bottom). A dashed line runs from the latest round to the goal: all keys, nothing mismatching.
+ function drawJourney(box,tip,rounds,population){
+  box.querySelector('svg')?.remove();const W=box.clientWidth;if(!W||!rounds.length)return;
+  const fill=oneView.matches,all=population||Math.max(10,...rounds.map(r=>r.keys_checked)),L=56,R=Math.min(150,W*.18),T=fill?58:64,B=fill?54:58,H=fill?Math.max(220,box.clientHeight):360;
+  const maxY=Math.max(1,...rounds.map(r=>r.mismatching)),x=keyScale(all,L,W-R),y=c=>T+(1-c/maxY)*(H-T-B);
+  const svg=svgEl('svg',{viewBox:`0 0 ${W} ${H}`,height:H,role:'img','aria-label':'Journey: '+rounds.map(r=>`round ${r.n}, ${number(r.keys_checked)} keys, ${plural(r.mismatching,'mismatching column')}`).join('; ')+`. Goal: ${number(all)} keys with no mismatching columns.`});
+  const step=maxY>80?40:maxY>40?20:maxY>12?10:maxY>5?5:1;
+  for(let v=0;v<=maxY;v+=step)svg.append(svgEl('line',{class:v?'pr-grid':'pr-base',x1:L,x2:x(all)+20,y1:y(v),y2:y(v)}),svgEl('text',{x:L-10,y:y(v)+4,'text-anchor':'end'},number(v)));
+  // Key ticks sit below the goal ring (radius 22) so its label never touches it.
+  const tickY=H-B+36;
+  for(const k of [1,10,100,1000,10000,100000,1000000,10000000].filter(k=>x(all)-x(k)>70))svg.append(svgEl('text',{x:x(k),y:tickY,'text-anchor':'middle'},k>=1000000?number(k/1000000)+'M':k>=1000?number(k/1000)+'K':k));
+  svg.append(svgEl('text',{class:'pr-axis',x:L-10,y:T-16},'Mismatching columns'),svgEl('text',{class:'pr-axis',x:(L+x(all))/2,y:H-6,'text-anchor':'middle'},'Keys checked →'));
+  const gx=x(all),gy=y(0),last=rounds.at(-1),reached=last.keys_checked>=all&&!last.mismatching;
+  // The goal is a soft ring centred exactly on its point (all keys, nothing mismatching); the round that reaches
+  // it sits in the middle.
+  svg.append(svgEl('circle',{cx:gx,cy:gy,r:22,fill:'#e8f5ef',stroke:'#bfe3d1','stroke-width':1}),svgEl('text',{class:'pr-val',x:gx,y:tickY,'text-anchor':'middle'},'All '+number(all)));
+  // "Goal" sits to the right of the ring, where no round label goes until a round reaches it.
+  if(!reached)svg.append(svgEl('text',{class:'pr-val',x:gx+28,y:gy-2},'Goal'),svgEl('text',{class:'pr-date',x:gx+28,y:gy+12},'0 mismatches'));
+  svg.append(svgEl('path',{d:rounds.map((r,i)=>`${i?'L':'M'}${x(r.keys_checked)},${y(r.mismatching)}`).join(''),fill:'none',stroke:COLOR.path,'stroke-width':2,'stroke-linejoin':'round','stroke-linecap':'round'}));
+  if(!reached){
+   svg.append(svgEl('path',{d:`M${x(last.keys_checked)},${y(last.mismatching)}L${gx},${gy}`,fill:'none',stroke:COLOR.ahead,'stroke-width':2,'stroke-dasharray':'5 5'}));
+   if(gx-x(last.keys_checked)>120)svg.append(svgEl('text',{class:'pr-axis',x:(x(last.keys_checked)+gx)/2+8,y:(y(last.mismatching)+gy)/2-8},'still to go'));
+  }
+  // Once a round reaches the goal its own stop marks it; until then the goal has a target of its own.
+  if(!reached){const goal=svgEl('g',{transform:`translate(${gx-12},${gy-12})`});
+   goal.append(svgEl('circle',{cx:12,cy:12,r:13,fill:COLOR.goal,stroke:'#fff','stroke-width':3}),svgEl('circle',{cx:12,cy:12,r:6,fill:'none',stroke:'#fff','stroke-width':2}),svgEl('circle',{cx:12,cy:12,r:2,fill:'#fff'}));
+   svg.append(goal);}
+  rounds.forEach((round,index)=>{
+   const cx=x(round.keys_checked),cy=y(round.mismatching),atGoal=reached&&index===rounds.length-1,labelLeft=!atGoal&&cx+150>W;
+   svg.append(svgEl('circle',{cx,cy,r:13,fill:round.clean?COLOR.ok:COLOR.bad,stroke:'#fff','stroke-width':3}),svgEl('text',{class:'pr-n',x:cx,y:cy+4,'text-anchor':'middle'},round.n));
+   // The path enters a stop from the upper left and leaves to the lower right, so labels go above-right, or
+   // below-left where the right edge is too close.
+   // Near the bottom there's no room below, so those labels go above-left instead.
+   // Three lines: the result, the keys checked, and the date the round ran. The goal's label clears its ring.
+   const [lx,ly,anchor]=atGoal?[cx+28,cy-30,'start']:labelLeft?[cx-16,cy+56>H-B?cy-54:cy+30,'end']:[cx+16,cy-40,'start'];
+   const [first,second]=atGoal?['Goal reached','Clean on all keys']:[round.clean?'Clean':round.mismatching?plural(round.mismatching,'column'):'Keys missing',plural(round.keys_checked,'key')];
+   const date=day(round.finished||round.created);
+   svg.append(svgEl('text',{class:'pr-val',x:lx,y:ly,'text-anchor':anchor},first),svgEl('text',{x:lx,y:ly+14,'text-anchor':anchor},second),svgEl('text',{class:'pr-date',x:lx,y:ly+28,'text-anchor':anchor},date));
+   const hit=svgEl('circle',{cx,cy,r:24,fill:'transparent',tabindex:0,'aria-label':`Round ${round.n}, ${date}: ${plural(round.keys_checked,'key')} checked, ${plural(round.mismatching,'mismatching column')}`+(index?`, ${number(round.fixed)} fixed and ${number(round.new)} new since round ${round.n-1}`:'')});
+   const show=()=>{tip.replaceChildren(el('b','',`Round ${round.n} · ${date}`),el('span','',`${plural(round.keys_checked,'key')} checked`),el('span','',`${plural(round.mismatching,'column')} ${round.mismatching===1?'mismatches':'mismatch'}`));
+    if(index)tip.append(el('span','',`${number(round.fixed)} fixed and ${number(round.new)} new since round ${round.n-1}`));
+    if(round.left_only||round.right_only)tip.append(el('span','',`${number(round.left_only)} keys only in File 1, ${number(round.right_only)} only in File 2`));
+    tip.hidden=false;tip.style.left=Math.max(0,Math.min(W-tip.offsetWidth,cx+20))+'px';tip.style.top=(cy+18)+'px';};
+   const hide=()=>{tip.hidden=true;};
+   hit.addEventListener('mouseenter',show);hit.addEventListener('focus',show);hit.addEventListener('mouseleave',hide);hit.addEventListener('blur',hide);svg.append(hit);
+  });
+  box.prepend(svg);
+ }
+ function journeySection(detail){
+  const progress=detail.progress,section=el('section','pr-card pr-journey-card');section.setAttribute('aria-labelledby','prJourneyTitle');
+  const head=el('div','pr-card-head'),copy=el('div'),title=el('h3','','The journey so far');title.id='prJourneyTitle';
+  copy.append(title,el('p','pr-sub','Each dot is a round: right means more keys checked, down means fewer columns mismatch. The goal is the bottom-right corner.'));
+  const key=el('ul','pr-key');for(const [cls,label] of [['bad','Round with mismatches'],['ok','Clean round'],['goal','Goal']]){const item=el('li');item.append(el('i','is-'+cls),document.createTextNode(label));key.append(item);}
+  head.append(copy,key);section.append(head);
+  const chart=el('div','pr-chart'),tip=el('div','pr-tip');tip.hidden=true;tip.setAttribute('role','status');chart.append(tip);section.append(chart);
+  new ResizeObserver(()=>{if(chart.isConnected)drawJourney(chart,tip,progress.rounds.slice(-20),progress.population);}).observe(chart);
+  return section;
+ }
+
+ // What's left to fix: the columns that mismatch in the latest round. Fixed columns fold into one line.
+ function leftSection(detail){
+  const progress=detail.progress,issues=progress.issues,latest=progress.rounds.at(-1);
+  const section=el('section','pr-card');section.setAttribute('aria-labelledby','prLeftTitle');
+  // Once signed off with reasons, the remaining columns are accepted differences and show the reason given.
+  const accepted=progress.signoff?.mode==='exceptions'?new Map((progress.signoff.reasons.columns||[]).map(item=>[item.column,item.reason])):null;
+  const title=el('h3','',accepted?'Accepted at sign-off':"What's left to fix");title.id='prLeftTitle';section.append(title);
+  if(!latest){section.append(el('p','pr-sub','Mismatching columns appear here after the first round.'));return section;}
+  section.append(el('p','pr-sub',accepted?`Columns that still mismatch in round ${latest.n}, with the reason given at sign-off.`:`Columns that mismatch in round ${latest.n}.`));
+  const open=[...issues.still.items.map(item=>({...item,fresh:false})),...issues.new.items.map(item=>({...item,fresh:true}))].sort((a,b)=>b.cells-a.cells);
+  const total=issues.still.total+issues.new.total;
+  const list=el('ul','pr-left');
+  const add=item=>{const row=el('li'),name=el('div'),label=el('code','',item.column);name.append(label);
+   if(item.fresh&&!accepted)name.append(el('span','pr-new','New'));
+   name.append(el('small',accepted?'pr-accepted':'',accepted?(accepted.get(item.column)||'Accepted'):item.fresh?(latest.n>1?`Found in round ${latest.n}`:'Found in round 1'):`Mismatching since round ${item.since}`));
+   row.append(name,el('span','pr-cells',plural(item.cells,'cell')));list.append(row);};
+  open.slice(0,oneView.matches?200:8).forEach(add);
+  const scroll=el('div','pr-scroll');section.append(scroll);
+  if(open.length)scroll.append(list);
+  else scroll.append(el('p','pr-done-line',latest.clean?`Nothing left to fix in round ${latest.n}.`:`No column mismatches in round ${latest.n}; ${plural(latest.left_only+latest.right_only,'key')} ${latest.left_only+latest.right_only===1?'is':'are'} in only one file.`));
+  const shown=list.childElementCount;
+  if(shown<total){const more=projectButton(`Show ${number(Math.min(open.length,total)-shown)} more`,()=>{open.slice(shown).forEach(add);more.remove();if(total>open.length)scroll.append(el('p','pr-sub',`Showing the first ${number(open.length)}. Open round ${latest.n} for every column.`));},'pr-link pr-more');if(open.length>shown)scroll.append(more);else scroll.append(el('p','pr-sub',`Showing the first ${number(open.length)}. Open round ${latest.n} for every column.`));}
+  const fixedTotal=progress.rounds.reduce((sum,round)=>sum+round.fixed,0);
+  if(fixedTotal){
+   const note=el('div','pr-fixed');note.append(document.createTextNode(`${plural(fixedTotal,'column')} fixed so far.`));
+   if(issues.fixed.total){
+    const detailList=el('ul','pr-left pr-fixed-list');detailList.hidden=true;scroll.append(detailList);
+    for(const item of issues.fixed.items){const row=el('li'),name=el('div');name.append(el('code','',item.column),el('small','',`Fixed in round ${latest.n}; mismatched from round ${item.since}`));row.append(name);detailList.append(row);}
+    const toggle=projectButton(`See the ${number(issues.fixed.total)} fixed in round ${latest.n}`,()=>{detailList.hidden=!detailList.hidden;toggle.textContent=detailList.hidden?`See the ${number(issues.fixed.total)} fixed in round ${latest.n}`:'Hide';},'pr-link');
+    note.append(document.createTextNode(' '),toggle);section.append(note);
+   }else section.append(note);
+  }
+  return section;
+ }
+
+ // Row actions: the column reserves room for one open label, so a hovered button's label slides out into that
+ // room and the other icons move aside; nothing in the row is covered and the table never widens. Labels shown are
+ // one word; the full description is the tooltip and accessible name. A round without an action keeps an empty
+ // slot so the icons line up from row to row.
+ const slot=button=>button||el('span','pr-slot');
+ // Every round, newest first, in a plain table.
+ const howLabel=(round,previous)=>({carry:`Round ${previous?.n||round.n-1}'s ${number(round.carried)} + ${number(round.keys_checked-round.carried)} random`,random:`${number(round.keys_checked)} random`,files:'Every key in the files',all:'All keys'})[round.how];
+ function roundsSection(detail){
+  const progress=detail.progress,section=el('section','pr-card');section.setAttribute('aria-labelledby','prRoundsTitle');
+  const title=el('h3','','All rounds');title.id='prRoundsTitle';section.append(title);
+  if(!progress.rounds.length&&!progress.running.length){section.append(el('p','pr-sub','No rounds yet. Start round 1, or attach a comparison you already ran.'));return section;}
+  const table=el('table','pr-rounds');
+  table.innerHTML='<thead><tr><th scope="col"><abbr title="Round">#</abbr></th><th scope="col">Keys</th><th scope="col">How keys were chosen</th><th scope="col" class="pr-num">Result</th><th scope="col"><span class="pr-sr">Actions</span></th></tr></thead><tbody></tbody>';
+  const body=table.tBodies[0];
+  progress.running.forEach((run,index)=>{
+   const row=el('tr','is-running'),number_=el('td');number_.append(el('span','pr-r',String(progress.rounds.length+index+1)));
+   const keys=el('td');keys.append(document.createTextNode(run.sample?number(run.sample.size):'All'),el('small','','Started '+when(run.created)));
+   const actions=el('td','pr-actions-cell');actions.append(slot(),expand('activity','Open pipeline',()=>openJob(run.id),'is-small','Pipeline'));
+   row.append(number_,keys,el('td','',run.sample?.mode==='carry'?'Previous keys + random':run.sample?'Random':'Every key in the files'),el('td','pr-num pr-running',run.state==='queued'?'Queued':'Running'),actions);body.append(row);
+  });
+  [...progress.rounds].reverse().forEach(round=>{
+   const previous=progress.rounds[round.n-2],row=el('tr');
+   const number_=el('td');number_.append(el('span','pr-r'+(round.clean?' is-clean':''),String(round.n)));
+   const keys=el('td');keys.append(document.createTextNode(number(round.keys_checked)),el('small','',day(round.finished||round.created)));
+   const result=el('td','pr-num');
+   result.append(el('span',round.clean?'pr-ok':'pr-bad',round.clean?'Clean':round.mismatching?plural(round.mismatching,'column'):plural(round.left_only+round.right_only,'key')+' missing'));
+   if(progress.signoff?.round_id===round.id)result.append(el('small','','Signed off'));
+   const actions=el('td','pr-actions-cell');
+   // Sign-off is for the whole project (the status band); a round offers its analysis and what changed.
+   actions.append(slot(round.source_available!==false&&expand('chart-column',`Open round ${round.n}'s analysis`,()=>openJob(round.id),'is-small','Analysis')),
+    slot(previous&&expand('git-compare-arrows',`Compare with round ${previous.n}`,()=>window.pjOpenRunCompare(previous.id,round.id),'is-small','Compare')));
+   row.append(number_,keys,el('td','',howLabel(round,previous)),result,actions);body.append(row);
+  });
+  const scroll=el('div','pr-scroll');scroll.append(table);section.append(scroll);return section;
+ }
+
+ function renderProject(detail){
+  const dashboard=$('projectDashboard');dashboard.replaceChildren();document.body.classList.add('pr-project-open');
+  const progress=detail.progress,rounds=progress.rounds,next=rounds.length+progress.running.length+1,latest=rounds.at(-1);
+  const page=el('div','pr-page');
+  const head=el('div','pr-head pr-head-compact'),titles=el('div','pr-titles');
+  // Back is a plain icon button: no sliding label, the tooltip names it.
+  const back=projectButton('',()=>{activeProject=null;document.body.classList.remove('pr-project-open');loadProjects().catch(showError);},'pr-back-button');
+  back.setAttribute('aria-label','All projects');back.title='All projects';back.append(icon('arrow-left'));
+  const name=el('div','pr-name-line');name.append(el('h2','pr-title',detail.project.name));
+  const feed=el('div','pr-feed');
+  if(latest?.title){const [a,b]=latest.title.split(' ↔ ');feed.append(el('code','',a));if(b)feed.append(el('span','','vs'),el('code','',b));}
+  const facts=[progress.population&&`${number(progress.population)} keys`,detail.key_columns?.length&&`matched on ${detail.key_columns.join(', ')}`].filter(Boolean);
+  if(facts.length)feed.append(el('span','pr-facts',facts.join(' · ')));
+  if(!feed.childElementCount)feed.append(el('span','',detail.project.description||'Two files compared in rounds.'));
+  if(detail.template){const chip=projectButton('',()=>openTemplateDrawer(detail),'pr-template-chip');chip.title='New rounds start with this template';chip.append(icon('layout-template'),el('span','',detail.template.name));feed.append(chip);}
+  titles.append(name,feed);
+  const actions=el('div','pr-actions');
+  actions.append(expand('history','Activity',()=>window.pjOpenActivity()),expand('plus','Attach comparison',()=>showProjectCandidates()),
+   expand('layout-template',detail.template?'Change template':'Save as template',()=>openTemplateDrawer(detail)),expand('download','Export project',()=>exportProject(detail)));
+  // Starting a round is the yellow button while fixing; otherwise it stays one click away here.
+  if(['clean','signed_off','running'].includes(progress.status))actions.append(expand('play','Start round '+next,()=>openRoundDrawer(detail,next)));
+  head.append(back,titles,actions);
+  const main=el('div','pr-main'),side=el('div','pr-side');
+  if(rounds.length)main.append(journeySection(detail));
+  else{const empty=el('section','pr-card pr-journey-card pr-journey-empty');empty.append(el('h3','','The journey so far'),el('p','pr-sub','The journey appears after round 1: each round becomes a stop on the way to checking every key with nothing mismatching.'));main.append(empty);}
+  side.append(leftSection(detail),roundsSection(detail));main.append(side);
+  page.append(head,statusBand(detail,next),main);dashboard.append(page);
+  fitPage();
+ }
+ // The page's height is what's left of the window below its top, so it never scrolls when it fits.
+ function fitPage(){
+  const page=document.querySelector('#projectsPanel .pr-page');if(!page)return;
+  const scroller=document.scrollingElement,top=page.getBoundingClientRect().top+(scroller?.scrollTop||0);
+  page.style.setProperty('--pr-view-h',Math.max(560,innerHeight-top-16)+'px');
+  // Padding below the panel would still let the document scroll by a few pixels; take that off too.
+  const extra=scroller?scroller.scrollHeight-innerHeight:0;
+  if(extra>0)page.style.setProperty('--pr-view-h',Math.max(560,innerHeight-top-16-extra)+'px');
+ }
+ addEventListener('resize',()=>{if(activeProject)fitPage();});
+
+ // Sign off the project on its latest round. At 100% match it's a confirmation; otherwise each column still
+ // mismatching (and keys in only one file) needs a reason, which goes into the final report.
+ function openSignoffDrawer(detail){
+  const progress=detail.progress,latest=progress.rounds.at(-1),population=progress.population,issues=progress.issues||{};
+  openProjectDrawer('Sign off project');
+  const body=$('projectDrawerBody'),error=$('projectDrawerError');body.classList.add('pr-drawer');
+  const coverage=population&&latest.keys_checked>=population?`all ${number(population)} keys`:`${number(latest.keys_checked)}${population?` of ${number(population)}`:''} keys`;
+  const summary=el('div','pr-signoff-summary'+(latest.clean?' is-clean':' is-open'));
+  summary.append(el('span','pr-tag '+(latest.clean?'is-signed_off':'is-ready'),latest.clean?'100% match':'Mismatches remain'),
+   el('p','',latest.clean?`Round ${latest.n} matched 100% on ${coverage}.`:`Round ${latest.n} still has ${plural(latest.mismatching,'mismatching column')}${latest.left_only||latest.right_only?` and ${plural(latest.left_only+latest.right_only,'key')} in only one file`:''} on ${coverage}. Give a reason for each to sign off.`));
+  if(latest.clean&&population&&latest.keys_checked<population)summary.append(el('small','',`This round checked ${(latest.keys_checked*100/population).toFixed(1)}% of the keys. You can sign off now; the report says so.`));
+  body.append(summary);
+  const reasons=[];let sharedArea=null;
+  if(!latest.clean){
+   const field=el('fieldset','pr-field pr-reasons');field.append(el('legend','','Reasons'));
+   const open=[...(issues.still?.items||[]),...(issues.new?.items||[])].sort((a,b)=>b.cells-a.cells);
+   const reason=(key,title,detailText)=>{const row=el('label','pr-reason'),head=el('span','pr-reason-head');head.append(el('code','',title),el('small','',detailText));
+    const area=el('textarea');area.rows=2;area.maxLength=2000;area.placeholder='Why is this difference acceptable?';area.dataset.key=key;area.addEventListener('input',()=>{row.classList.remove('is-missing');error.textContent='';});
+    row.append(head,area);field.append(row);reasons.push(area);};
+   // The ten columns with the most mismatched cells get their own reasons; one shared reason covers the rest,
+   // which can still be given individually.
+   const total=(issues.still?.total||0)+(issues.new?.total||0),own=10;
+   for(const item of open.slice(0,own))reason('column:'+item.column,item.column,`${plural(item.cells,'cell')} · since round ${item.since}`);
+   if(latest.left_only||latest.right_only)reason('keys','Keys in only one file',`${number(latest.left_only)} only in File 1 · ${number(latest.right_only)} only in File 2`);
+   if(total>own){
+    const rest=open.slice(own),shared=el('label','pr-reason pr-shared'),head=el('span','pr-reason-head');
+    head.append(el('b','',`The other ${plural(total-own,'column')}`),el('small','',rest.slice(0,4).map(item=>item.column).join(', ')+(total-own>4?', …':'')));
+    const area=el('textarea');area.rows=2;area.maxLength=2000;area.placeholder='One reason for all of these';area.dataset.key='others';area.addEventListener('input',()=>{shared.classList.remove('is-missing');error.textContent='';});
+    shared.append(head,area);field.append(shared);sharedArea=area;
+    if(rest.length){const each=projectButton(`Give each its own reason`,()=>{for(const item of rest)reason('column:'+item.column,item.column,`${plural(item.cells,'cell')} · since round ${item.since}`);field.append(shared);
+      area.placeholder=total>open.length?`Required for the ${plural(total-open.length,'column')} not listed`:'Optional: used for any left blank';each.remove();},'pr-link');field.append(each);}
+   }
+   body.append(field);
+  }
+  const who=el('div','pr-field'),whoLabel=el('label','','Signed off by');whoLabel.htmlFor='prSignReviewer';
+  const reviewer=el('input');reviewer.id='prSignReviewer';reviewer.maxLength=100;reviewer.autocomplete='name';reviewer.placeholder='Your name';who.append(whoLabel,reviewer);
+  const noteField=el('div','pr-field'),noteLabel=el('label','','Note (optional)');noteLabel.htmlFor='prSignNote';
+  const note=el('textarea');note.id='prSignNote';note.rows=2;note.maxLength=2000;note.placeholder='Anything a reader of the final report should know';noteField.append(noteLabel,note);
+  const includes=el('p','pr-includes',`The final report has the sign-off, the journey, every round, ${latest.clean?'':'your reasons, '}and each round's HTML report attached (${plural(progress.rounds.length,'report')}).`);
+  const go=projectButton('',async()=>{
+   error.textContent='';
+   // A column needs its own reason unless the shared one is filled in; the shared one is needed while columns
+   // without a box of their own remain.
+   const sharedText=sharedArea?.value.trim(),listed=reasons.filter(area=>area.dataset.key.startsWith('column:')).length;
+   const unlisted=sharedArea?((progress.issues.still?.total||0)+(progress.issues.new?.total||0))-listed:0;
+   const missing=reasons.filter(area=>!area.value.trim()&&!(sharedText&&area.dataset.key!=='keys'));
+   if(sharedArea&&unlisted>0&&!sharedText)missing.push(sharedArea);
+   for(const area of missing)area.closest('.pr-reason').classList.add('is-missing');
+   if(missing.length){error.textContent=`Give a reason for ${plural(missing.length,'item')} to sign off.`;missing[0].focus();return;}
+   if(!reviewer.value.trim()){error.textContent='Enter your name to sign off.';reviewer.focus();return;}
+   const payload={columns:{},keys:'',others:sharedText||''};for(const area of reasons){if(area.dataset.key==='keys')payload.keys=area.value;else if(area.value.trim())payload.columns[area.dataset.key.slice(7)]=area.value;}
+   go.disabled=true;go.lastChild.textContent='Creating the report…';
+   try{const result=await api(`/api/projects/${detail.project.id}/signoff`,{reviewer:reviewer.value,note:note.value,reasons:payload});projectDetail=result;$('projectDrawer').close();renderProject(result);}
+   finally{go.disabled=false;go.lastChild.textContent='Sign off and create report';}
+  },'primary pr-cta');go.append(icon('badge-check'),document.createTextNode('Sign off and create report'));
+  const foot=el('div','pr-drawer-foot');foot.append(go);
+  body.append(who,noteField,includes,foot);
+  (reasons[0]||reviewer).focus();
+ }
+
+ // A project travels as a .zip of its data: rounds, results, audit, activity, sign-offs and template. The app that
+ // imports it builds the reports from that data with its own templates.
+ function exportProject(detail){
+  const link=document.createElement('a');link.href=`/api/projects/${detail.project.id}/export?token=${encodeURIComponent(token)}`;link.download='';
+  document.body.append(link);link.click();link.remove();
+ }
+ const importInput=el('input');importInput.type='file';importInput.accept='.zip,application/zip';importInput.hidden=true;document.body.append(importInput);
+ importInput.addEventListener('change',()=>{const file=importInput.files[0];importInput.value='';if(file)openImportDrawer(file);});
+ function importButton(){const button=projectButton('',()=>importInput.click(),'pr-ghost pr-import');button.append(icon('upload'),document.createTextNode('Import project'));return button;}
+ async function openImportDrawer(file){
+  openProjectDrawer('Import project');
+  const drawer=$('projectDrawer'),body=$('projectDrawerBody'),error=$('projectDrawerError');body.classList.add('pr-drawer','pr-import-drawer');
+  const reading=el('p','pr-import-reading');reading.append(icon('loader-circle'),el('span','',`Reading ${file.name}…`));body.append(reading);
+  let preview;
+  try{
+   const response=await fetch('/api/projects/import',{method:'POST',headers:{'X-App-Token':token,'Content-Type':'application/zip'},body:file});
+   preview=await response.json();if(!response.ok)throw new Error(preview.error||'The file couldn’t be read');
+  }catch(failure){reading.remove();error.textContent=failure.message;return;}
+  reading.remove();
+  // Closing without importing drops the upload.
+  let imported=false;
+  drawer.addEventListener('close',()=>{if(!imported)fetch(`/api/projects/import/${preview.upload_id}`,{method:'DELETE',headers:{'X-App-Token':token}}).catch(()=>{});},{once:true});
+  const card=el('section','pr-import-card'),head=el('div','pr-import-head'),mark=el('span','pr-import-mark'),words=el('div','pr-import-words');
+  mark.append(icon('folder-kanban'));words.append(el('strong','',preview.name),el('span','',`Exported ${day(preview.exported)} · created ${day(preview.created)}`));head.append(mark,words);
+  const facts=el('dl','pr-import-facts');
+  for(const [label,value] of [['Rounds',number(preview.rounds)],['Sign-offs',number(preview.signoffs)],['Template',preview.template||'None']]){const item=el('div');item.append(el('dt','',label),el('dd','',value));facts.append(item);}
+  card.append(head,facts);if(preview.description)card.append(el('p','pr-import-description',preview.description));
+  const field=el('div','pr-field'),label=el('label','','Project name'),input=el('input');input.id='prImportName';input.maxLength=100;label.htmlFor=input.id;
+  const clash=el('p','pr-import-clash');clash.setAttribute('role','alert');clash.hidden=true;
+  const showClash=name=>{clash.replaceChildren(icon('triangle-alert'),el('span','',`A project named “${name}” already exists. Give this one a different name to import it.`));clash.hidden=false;field.classList.add('has-clash');};
+  input.value=preview.exists?`${preview.name} (imported)`.slice(0,100):preview.name;
+  if(preview.exists)showClash(preview.name);
+  input.addEventListener('input',()=>{clash.hidden=true;field.classList.remove('has-clash');error.textContent='';});
+  field.append(label,input,clash);
+  const note=el('p','pr-sub','Every round comes in with its cell differences and other results, audit statuses, activity and sign-off. Reports are built here from that data.');
+  const foot=el('div','pr-drawer-foot'),text=el('span','','Import project');
+  const go=projectButton('',async()=>{
+   error.textContent='';const name=input.value.trim();
+   if(!name){error.textContent='Enter a project name.';input.focus();return;}
+   go.disabled=true;text.textContent='Importing…';
+   try{const result=await api(`/api/projects/import/${preview.upload_id}`,{name});imported=true;drawer.close();activeProject=result.id;projectOffset=0;await loadProjects();}
+   catch(failure){go.disabled=false;text.textContent='Import project';if(failure.status===409){showClash(name);input.focus();input.select();}else error.textContent=failure.message;}
+  },'primary pr-cta');go.append(icon('upload'),text);
+  foot.append(go);body.append(card,field,note,foot);input.focus();input.select();
+ }
+ // A project's template is a saved set of round settings; each new round starts with it.
+ async function openTemplateDrawer(detail){
+  openProjectDrawer('Project template');
+  const body=$('projectDrawerBody'),error=$('projectDrawerError'),current=detail.template,latest=detail.progress.rounds.at(-1),url=`/api/projects/${detail.project.id}/template`;
+  body.classList.add('pr-drawer','pr-template-drawer');
+  body.append(el('p','pr-sub','A template holds a round’s settings: column mapping, keys, ignored columns and value rules. Each new round starts with it, so you only choose the files.'));
+  const refresh=async()=>{$('projectDrawer').close();projectDetail=await api('/api/projects/'+detail.project.id);renderProject(projectDetail);};
+  if(current){
+   const card=el('section','pr-template-current'),mark=el('span','pr-import-mark'),words=el('div','pr-import-words');
+   mark.append(icon('layout-template'));words.append(el('strong','',current.name),el('span','','New rounds start with this template.'));
+   card.append(mark,words,projectButton('Stop using',async()=>{await api(url,{},'DELETE');await refresh();},'pr-ghost'));body.append(card);
+  }
+  const save=el('section','pr-field pr-template-save');
+  if(latest){
+   const label=el('label','',`Save round ${latest.n}’s settings as a template`),row=el('div','pr-template-row'),input=el('input');
+   input.id='prTemplateName';input.maxLength=100;input.value=`${detail.project.name} settings`.slice(0,100);label.htmlFor=input.id;
+   const button=projectButton('',async()=>{error.textContent='';await api(url,{name:input.value});await refresh();},'primary pr-cta');button.append(icon('layout-template'),document.createTextNode('Save template'));
+   row.append(input,button);save.append(label,row);
+  }else save.append(el('p','pr-sub','Run round 1, then save its settings here.'));
+  body.append(save);
+  const profiles=(await api('/api/profiles')).profiles.filter(profile=>profile.id!==current?.id);
+  if(profiles.length){
+   const use=el('section','pr-field pr-template-use'),label=el('label','','Or use a saved template'),row=el('div','pr-template-row'),select=el('select');
+   select.id='prTemplatePick';label.htmlFor=select.id;for(const profile of profiles)select.add(new Option(profile.name,profile.id));
+   row.append(select,projectButton('Use template',async()=>{error.textContent='';await api(url,{profile_id:select.value});await refresh();},'pr-ghost'));
+   use.append(label,row);body.append(use);
+  }
+ }
+ // The project drawer is shared; only the round drawer uses its own layout.
+ const openDrawerBeforeRound=openProjectDrawer;openProjectDrawer=function(...args){$('projectDrawerBody').classList.remove('pr-drawer');return openDrawerBeforeRound(...args);};
+ // Start round: the sample size is the user's choice each time. Keys can carry the previous round's (to confirm its
+ // fixes), be all new, or come from the user's own sample files. The files themselves are chosen next, in the usual
+ // Compare files flow, because fixes arrive as new deliveries.
+ function openRoundDrawer(detail,next){
+  const progress=detail.progress,latest=progress.rounds.at(-1),population=progress.population;
+  // Carrying keys forward needs an earlier sampled round; a round on every key has no sample to carry.
+  const carryReason=!latest?'Available from round 2.':['files','all'].includes(latest.how)?`Round ${latest.n} compared every key in its files, so there's no sample to carry.`:'';
+  openProjectDrawer('Start round '+next);
+  const body=$('projectDrawerBody'),error=$('projectDrawerError');body.classList.add('pr-drawer','pr-round-drawer');
+  body.append(el('p','pr-sub','Choose how many keys to compare and how to pick them. You choose the files next.'));
+  const parse=()=>Number(String(input.value).replace(/[^0-9]/g,''))||0;
+  const isAll=()=>population>0&&parse()>=population;
+  // 1. How many keys: the number, a coverage bar against all keys, and quick picks.
+  const size=el('section','pr-step'),sizeHead=el('div','pr-step-head'),sizeTitle=el('label','','How many keys');sizeTitle.htmlFor='prRoundSize';
+  sizeHead.append(el('span','pr-step-n','1'),sizeTitle);
+  const row=el('div','pr-size'),input=el('input');input.id='prRoundSize';input.inputMode='numeric';input.autocomplete='off';
+  const unit=el('span','pr-unit','keys');row.append(input,unit);
+  const bar=el('div','pr-cover'),fill=el('i'),share=el('span','pr-share');bar.append(fill);
+  const quick=el('div','pr-quick');quick.setAttribute('role','group');quick.setAttribute('aria-label','Quick sizes');
+  const pick=value=>{input.value=number(value);sync();input.focus();};
+  for(const value of [10,50,100,1000,10000,100000].filter(v=>!population||v<population).slice(-4)){const chip=el('button','',number(value));chip.type='button';chip.addEventListener('click',()=>pick(value));quick.append(chip);}
+  if(population){const all=el('button','pr-quick-all','All keys');all.type='button';all.addEventListener('click',()=>pick(population));quick.append(all);}
+  size.append(sizeHead,row,bar,share,quick);
+  // 2. Which keys: option cards; one that doesn't apply says why.
+  const choice=el('fieldset','pr-step pr-choice'),legend=el('legend','pr-step-head');legend.append(el('span','pr-step-n','2'),document.createTextNode('Which keys'));choice.append(legend);
+  const options=el('div','pr-options'),allNote=el('p','pr-all-note');allNote.append(icon('check-check'),document.createTextNode('Every key in File 1 is compared, so there\'s nothing to choose.'));
+  const option=(value,name,title,text)=>{const card=el('label','pr-opt'),radio=el('input');radio.type='radio';radio.name='prRoundKeys';radio.value=value;radio.className='pr-sr-radio';
+   const copy=el('span','pr-opt-copy'),note=el('span','pr-opt-note',text);copy.append(el('b','',title),note);
+   card.append(radio,el('span','pr-opt-icon'),copy,el('span','pr-opt-check'));card.querySelector('.pr-opt-icon').append(icon(name));card.querySelector('.pr-opt-check').append(icon('check'));
+   radio.addEventListener('change',sync);options.append(card);return {card,radio,note};};
+  const carry=option('carry','layers',latest?`Round ${latest.n}'s keys plus new random keys`:'Previous round’s keys plus new ones','');
+  const random=option('random','shuffle','New random keys','A fresh random sample from File 1’s keys.');
+  const files=option('files','file-up','My own sample files','Compare every key in the files you upload for this round.');
+  choice.append(options,allNote);
+  // Summary and action.
+  const seed=Math.floor(Math.random()*1000000);
+  const foot=el('div','pr-drawer-foot pr-round-foot'),summary=el('p','pr-round-summary'),seedLine=el('span','pr-seed');
+  const go=projectButton('',()=>{
+   error.textContent='';
+   const mode=body.querySelector('input[name=prRoundKeys]:checked')?.value,n=parse();
+   if(mode!=='files'&&!isAll()&&!n){error.textContent='Enter how many keys to compare.';input.focus();return;}
+   if(mode==='carry'&&n<=latest.keys_checked){error.textContent=`Round ${latest.n} compared ${number(latest.keys_checked)} keys. Choose more to add new ones.`;input.focus();return;}
+   const sample=mode==='files'||isAll()?null:{size:n,mode,seed,...(mode==='carry'?{from:latest.id}:{})};
+   const round={project:detail.project.id,name:detail.project.name,n:next,population,sample,previous:latest?{n:latest.n,keys:latest.keys_checked}:null,template:detail.template||null};
+   try{sessionStorage.setItem(ROUND_KEY,JSON.stringify(round));}catch{}
+   $('projectDrawer').close();localStorage.removeItem('keywise-job');localStorage.removeItem(workspaceViewKey);softReload();
+  },'primary pr-cta');go.append(document.createTextNode('Choose files'),icon('arrow-right'));
+  const copy=el('div');copy.append(summary,seedLine);foot.append(copy,go);
+  body.append(size,choice,foot);
+  function sync(){
+   const n=parse(),all=isAll(),mode=body.querySelector('input[name=prRoundKeys]:checked')?.value;
+   const pct=population?Math.min(100,n*100/population):0;
+   fill.style.width=(population?Math.max(n?1.5:0,pct):0)+'%';
+   share.textContent=!population?'':all?`All ${number(population)} keys`:n?`${pct<1?pct.toFixed(2):pct.toFixed(1)}% of ${number(population)} keys`:`of ${number(population)} keys`;
+   for(const button of quick.children)button.setAttribute('aria-pressed',String(button.classList.contains('pr-quick-all')?all:parse()===Number(button.textContent.replace(/[^0-9]/g,''))));
+   // A round on every key needs no choice of keys; own files ignore the size.
+   options.hidden=all;allNote.hidden=!all;input.disabled=mode==='files';size.classList.toggle('is-muted',mode==='files');
+   const carryOff=!!carryReason||(latest&&n<=latest.keys_checked);
+   carry.radio.disabled=!!carryReason;carry.card.classList.toggle('is-disabled',!!carryReason);
+   carry.note.textContent=carryReason||(n>latest.keys_checked?`Re-checks round ${latest.n}'s ${number(latest.keys_checked)} keys and adds ${number(n-latest.keys_checked)} new ones.`:`Choose more than ${number(latest.keys_checked)} keys to add new ones.`);
+   carry.card.classList.toggle('is-short',!carryReason&&carryOff);
+   const chosen=all?'all':mode;
+   summary.textContent={all:`Round ${next} compares every key in the files.`,files:`Round ${next} compares every key in the files you upload.`,
+    random:`Round ${next} compares ${n?plural(n,'random key'):'random keys'} from File 1.`,
+    carry:`Round ${next} compares ${n?number(n):'—'} keys: round ${latest?.n}'s ${number(latest?.keys_checked||0)} plus ${n>(latest?.keys_checked||0)?number(n-latest.keys_checked):'no'} new.`}[chosen]||'';
+   seedLine.textContent=chosen==='random'||chosen==='carry'?`Seed ${seed} · saved with the round so the same keys can be drawn again`:'';
+  }
+  const suggestion=latest?Math.min(population||Infinity,Math.max(latest.keys_checked*5,10)):10;
+  input.value=number(suggestion);input.addEventListener('input',sync);
+  (carryReason?random:carry).radio.checked=true;
+  sync();input.focus();input.select();
+ }
+
+ // While a round is being set up, the compare flow says so, and the start request carries the sample and project.
+ const banner=el('div','pr-round-banner');banner.setAttribute('role','status');banner.hidden=true;
+ function syncBanner(){
+  const round=pendingRound();banner.hidden=!round||!['uploadPanel','headersPanel','keysPanel'].includes(currentView);
+  if(!round)return;
+  const sample=round.sample;
+  const what=!sample?(round.population?'every key in the files':'every key in the files you choose'):sample.mode==='carry'?`${number(sample.size)} keys: round ${round.previous.n}'s ${number(round.previous.keys)} plus random keys`:`${number(sample.size)} random keys from File 1`;
+  banner.replaceChildren(icon('flag'),el('span','',''),);
+  const text=banner.querySelector('span');text.append(el('strong','',`Round ${round.n} of ${round.name}`),document.createTextNode(` · compares ${what}.`+(round.template?` Uses the template ${round.template.name}.`:'')));
+  useRoundTemplate();
+  const cancel=projectButton('Cancel round',()=>{try{sessionStorage.removeItem(ROUND_KEY);}catch{}syncBanner();},'pr-link');banner.append(cancel);
+ }
+ const flow=$('mainWorkspace');flow?.querySelector('.workspace-topbar')?.after(banner);
+ const goViewBeforeRound=goView;goView=async function(...args){const result=await goViewBeforeRound(...args);syncBanner();if(currentView!=='projectsPanel')document.body.classList.remove('pr-project-open');else if(activeProject)fitPage();return result;};
+ const panelBeforeRound=panel;panel=function(...args){const result=panelBeforeRound(...args);syncBanner();return result;};
+ startConfiguration=function(){
+  const config=configuration(),round=pendingRound();
+  if(round){config.project_id=round.project;if(round.sample)config.sample=round.sample;}
+  return config;
+ };
+ // A round of a project with a template picks it in the upload step, so it's applied once the files are read.
+ function useRoundTemplate(){
+  const round=pendingRound(),select=$('quickProfile');
+  if(!round?.template||!select||select.value||![...select.options].some(option=>option.value===round.template.id))return;
+  select.value=round.template.id;select.dispatchEvent(new Event('change'));
+ }
+ // The template list loads on its own schedule; pick the template whenever its options change.
+ if($('quickProfile'))new MutationObserver(useRoundTemplate).observe($('quickProfile'),{childList:true});
+ // Once the round has started, it belongs to the project; the next comparison is an ordinary one again.
+ const apiBeforeRound=api;api=async function(path,...rest){const result=await apiBeforeRound(path,...rest);if(/\/api\/jobs\/[a-f0-9]{32}\/start$/.test(path)&&pendingRound()){try{sessionStorage.removeItem(ROUND_KEY);}catch{}syncBanner();}return result;};
+ syncBanner();
  }
 }

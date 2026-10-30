@@ -69,9 +69,9 @@ DRAWER_STYLE='''
 .pd-rank{padding-top:3px;font:600 12px/1 ui-monospace,Consolas,Menlo,monospace;color:#8aa0ab;text-align:right}
 .pd-pair{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
 .pd-v{max-width:100%;padding:3px 10px;border-radius:6px;font:600 13px/1.5 ui-monospace,"Cascadia Mono",Consolas,Menlo,monospace;overflow-wrap:anywhere;white-space:pre-wrap}
-.pd-v.is-before{background:#fdeeea;color:#8f3a2f}.pd-v.is-after{background:#e8f5ef;color:#2b6b4e}
+.pd-v.is-file1{background:#e8f5ef;color:#2b6b4e}.pd-v.is-file2{background:#fdeeea;color:#8f3a2f}
 .pd-v.is-empty{font-style:italic;font-weight:500}
-.pd-arrow{color:#8aa0ab;font-size:14px}
+.pd-vs{color:#8aa0ab;font-size:12px;font-weight:600}
 .pd-figures{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .pd-figures strong{display:block;font-size:16px;font-weight:650}
 .pd-figures span{font-size:12.5px;color:#5f7682}
@@ -114,7 +114,7 @@ function paint(){
  list.replaceChildren();const start=page*PAGE,rows=shown.slice(start,start+PAGE);
  for(const [rank,pair] of rows){
   const [a,b,n,keys]=pair,item=el('li','pd-item'),main=el('div'),line=el('div','pd-pair'),figures=el('div','pd-figures');
-  line.append(value(a,'before'),el('span','pd-arrow','→'),value(b,'after'));main.append(line);
+  line.append(value(a,'file1'),el('span','pd-vs','vs'),value(b,'file2'));main.append(line);
   figures.append(el('strong','',n.toLocaleString()),el('span','',(total?100*n/total:0).toFixed(2)+'% of mismatches'));
   item.append(el('span','pd-rank',String(rank)),main,figures);
   if(keys&&keys.length){const box=el('div','pd-keys');box.append(el('span','',keys.length===1?'Key':'Keys'));

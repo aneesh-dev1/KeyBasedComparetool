@@ -109,18 +109,24 @@ class PartitionedEngineTests(unittest.TestCase):
             self.assertEqual((out / f'{output}.csv').read_bytes(), (reference / f'{output}.csv').read_bytes(), output)
         self.assertEqual(summary['left_rows'], len(left))
 
-    def test_errors_report_the_same_global_record_number(self):
+    def test_blank_keys_are_skipped_and_audited_by_every_engine(self):
         rows = [[f'K{i:05d}', 'x'] for i in range(400)]
         rows[333][0] = ''
         write(self.root / 'left.csv', ['id', 'value'], rows)
-        write(self.root / 'right.csv', ['id', 'value'], rows[:10])
-        messages = []
+        write(self.root / 'right.csv', ['id', 'value'], rows[:10] + [['', 'y']])
+        results = {}
         for engine in ('auto', 'partitioned'):
-            with self.assertRaises(ValueError) as caught:
-                self.run_engine(engine, 'empty-' + engine)
-            messages.append(str(caught.exception))
-        self.assertEqual(messages[0], messages[1])
-        self.assertIn('record 334: empty key component', messages[1])
+            out, summary, _ = self.run_engine(engine, 'blank-' + engine)
+            with (out / 'skipped_keys.csv').open(newline='') as stream:
+                audit = list(csv.DictReader(stream))
+            results[engine] = summary, out, audit
+        for engine, (summary, out, audit) in results.items():
+            with self.subTest(engine=engine):
+                # Blank keys never match each other: each is its own unavailable key, on its own side.
+                self.assertEqual((summary['unidentified_records'], summary['malformed_records'], summary['matched_keys'], summary['left_only']), (2, 2, 10, 389))
+                self.assertEqual(sorted((row['side'], row['reason']) for row in audit), [('left', 'Blank key value in id'), ('right', 'Blank key value in id')])
+        for output in OUTPUTS:
+            self.assertEqual((results['auto'][1] / f'{output}.csv').read_bytes(), (results['partitioned'][1] / f'{output}.csv').read_bytes(), output)
 
     def test_quoted_fast_path_matches_the_csv_module(self):
         from csv_input import PackedRows

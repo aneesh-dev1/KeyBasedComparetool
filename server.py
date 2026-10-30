@@ -250,6 +250,106 @@ class Application:
             job['can_resume']=job['state'] in ('error','cancelled') and job['resume_strategy'] is not None
         return job
 
+    def sign_off_project(self, store, identity, config):
+        """Sign off a project on its latest round. At 100% match that's all; otherwise every column still
+        mismatching (and keys found in only one file) needs a reason. Builds the final project report with every
+        round's HTML report attached, and records the sign-off."""
+        detail = store.detail(identity)
+        state = detail['progress']
+        if state['running']:
+            raise ValueError('Wait for the running round to finish before signing off')
+        if not state['rounds']:
+            raise ValueError('Run at least one round before signing off')
+        reviewer, note = config.get('reviewer', ''), config.get('note', '')
+        if not isinstance(reviewer, str) or not 1 <= len(reviewer.strip()) <= 100:
+            raise ValueError('Enter your name (up to 100 characters) to sign off')
+        if not isinstance(note, str) or len(note) > 2000:
+            raise ValueError('Keep the note under 2,000 characters')
+        latest = state['rounds'][-1]
+        record = next((r for r in detail['records'] if r['id'] == latest['id']), None) or store.records(identity=latest['id'])['records'][0]
+        given = config.get('reasons') or {}
+        if not isinstance(given, dict):
+            raise ValueError('Give the reasons as a list per column')
+        known = {item['column']: item for group in ('still', 'new') for item in (state['issues'] or {}).get(group, {}).get('items', [])}
+        columns, missing = [], []
+        # One shared reason covers every column without a reason of its own (rounds can have hundreds).
+        others = given.get('others', '') if isinstance(given.get('others', ''), str) else ''
+        for column, cells in (record.get('mismatch_columns') or {}).items():
+            reason = (given.get('columns') or {}).get(column, '')
+            if (not isinstance(reason, str) or not reason.strip()) and others.strip():
+                reason = others
+            if not isinstance(reason, str) or not reason.strip():
+                missing.append(column)
+            elif len(reason) > 2000:
+                raise ValueError(f'Keep the reason for {column} under 2,000 characters')
+            columns.append(dict(column=column, cells=cells, since=f"round {known[column]['since']}" if column in known else '—', reason=(reason or '').strip()))
+        columns.sort(key=lambda item: -item['cells'])
+        keys_reason = given.get('keys', '') if isinstance(given.get('keys', ''), str) else ''
+        if (latest['left_only'] or latest['right_only']) and not keys_reason.strip():
+            missing.append('keys found in only one file')
+        if missing:
+            raise ValueError('Give a reason for ' + ', '.join(missing[:5]) + (f' and {len(missing) - 5:,} more' if len(missing) > 5 else ''))
+        mode = 'clean' if latest['clean'] else 'exceptions'
+        reasons = dict(columns=columns, keys=keys_reason.strip()) if mode == 'exceptions' else dict(columns=[], keys='')
+        signoff = dict(at=time.time(), reviewer=reviewer.strip(), note=note.strip(), mode=mode, reasons=reasons, round_id=latest['id'])
+        target = self.signoff_report(store, identity, signoff)
+        store.sign_off(identity, latest['id'], signoff['reviewer'], signoff['note'], mode, reasons, target)
+        return store.detail(identity)
+
+    def signoff_report(self, store, identity, signoff):
+        """Build a sign-off's HTML report from the project's data, with every round's report inside it."""
+        from reports import project_signoff_html
+        detail = store.detail(identity)
+        state = detail['progress']
+        record = store.records(identity=signoff['round_id'])['records'][0]
+        attachments = []
+        for round_ in state['rounds']:
+            target = self.directory(round_['id']) / 'comparison-report.html'
+            job_file = self.directory(round_['id']) / 'job.json'
+            # Rebuild a round's report when it is missing or was built by an older report version.
+            stale = job_file.exists() and self.load(round_['id']).get('exports', {}).get('html', {}).get('report_version') != REPORT_VERSION
+            if (not target.exists() or stale) and job_file.exists():
+                try:
+                    self._run_export(round_['id'], 'html')
+                except Exception:
+                    pass
+            attachments.append(dict(id=round_['id'], content=target.read_bytes() if target.exists() else None))
+        folder = self.root / 'project-reports' / identity
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / f"signoff-{int(signoff['at'])}.html"
+        atomic_write_text(target, project_signoff_html(detail['project'], state, record, signoff, attachments))
+        return target
+
+    def round_sample(self, sample, keys):
+        """A project round's sample: its size, a seed so it can be drawn again, and for carry-forward the earlier
+        round whose keys it re-checks. That round must have been sampled on the same key columns."""
+        if not isinstance(sample, dict):
+            raise ValueError('Choose a valid sample')
+        size, mode, seed = sample.get('size'), sample.get('mode', 'random'), sample.get('seed')
+        if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= 50_000_000:
+            raise ValueError('Choose a sample of 1 to 50,000,000 keys')
+        if mode not in ('random', 'carry'):
+            raise ValueError('Choose random keys, or the previous round’s keys plus more')
+        if seed is None:
+            seed = secrets.randbelow(1_000_000)
+        if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 10 ** 9:
+            raise ValueError('Use a whole-number seed below 1,000,000,000')
+        result = dict(size=size, mode=mode, seed=seed)
+        if mode == 'carry':
+            source = str(sample.get('from', ''))
+            if not re.fullmatch(r'[a-f0-9]{32}', source) or not (self.directory(source) / 'job.json').exists():
+                raise ValueError('Choose the earlier round to carry keys from')
+            if self.load(source).get('keys') != keys:
+                raise ValueError('The earlier round matched on different key columns, so its keys can’t be carried forward')
+            from sampling import load_keys
+            carried = load_keys(self.directory(source) / 'report')
+            if carried is None:
+                raise ValueError('The earlier round compared every key in its files, so there’s no sample to carry forward. Choose random keys instead.')
+            if len(carried) > size:
+                raise ValueError(f'The earlier round compared {len(carried):,} keys. Choose a sample of at least that many.')
+            result['from'] = source
+        return result
+
     def save(self, job):
         with self.lock:
             path = self.directory(job['id']) / 'job.json'
@@ -861,6 +961,128 @@ class Handler(BaseHTTPRequestHandler):
         folder.mkdir(parents=True, exist_ok=True)
         return folder / 'key-containers.json'
 
+    def profiles_path(self):
+        return self.container_path().with_name('comparison-profiles.json')
+
+    def profile_from_job(self, job_id, name):
+        """A template (saved comparison profile) from a ready or finished comparison's settings."""
+        item=self.app.load(job_id)
+        if self.server.shared and item.get('owner')!=self.workspace:raise ValueError('Comparison not found')
+        if item['state'] not in ('ready','complete'):raise ValueError('Configure the comparison before saving a profile')
+        name=name.strip() if isinstance(name,str) else ''
+        if not name or len(name)>100:raise ValueError('Enter a profile name of 1–100 characters')
+        profile=dict(id=uuid.uuid4().hex,name=name,source_headers=item['source_headers'],column_headers=item['column_headers'],config=item.get('draft',{}) if item['state']=='ready' else {key:item.get(key) for key in ('keys','ignore_columns','ignore_keys','ignore_container_ids','value_overrides','comparison_rules','memory_mb','comparison_engine','sort_workers','read_batch_size','compare_batch_size','duplicate_policy')})
+        profile['config']={k:v for k,v in profile['config'].items() if k not in PERFORMANCE}
+        settings_path=self.container_path().with_name('settings.json')
+        defaults=json.loads(settings_path.read_text()) if settings_path.exists() else {}
+        cfg=profile['config']
+        profile['config']['comparison_rules']=resolved_rules(defaults,cfg,item['columns'],cfg.get('keys') or [],cfg.get('ignore_columns') or [])
+        return profile
+
+    def project_import_folder(self):
+        folder=self.app.root/'project-imports'/re.sub(r'[^A-Za-z0-9_-]','',str(self.workspace or 'local'))[:64]
+        folder.mkdir(parents=True,exist_ok=True)
+        # Uploads nobody finished importing are dropped after a day.
+        for old in folder.glob('*.zip'):
+            if time.time()-old.stat().st_mtime>86400:old.unlink(missing_ok=True)
+        return folder
+
+    def project_routes(self, store, path, query):
+        """Export, import and templates for projects. Returns True when it answered the request."""
+        import project_bundle
+        with self.app.lock:
+            profiles=json.loads(self.profiles_path().read_text()) if self.profiles_path().exists() else []
+        def save_profiles(items):
+            encoded=json.dumps(items)
+            if len(encoded.encode('utf-8'))>5*1024**2:raise ValueError('Template library exceeds 5 MiB; delete an unused template first')
+            atomic_write_text(self.profiles_path(),encoded)
+        match=re.fullmatch(r'/api/projects/([a-f0-9]{32})/(export|template)',path)
+        if match and match.group(2)=='export' and self.command=='GET':
+            identity=match.group(1);project=store.detail(identity)['project']
+            template=next((p for p in profiles if p['id']==project.get('profile_id')),None)
+            folder=self.project_import_folder();target=folder/f'export-{uuid.uuid4().hex}.part'
+            try:
+                project_bundle.export(self.app,store,identity,template,target)
+                name=re.sub(r'[^A-Za-z0-9._-]+','-',project['name']).strip('-')[:60] or 'project'
+                self.send_response(200)
+                self.send_header('Content-Type','application/zip')
+                self.send_header('Content-Length',str(target.stat().st_size))
+                self.send_header('Content-Disposition',f'attachment; filename="{name}-project.zip"')
+                self.send_header('Cache-Control','no-store')
+                self.end_headers()
+                with target.open('rb') as stream:shutil.copyfileobj(stream,self.wfile,1024*1024)
+            finally:target.unlink(missing_ok=True)
+            return True
+        if match and match.group(2)=='template' and self.command in ('POST','DELETE'):
+            identity=match.group(1)
+            if self.command=='DELETE':
+                store.set_profile(identity,None);self.json_response(dict(saved=True));return True
+            config=self.body()
+            if config.get('profile_id'):
+                if not any(p['id']==config['profile_id'] for p in profiles):raise ValueError('That template no longer exists')
+                store.set_profile(identity,config['profile_id']);self.json_response(dict(saved=True));return True
+            # Save the latest round's settings as a new template and use it for this project's next rounds.
+            rounds=store.runs(identity)
+            if not rounds:raise ValueError('Run a round first, then save its settings as a template')
+            profile=self.profile_from_job(rounds[-1]['id'],config.get('name',''))
+            with self.app.lock:
+                profiles=json.loads(self.profiles_path().read_text()) if self.profiles_path().exists() else []
+                if any(p['name'].casefold()==profile['name'].casefold() for p in profiles):raise ValueError(f"A template named “{profile['name']}” already exists. Choose another name.")
+                if len(profiles)>=100:raise ValueError('Delete an unused template first (maximum 100)')
+                save_profiles(profiles+[profile])
+            store.set_profile(identity,profile['id'])
+            self.json_response(dict(saved=True,profile=dict(id=profile['id'],name=profile['name'])));return True
+        if path=='/api/projects/import' and self.command=='POST':
+            # Step 1: receive the .zip and show what's in it, before anything is created.
+            size=int(self.headers.get('Content-Length',0))
+            if size<=0:raise ValueError('Choose the .zip made by Export project')
+            if size>50*1024**3:raise ValueError('The export is larger than 50 GB')
+            upload=uuid.uuid4().hex;target=self.project_import_folder()/f'{upload}.zip'
+            self.connection.settimeout(120)
+            try:
+                with target.open('wb') as out:
+                    left=size
+                    while left:
+                        chunk=self.rfile.read(min(left,1024*1024))
+                        if not chunk:raise ValueError('The upload stopped before the whole file arrived. Try again.')
+                        out.write(chunk);left-=len(chunk)
+                manifest=project_bundle.read(target)
+            except Exception:
+                target.unlink(missing_ok=True);raise
+            self.json_response(dict(project_bundle.preview(manifest,store),upload_id=upload));return True
+        match=re.fullmatch(r'/api/projects/import/([a-f0-9]{32})',path)
+        if match and self.command in ('POST','DELETE'):
+            target=self.project_import_folder()/f'{match.group(1)}.zip'
+            if self.command=='DELETE':
+                target.unlink(missing_ok=True);self.json_response(dict(discarded=True));return True
+            if not target.exists():raise ValueError('That upload has expired. Choose the file again.')
+            config=self.body();manifest=project_bundle.read(target)
+            name=config.get('name',manifest['project']['name'])
+            name=name.strip() if isinstance(name,str) else ''
+            if not 1<=len(name)<=100:raise ValueError('Use a project name of 1–100 characters')
+            if store.name_taken(name):
+                self.json_response(dict(error=f'A project named “{name}” already exists. Choose another name to import this one.',exists=True),409);return True
+            with self.app.lock:
+                profiles=json.loads(self.profiles_path().read_text()) if self.profiles_path().exists() else []
+                count=len(profiles);profile_id=project_bundle.restore_template(manifest.get('template'),profiles)
+                if len(profiles)!=count:save_profiles(profiles)
+            identity=None
+            try:
+                identity,signoffs,ids=project_bundle.install(self.app,store,target,manifest,name,self.workspace if self.server.shared else None,profile_id)
+                # Build every round's report and the sign-off report here, from the imported data.
+                for job_id in ids.values():self.app._run_export(job_id,'html')
+                if signoffs:
+                    # The latest sign-off is the one whose report can be downloaded.
+                    latest=store.signoffs(identity)[-1]
+                    store.set_signoff_report(latest['id'],self.app.signoff_report(store,identity,latest))
+            except Exception:
+                if identity:
+                    for job_id in store.remove(identity):shutil.rmtree(self.app.directory(job_id),ignore_errors=True)
+                raise
+            target.unlink(missing_ok=True)
+            self.json_response(dict(id=identity),201);return True
+        return False
+
     def check_request(self):
         port = self.server.server_address[1]
         hosts = {f'127.0.0.1:{port}', f'localhost:{port}'}
@@ -953,7 +1175,14 @@ class Handler(BaseHTTPRequestHandler):
                                 except (ValueError,OSError):continue
                             marker.touch()
                     return self.json_response(dict(projects=store.overview()))
-                if path=='/api/projects' and self.command=='POST':return self.json_response(dict(id=store.create(self.body())),201)
+                if path=='/api/projects' and self.command=='POST':
+                    config=self.body()
+                    if config.get('profile_id'):
+                        profiles=json.loads(self.profiles_path().read_text()) if self.profiles_path().exists() else []
+                        if not any(p['id']==config['profile_id'] for p in profiles):raise ValueError('That template no longer exists')
+                    config.pop('imported',None);config.pop('created',None)
+                    return self.json_response(dict(id=store.create(config)),201)
+                if self.project_routes(store,path,query):return
                 if path=='/api/projects/records':
                     if self.command=='GET':return self.json_response(store.records(offset=max(0,int(query.get('offset',['0'])[0])),identity=query.get('id',[None])[0]))
                     if self.command=='POST':
@@ -964,8 +1193,29 @@ class Handler(BaseHTTPRequestHandler):
                         store.update_record(config);return self.json_response(dict(saved=True))
                 match_compare=re.fullmatch(r'/api/projects/([a-f0-9]{32})/compare',path)
                 if match_compare and self.command=='GET':return self.json_response(self.app.compare_runs(store,match_compare.group(1),query))
+                match_signoff=re.fullmatch(r'/api/projects/([a-f0-9]{32})/signoff(/report)?',path)
+                if match_signoff and self.command=='POST' and not match_signoff.group(2):
+                    return self.json_response(self.app.sign_off_project(store,match_signoff.group(1),self.body()))
+                if match_signoff and self.command=='GET' and match_signoff.group(2):
+                    signoff=store.latest_signoff(match_signoff.group(1))
+                    target=Path(signoff['report']) if signoff else None
+                    if not target or not target.exists() or self.app.root.resolve() not in target.resolve().parents:raise ValueError('This project has no sign-off report yet')
+                    name=re.sub(r'[^A-Za-z0-9._-]+','-',store.detail(match_signoff.group(1))['project']['name']).strip('-')[:60]+'-signoff-report.html'
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/html; charset=utf-8')
+                    self.send_header('Content-Length',str(target.stat().st_size))
+                    self.send_header('Content-Disposition',f'attachment; filename="{name}"')
+                    self.send_header('X-Content-Type-Options','nosniff')
+                    self.end_headers()
+                    with target.open('rb') as stream:shutil.copyfileobj(stream,self.wfile,1024*1024)
+                    return
                 match_project=re.fullmatch(r'/api/projects/([a-f0-9]{32})',path)
-                if match_project and self.command=='GET':return self.json_response(store.detail(match_project.group(1),max(0,int(query.get('offset',['0'])[0]))))
+                if match_project and self.command=='GET':
+                    detail=store.detail(match_project.group(1),max(0,int(query.get('offset',['0'])[0])))
+                    profiles=json.loads(self.profiles_path().read_text()) if self.profiles_path().exists() else []
+                    template=next((p for p in profiles if p['id']==detail['project'].get('profile_id')),None)
+                    detail['template']=template and dict(id=template['id'],name=template['name'])
+                    return self.json_response(detail)
                 return self.json_response({'error':'Not found'},404)
             if path in ('/api/json-compare', '/api/json-arrays') and self.command == 'POST':
                 config = self.body(64 * 1024 * 1024)
@@ -1045,18 +1295,8 @@ class Handler(BaseHTTPRequestHandler):
                 with self.app.lock:
                     profiles=json.loads(target.read_text()) if target.exists() else []
                     if self.command=='POST':
-                        config=self.body();item=self.app.load(config.get('job_id',''))
-                        if self.server.shared and item.get('owner')!=self.workspace:raise ValueError('Comparison not found')
-                        if item['state'] not in ('ready','complete'):raise ValueError('Configure the comparison before saving a profile')
-                        name=config.get('name','').strip()
-                        if not name or len(name)>100:raise ValueError('Enter a profile name of 1–100 characters')
-                        profile=dict(id=uuid.uuid4().hex,name=name,source_headers=item['source_headers'],column_headers=item['column_headers'],config=item.get('draft',{}) if item['state']=='ready' else {key:item.get(key) for key in ('keys','ignore_columns','ignore_keys','ignore_container_ids','value_overrides','comparison_rules','memory_mb','comparison_engine','sort_workers','read_batch_size','compare_batch_size','duplicate_policy')})
-                        profile['config']={k:v for k,v in profile['config'].items() if k not in PERFORMANCE}
-                        settings_path=self.container_path().with_name('settings.json')
-                        defaults=json.loads(settings_path.read_text()) if settings_path.exists() else {}
-                        cfg=profile['config']
-                        profile['config']['comparison_rules']=resolved_rules(defaults,cfg,item['columns'],cfg.get('keys') or [],cfg.get('ignore_columns') or [])
-                        profiles=[p for p in profiles if p['name'].casefold()!=name.casefold()]
+                        config=self.body();profile=self.profile_from_job(config.get('job_id',''),config.get('name',''))
+                        profiles=[p for p in profiles if p['name'].casefold()!=profile['name'].casefold()]
                         if len(profiles)>=100:raise ValueError('Delete an unused profile first (maximum 100)')
                         profiles.append(profile)
                     elif self.command=='DELETE':
@@ -1491,6 +1731,15 @@ class Handler(BaseHTTPRequestHandler):
                         validate_scope(keys, job['columns'], [], item['values'])
                     overrides, _ = validate_overrides(config.get('value_overrides', []), job['columns'], keys, ignored_columns)
                     rules=resolved_rules(defaults,config,job['columns'],keys,ignored_columns)
+                    # Project rounds: an optional sample of File 1's keys, and the project the run belongs to.
+                    sample=config.get('sample')
+                    if sample is not None and job.get('execution_mode')=='review':
+                        raise ValueError('Recompare uses the original comparison’s keys; start a new round to change the sample')
+                    if sample is not None:job['sample']=self.app.round_sample(sample,keys)
+                    elif job.get('execution_mode')!='review':job.pop('sample',None)
+                    project=config.get('project_id')
+                    project_store=ProjectStore(project_database(self.app.root,self.workspace),self.workspace if self.server.shared else None)
+                    if project is not None and (not re.fullmatch(r'[a-f0-9]{32}',str(project)) or not project_store.exists(project)):raise ValueError('That project no longer exists')
                     job.update(**execution_settings(config),comparison_rules=rules,state='queued', keys=keys, memory_cap_mb=self.server.max_sort_mb, sort_workers=1,
                                ignore_columns=ignored_columns, ignore_keys=config.get('ignore_keys', ''), value_overrides=overrides,
                                ignore_container_ids=ids, ignore_key_containers=containers)
@@ -1499,6 +1748,8 @@ class Handler(BaseHTTPRequestHandler):
                         decision=plan(job,directory/'baseline',job)
                         if decision['mode']!='review':raise ValueError('A full comparison is required: '+decision['reason'])
                     self.app.save(job)
+                    if project:
+                        project_store.update_record(dict(comparison_id=identity,project_id=project))
                     with (directory / 'run.log').open('a') as log:
                         log.write(f'{time.strftime("%H:%M:%S")}  Comparison queued\n')
                     self.app.submit(identity,'comparison',self.app.run_comparison)

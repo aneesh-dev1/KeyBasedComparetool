@@ -60,10 +60,11 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(result['left_only'], 0)
 
     def test_empty_key(self):
-        left = self.write('a.csv', ['id'], [['']])
-        right = self.write('b.csv', ['id'], [])
-        with self.assertRaisesRegex(ValueError, 'empty key'):
-            self.run_comparison(left, right)
+        # A blank key cannot be matched: the record is audited as key unavailable and the comparison continues.
+        left = self.write('a.csv', ['id'], [[''], ['1']])
+        right = self.write('b.csv', ['id'], [['1']])
+        result = self.run_comparison(left, right)
+        self.assertEqual((result['unidentified_records'], result['matched_keys'], result['left_only']), (1, 1, 0))
 
     def test_schema_mismatch(self):
         left = self.write('a.csv', ['id', 'v'], [])

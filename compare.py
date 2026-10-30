@@ -89,9 +89,13 @@ def input_fraction(path, source, rows):
         return None
 
 
-def normalize_headers(names):
+def normalize_headers(names, trim=False):
+    """Unique, non-blank column names. With ``trim`` (text files), spaces around a name are dropped so ``id `` and
+    ``id`` match; the change is reported like any other header normalization."""
     if not names:
         raise ValueError('CSV must contain a header row')
+    if trim:
+        names = [name.strip() for name in names]
     reserved = {name.casefold() for name in names if name.strip()}
     used = set()
     result = []
@@ -153,7 +157,7 @@ def read_header(path, delimiter, encoding, has_header=True):
     if original is not None and not has_header:
         # Header-less data files (common for .dat extracts): name columns column1…columnN.
         original = [''] * len(original)
-    normalized = normalize_headers(original)
+    normalized = normalize_headers(original, trim=has_header)
     # Generated names are not edits to the file's own header, so they are not reported as changes.
     changes = [dict(column=i, original=before, normalized=after)
                for i,(before,after) in enumerate(zip(original,normalized),1) if before != after] if has_header else []
@@ -302,7 +306,16 @@ def input_rows(path,args,position=0,indices=None,side=None):
             if position: source.seek(position)
             reader=csv.reader(iter(source.readline,''),delimiter=delimiter,strict=True)
             if not position and has_header: next(reader)
-            yield source,reader
+            def rows():
+                from csv_input import located
+                record=0
+                try:
+                    for row in reader:
+                        record+=1
+                        yield row
+                except csv.Error as error:
+                    raise located(error,path,record+1) from None
+            yield source,rows()
 
 
 def _sort_csv(path, names, canonical, keys, temp, prefix, args):
@@ -383,7 +396,9 @@ def _sort_csv(path, names, canonical, keys, temp, prefix, args):
                         progress(args, f'{prefix} read progress', rows=count, excluded=excluded, batch=serial+1, batch_rows=len(chunk), status='ongoing')
                     continue
                 if not malformed and not args.allow_empty_keys and any(value is None or value == '' for value in key):
-                    raise ValueError(f'{path}: record {count}: empty key component')
+                    from invalid_rows import blank_key
+                    row = blank_key(f'record {count}', path, args.keys, key)
+                    malformed, encoded_key = True, encode(row[0])
                 if not chunk:
                     progress(args, f'{prefix} sort batch started', batch=serial+1, rows=count-1, status='ongoing')
                 if native or malformed:item=(encoded_key,row[1])
@@ -672,6 +687,13 @@ def _compare(args):
     rules=validate_rules(getattr(args,'comparison_rules',[]),common,args.keys,ignored_columns)
     rule_lookup={rule['column']:rule for rule in rules}
     args.diagnostic_columns=canonical
+    # A project round can compare a sample of File 1's keys; the engines see it as more excluded keys.
+    sample_info=None
+    if getattr(args,'sample',None):
+        from sampling import draw
+        progress(args,'Drawing the sample of keys',stage='validate',size=args.sample['size'])
+        sample_keys,sample_info=draw(args,left_names,canonical,args.sample['size'],args.sample['seed'],args.sample.get('carry') or (),args.excluded_keys,lambda message:progress(args,message))
+        progress(args,'Sample ready',stage='validate',keys=sample_info['size'],carried=sample_info['carried'],rows_read=sample_info['population_rows'],status='completed')
     checkpoint_dir=getattr(args,'checkpoint_dir',None)
     if checkpoint_dir:
         from checkpoints import validate
@@ -679,7 +701,11 @@ def _compare(args):
         # Effective per-file settings, so equivalent shared and per-file configurations resume each other.
         effective={side:list(dialect(args,side)) for side in ('left','right')}
         if any(value!=[args.delimiter,args.encoding,True] for value in effective.values()):configuration['dialects']=effective
+        if sample_info:configuration['sample']=sample_info['digest']
         validate(checkpoint_dir,args,configuration,lambda message:progress(args,message))
+    if sample_info:
+        from sampling import KeyFilter
+        args.excluded_keys=KeyFilter(args.excluded_keys,sample_keys)
     # Exclusive creation prevents accidental replacement of previous reports.
     out = Path(args.output)
     if out.exists() and checkpoint_dir:
@@ -689,6 +715,9 @@ def _compare(args):
         # Rebuild final comparison output from validated sorted runs; never append partial results.
     out.mkdir(parents=True, exist_ok=bool(checkpoint_dir))
     (out / 'INCOMPLETE').write_text('Reports are incomplete until summary.json is present.\n')
+    if sample_info:
+        from sampling import save as save_sample
+        save_sample(out,sample_info,sample_keys)
     stats = dict(left_rows=0, right_rows=0, matched_keys=0, equal_rows=0,
                  changed_rows=0, changed_cells=0, left_only=0, right_only=0, override_equivalent_cells=0, rule_equivalent_cells=0)
     stats.update({side + suffix: 0 for side in ('left', 'right') for suffix in ('_duplicate_keys', '_duplicate_rows_skipped')})
@@ -775,7 +804,7 @@ def _compare(args):
     progress(args, 'Writing reports')
     stats.update(settings)
     stats.update(input_formats={side:('parquet' if is_parquet(path) else 'csv') for side,path in [('left',args.left),('right',args.right)]}, comparison_rules=rules, unmatched_columns=unmatched_columns, keys=args.keys, comparison='exact text with configured rules and/or overrides' if rules or overrides else 'exact text', changed_cells_by_column=columns,
-                 value_overrides=overrides, ignore_key_containers=exclusion_audit,
+                 value_overrides=overrides, ignore_key_containers=exclusion_audit, sample=sample_info,
                  column_headers=aligned, header_layout_changes=layout_changes,
                  header_changes=[dict(side=side, **change) for side, changes in (("left", left_header_changes), ("right", right_header_changes)) for change in changes],
                  ignored_columns=ignored_columns, ignored_keys_count=len(args.excluded_keys),

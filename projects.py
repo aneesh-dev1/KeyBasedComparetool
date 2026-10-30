@@ -7,6 +7,71 @@ import uuid
 from pathlib import Path
 
 STATUSES=('Unreviewed','In review','Approved','Changes requested')
+MAX_COLUMNS=5000
+ISSUES_SHOWN=200
+STATE_LABELS=dict(empty='No rounds yet',running='Running',fixing='Fixing',ready='Ready for all keys',clean='Ready to sign off',signed_off='Signed off')
+
+
+def _keys_checked(record):
+    sample=record.get('sample')
+    if sample:return sample['size']
+    return (record.get('matched_keys') or 0)+(record.get('left_only') or 0)
+
+
+def progress(records,signoff=None):
+    """A project's rounds and where it stands. Completed table comparisons are rounds, oldest first; each is
+    compared with the round before it by mismatching column: fixed (mismatched before, not now), still failing,
+    and new. The status says what the project needs next."""
+    tables=[r for r in records if r.get('kind','table')=='table']
+    running=sorted([r for r in tables if r['state'] in ('queued','running')],key=lambda r:r['created'])
+    complete=sorted([r for r in tables if r['state']=='complete'],key=lambda r:(r.get('finished') or r['created'],r['id']))
+    population=max([(r.get('sample') or {}).get('population_rows') or r.get('left_rows') or 0 for r in complete] or [0])
+    rounds,previous,history=[],None,[]
+    for number,record in enumerate(complete,1):
+        failing=set(record.get('mismatch_columns') or {})
+        sample=record.get('sample')
+        checked=_keys_checked(record)
+        how='carry' if sample and sample.get('carried') else 'random' if sample else 'all' if population and checked>=population else 'files'
+        entry=dict(id=record['id'],n=number,title=record.get('title'),created=record['created'],finished=record.get('finished'),
+                   keys_checked=checked,how=how,carried=(sample or {}).get('carried',0),seed=(sample or {}).get('seed'),
+                   mismatching=len(failing),cells=record.get('changed_cells') or 0,keys_with_differences=record.get('changed_rows') or 0,
+                   left_only=record.get('left_only') or 0,right_only=record.get('right_only') or 0,
+                   audit_status=record.get('audit_status'),source_available=record.get('source_available',True))
+        entry['clean']=not failing and not entry['left_only'] and not entry['right_only']
+        if previous is None:entry.update(still=0,new=len(failing),fixed=0)
+        else:entry.update(still=len(failing&previous),new=len(failing-previous),fixed=len(previous-failing))
+        rounds.append(entry);history.append((record,failing));previous=failing
+    latest=rounds[-1] if rounds else None
+    if running:status='running'
+    elif not latest:status='empty'
+    # Signed off only while the project's sign-off covers its latest round; a newer round reopens it.
+    elif signoff and signoff['round_id']==latest['id']:status='signed_off'
+    elif not latest['clean']:status='fixing'
+    elif population and latest['keys_checked']<population:status='ready'
+    else:status='clean'
+    issues=dict(still=[],new=[],fixed=[])
+    if history:
+        record,failing=history[-1];before=history[-2][1] if len(history)>1 else set()
+        counts=record.get('mismatch_columns') or {}
+        def trail(name):return ['f' if name in seen else 'c' for _,seen in history]
+        def since(name):
+            first=len(history)
+            while first>1 and name in history[first-2][1]:first-=1
+            return first
+        for name in sorted(failing,key=lambda name:-counts.get(name,0)):
+            group='still' if name in before else 'new'
+            issues[group].append(dict(column=name,cells=counts.get(name,0),since=since(name),trail=trail(name)))
+        for name in sorted(before-failing):
+            first=len(history)-1
+            while first>1 and name in history[first-2][1]:first-=1
+            issues['fixed'].append(dict(column=name,cells=(history[-2][0].get('mismatch_columns') or {}).get(name,0),since=first,trail=trail(name)))
+        issues={group:dict(total=len(items),items=items[:ISSUES_SHOWN]) for group,items in issues.items()}
+    return dict(status=status,status_label=STATE_LABELS[status],population=population,rounds=rounds,
+                signoff=signoff if signoff and latest and signoff['round_id']==latest['id'] else None,
+                running=[dict(id=r['id'],created=r['created'],state=r['state'],sample=r.get('sample_requested')) for r in running],
+                issues=issues if history else None,
+                checked=max([r['keys_checked'] for r in rounds] or [0]))
+
 
 def database(root,owner=None):
     folder=Path(root)
@@ -21,7 +86,12 @@ def job_snapshot(job):
         changed_cells=summary.get('changed_cells'),changed_rows=summary.get('changed_rows'),matched_keys=summary.get('matched_keys'),
         equal_rows=summary.get('equal_rows'),left_only=summary.get('left_only'),right_only=summary.get('right_only'),
         changed_columns=sum(v>0 for v in summary.get('changed_cells_by_column',{}).values()),
-        compared_columns=len(summary.get('changed_cells_by_column',{})),error=job.get('error','')[-1000:])
+        compared_columns=len(summary.get('changed_cells_by_column',{})),error=job.get('error','')[-1000:],
+        left_rows=summary.get('left_rows'),key_columns=job.get('keys'),
+        # Project rounds: which columns mismatch, and the sample of keys the run compared (none: every key).
+        mismatch_columns=dict(list({name:count for name,count in summary.get('changed_cells_by_column',{}).items() if count}.items())[:MAX_COLUMNS]),
+        sample={k:v for k,v in (summary.get('sample') or {}).items() if k!='digest'} or None,
+        sample_requested=job.get('sample'))
 
 class Store:
     def __init__(self,path,viewer=None):
@@ -39,7 +109,12 @@ class Store:
         CREATE INDEX IF NOT EXISTS records_project ON records(project_id,updated DESC);
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),at REAL NOT NULL,message TEXT NOT NULL,record_id TEXT);
         CREATE INDEX IF NOT EXISTS events_project ON events(project_id,at DESC);
+        CREATE TABLE IF NOT EXISTS signoffs(id INTEGER PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),round_id TEXT NOT NULL,at REAL NOT NULL,reviewer TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL,reasons TEXT NOT NULL,report TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS signoffs_project ON signoffs(project_id,at DESC);
         ''')
+        # Projects made from a template (a saved comparison profile) remember it, so each round starts from it.
+        if 'profile_id' not in {row[1] for row in db.execute('PRAGMA table_info(projects)')}:
+            db.execute('ALTER TABLE projects ADD COLUMN profile_id TEXT')
         try:
             with db: yield db
         finally: db.close()
@@ -63,6 +138,55 @@ class Store:
             snapshot=json.loads(row['snapshot']);snapshot['source_available']=False
             db.execute('UPDATE records SET snapshot=?,updated=? WHERE id=?',(json.dumps(snapshot),time.time(),identity))
             if row['project_id']:self.event(db,row['project_id'],'Source files removed; audit summary retained',identity)
+    def latest_signoff(self,identity,db=None):
+        def read(connection):
+            row=connection.execute('SELECT * FROM signoffs WHERE project_id=? ORDER BY at DESC,id DESC LIMIT 1',(identity,)).fetchone()
+            return dict(row,reasons=json.loads(row['reasons'])) if row else None
+        if db is not None:return read(db)
+        with self.connect() as connection:return read(connection)
+    def sign_off(self,identity,round_id,reviewer,note,mode,reasons,report):
+        with self.connect() as db:
+            db.execute('INSERT INTO signoffs(project_id,round_id,at,reviewer,note,mode,reasons,report) VALUES(?,?,?,?,?,?,?,?)',
+                       (identity,round_id,time.time(),reviewer,note,mode,json.dumps(reasons),str(report)))
+            self.event(db,identity,'Project signed off'+(' with reasons for remaining mismatches' if mode=='exceptions' else ' at 100% match')+' · '+reviewer,round_id)
+    def name_taken(self,name):
+        with self.connect() as db:return db.execute('SELECT 1 FROM projects WHERE name=?',(name.strip(),)).fetchone() is not None
+    def set_profile(self,identity,profile_id):
+        with self.connect() as db:
+            if not db.execute('SELECT 1 FROM projects WHERE id=?',(identity,)).fetchone():raise ValueError('Project not found')
+            db.execute('UPDATE projects SET profile_id=? WHERE id=?',(profile_id or None,identity))
+            self.event(db,identity,'Template saved for new rounds' if profile_id else 'Template removed')
+    def signoffs(self,identity):
+        with self.connect() as db:
+            return [dict(row,reasons=json.loads(row['reasons'])) for row in db.execute('SELECT * FROM signoffs WHERE project_id=? ORDER BY at,id',(identity,))]
+    def events_of(self,identity):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute('SELECT * FROM events WHERE project_id=? ORDER BY at,id',(identity,))]
+    def restore(self,identity,events,signoffs):
+        """An imported project's history, with its original times: activity, then sign-offs (report paths added later)."""
+        with self.connect() as db:
+            for item in events:db.execute('INSERT INTO events(project_id,at,message,record_id) VALUES(?,?,?,?)',(identity,item['at'],item['message'],item.get('record_id')))
+            ids=[]
+            for item in signoffs:
+                cursor=db.execute('INSERT INTO signoffs(project_id,round_id,at,reviewer,note,mode,reasons,report) VALUES(?,?,?,?,?,?,?,?)',
+                                  (identity,item['round_id'],item['at'],item['reviewer'],item['note'],item['mode'],json.dumps(item['reasons']),''))
+                ids.append(cursor.lastrowid)
+            return ids
+    def adopt(self,record_id,identity,status,note,reviewer):
+        """Attach an imported round with its audit status; the import restores the original activity itself."""
+        if status not in STATUSES:status='Unreviewed'
+        with self.connect() as db:db.execute('UPDATE records SET project_id=?,status=?,note=?,reviewer=? WHERE id=?',(identity,status,note[:2000],reviewer[:100],record_id))
+    def remove(self,identity):
+        """Undo a failed import: the project and everything recorded for it."""
+        with self.connect() as db:
+            ids=[row[0] for row in db.execute('SELECT id FROM records WHERE project_id=?',(identity,))]
+            for table in ('signoffs','events'):db.execute(f'DELETE FROM {table} WHERE project_id=?',(identity,))
+            db.execute('DELETE FROM records WHERE project_id=?',(identity,));db.execute('DELETE FROM projects WHERE id=?',(identity,))
+        return ids
+    def set_signoff_report(self,signoff_id,report):
+        with self.connect() as db:db.execute('UPDATE signoffs SET report=? WHERE id=?',(str(report),signoff_id))
+    def exists(self,identity):
+        with self.connect() as db:return db.execute('SELECT 1 FROM projects WHERE id=?',(identity,)).fetchone() is not None
     def event(self,db,project,message,record=None):
         db.execute('INSERT INTO events(project_id,at,message,record_id) VALUES(?,?,?,?)',(project,time.time(),message,record))
     def create(self,config):
@@ -73,8 +197,9 @@ class Store:
         try:
             with self.connect() as db:
                 if db.execute('SELECT count(*) FROM projects').fetchone()[0]>=500:raise ValueError('Maximum 500 projects')
-                db.execute('INSERT INTO projects VALUES(?,?,?,?)',(identity,name.strip(),description,time.time()))
-                self.event(db,identity,'Project created')
+                profile=config.get('profile_id') or None
+                db.execute('INSERT INTO projects(id,name,description,created,profile_id) VALUES(?,?,?,?,?)',(identity,name.strip(),description,config.get('created') or time.time(),profile))
+                if not config.get('imported'):self.event(db,identity,'Project created'+(' from a template' if profile else ''))
         except sqlite3.IntegrityError as error:raise ValueError('A project with this name already exists') from error
         return identity
     def update_record(self,config):
@@ -108,7 +233,24 @@ class Store:
     def overview(self):
         visible,values=self.visibility('r')
         with self.connect() as db:
-            return [dict(r) for r in db.execute('SELECT p.*,count(r.id) AS comparisons,sum(CASE WHEN r.status="Approved" THEN 1 ELSE 0 END) AS approved,max(r.updated) AS updated FROM projects p LEFT JOIN records r ON r.project_id=p.id AND '+visible+' GROUP BY p.id ORDER BY coalesce(max(r.updated),p.created) DESC',values)]
+            projects=[dict(r) for r in db.execute('SELECT p.*,count(r.id) AS comparisons,sum(CASE WHEN r.status="Approved" THEN 1 ELSE 0 END) AS approved,max(r.updated) AS updated FROM projects p LEFT JOIN records r ON r.project_id=p.id AND '+visible+' GROUP BY p.id ORDER BY coalesce(max(r.updated),p.created) DESC',values)]
+            plain,plain_values=self.visibility()
+            grouped={}
+            for row in db.execute('SELECT * FROM records WHERE project_id IS NOT NULL AND '+plain,plain_values):grouped.setdefault(row['project_id'],[]).append(self.record(row))
+            signoffs={project['id']:self.latest_signoff(project['id'],db) for project in projects}
+        for project in projects:
+            state=progress(grouped.get(project['id'],[]),signoffs.get(project['id']))
+            latest=state['rounds'][-1] if state['rounds'] else None
+            # The dashboard row needs the status, coverage and the latest round; not every round's detail.
+            project.update(status=state['status'],status_label=state['status_label'],population=state['population'],checked=state['checked'],
+                           rounds=[dict(n=r['n'],keys_checked=r['keys_checked'],clean=r['clean'],mismatching=r['mismatching']) for r in state['rounds']],
+                           latest_round=latest,feed=(latest or {}).get('title') or next((r.get('title') for r in grouped.get(project['id'],[])),None),
+                           signoff=state['signoff'] and dict(mode=state['signoff']['mode'],reviewer=state['signoff']['reviewer'],at=state['signoff']['at']),
+                           # When the latest round actually ran (or a running one started), not when a comparison
+                           # was attached or its record last changed.
+                           last_run=(state['running'][-1]['created'] if state['running'] else (latest.get('finished') or latest['created']) if latest else None))
+        projects.sort(key=lambda project:project['last_run'] or project['created'],reverse=True)
+        return projects
     def runs(self,identity):
         """A project's completed table comparisons the viewer can see, oldest first."""
         with self.connect() as db:
@@ -125,12 +267,14 @@ class Store:
             rows=db.execute('SELECT * FROM records WHERE project_id=? AND '+visible+' ORDER BY updated DESC,id',[identity]+values).fetchall()
             event_visible,event_values=self.visibility('r')
             events=db.execute('SELECT e.* FROM events e LEFT JOIN records r ON r.id=e.record_id WHERE e.project_id=? AND (e.record_id IS NULL OR ('+event_visible+')) ORDER BY e.at DESC,e.id DESC LIMIT 100',[identity]+event_values).fetchall()
+            signoff=self.latest_signoff(identity,db)
         records=[self.record(r) for r in rows];complete=[r for r in records if r['state']=='complete']
         latest=max(complete,key=lambda r:r.get('finished') or r['created'],default=None)
         return dict(project=dict(project),total=len(records),offset=offset,records=records[offset:offset+25],
             audit_counts={s:sum(r['audit_status']==s for r in records) for s in STATUSES},
             states={s:sum(r['state']==s for r in records) for s in {r['state'] for r in records}},
-            latest=latest,trend=sorted(complete,key=lambda r:r.get('finished') or r['created'])[-12:],events=[dict(e) for e in events])
+            latest=latest,trend=sorted(complete,key=lambda r:r.get('finished') or r['created'])[-12:],events=[dict(e) for e in events],
+            progress=progress(records,signoff),key_columns=(latest or {}).get('key_columns'))
 
 
 def migrate_workspaces(root):
@@ -149,7 +293,7 @@ def migrate_workspaces(root):
                         suffix+=1
                         label=' · '+source.parent.name[:8]+(' '+str(suffix) if suffix>1 else '')
                         name=row['name'][:100-len(label)]+label
-                    db.execute('INSERT INTO projects VALUES(?,?,?,?)',(row['id'],name,row['description'],row['created']))
+                    db.execute('INSERT INTO projects(id,name,description,created) VALUES(?,?,?,?)',(row['id'],name,row['description'],row['created']))
                 for row in old.execute('SELECT * FROM records'):
                     snapshot=json.loads(row['snapshot']);snapshot.setdefault('owner',source.parent.name)
                     db.execute('INSERT OR IGNORE INTO records VALUES(?,?,?,?,?,?,?)',(row['id'],row['project_id'],json.dumps(snapshot),row['status'],row['note'],row['reviewer'],row['updated']))

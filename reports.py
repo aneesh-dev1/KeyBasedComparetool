@@ -13,13 +13,16 @@ import zipfile
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
-REPORT_VERSION = 14
+REPORT_VERSION = 15
+# Report times are India Standard Time (UTC+5:30), labelled IST.
+from datetime import timedelta as _timedelta, timezone as _timezone
+IST = _timezone(_timedelta(hours=5, minutes=30), 'IST')
 
 def summary_rows(summary):
     yield ['Metric', 'Value']
     for key, value in summary.items():
         if key not in ('changed_cells_by_column', 'ignore_key_containers','analysis_notes','review_revision','skipped_records_preview'):
-            yield [key.replace('_', ' ').capitalize(), json.dumps(value, ensure_ascii=False) if isinstance(value, list) else value]
+            yield [key.replace('_', ' ').capitalize(), json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict)) else value]
     for key,value in summary.get('review_revision',{}).items():yield ['Review: '+key.replace('_',' '),value]
     yield ['Column', 'Changed cells']
     for name, count in summary['changed_cells_by_column'].items():
@@ -275,14 +278,16 @@ def make_summary_html(summary):
     cells = summary['changed_cells']
     left_only, right_only = summary.get('left_only', 0), summary.get('right_only', 0)
     overall = 100 * (1 - cells / (matched * total)) if matched and total else None
-    generated = datetime.now(timezone.utc)
+    generated = datetime.now(IST)
     files = source_labels(summary)
 
     out = html_start('TransUnion | Data comparison report')
     out += ('<h1>Data comparison report<time datetime="' + generated.isoformat(timespec='seconds') + '">Generated '
-            + generated.strftime('%d %b %Y, %H:%M UTC') + '</time></h1><button class="print" type="button" onclick="window.print()">Print or save as PDF</button>'
+            + generated.strftime('%d %b %Y, %H:%M IST') + '</time></h1><button class="print" type="button" onclick="window.print()">Print or save as PDF</button>'
             + '<div class="files">' + ''.join(f'<div class="file-source"><span>{label}</span><strong>{esc(name)}</strong></div>'
-                                       for label, name in zip(('File 1', 'File 2'), files)) + '<div class="keys">Matched on <strong>' + esc(', '.join(summary['keys'])) + '</strong></div></div></div></header>')
+                                       for label, name in zip(('File 1', 'File 2'), files)) + '<div class="keys">Matched on <strong>' + esc(', '.join(summary['keys'])) + '</strong>'
+            + (f'<span> · random sample of <strong>{summary["sample"]["size"]:,}</strong> keys from File 1 (seed {summary["sample"]["seed"]})</span>' if summary.get('sample') else '')
+            + '</div></div></div></header>')
     sections = [('summary', 'Summary', None), ('statistics', 'Mismatching columns', len(changed)), ('keys', 'Keys', None), ('matching', 'Matching columns', len(equal)), ('scope', 'Exclusions', None), ('interpretation', 'Scope', None)]
     if summary.get('malformed_records'):
         sections.insert(1, ('skipped-records', 'Skipped keys', summary.get('skipped_keys', 0)))
@@ -712,3 +717,230 @@ def export_html(report, destination, notify=lambda message: None):
             notify('Writing single-file HTML report…');output.write(head[offset:offset+1024*1024])
         for chunk in pattern_drawer_chunks(report,summary,notify):output.write(chunk)
         output.write('</body>'+tail)
+
+
+def _journey_svg(rounds, population, esc):
+    """The project's journey as a static picture: keys checked (log scale) across, mismatching columns down."""
+    import math
+    from datetime import datetime, timezone
+    if not rounds:
+        return ''
+    width, height, left, right, top, bottom = 760, 300, 50, 130, 50, 52
+    total = max(population or 0, 10, *(r['keys_checked'] for r in rounds))
+    most = max(1, *(r['mismatching'] for r in rounds))
+    x = lambda keys: left + math.log10(max(1, keys)) / math.log10(total) * (width - left - right)
+    y = lambda count: top + (1 - count / most) * (height - top - bottom)
+    out = [f'<svg class="journey" viewBox="0 0 {width} {height}" role="img" aria-label="Journey of the project, round by round">']
+    out.append(f'<line x1="{left}" x2="{x(total) + 20:.1f}" y1="{y(0):.1f}" y2="{y(0):.1f}" stroke="#c9d6dc"/>')
+    out.append(f'<text x="{left - 8}" y="{y(most) + 4:.1f}" text-anchor="end" class="ax">{most:,}</text><text x="{left - 8}" y="{y(0) + 4:.1f}" text-anchor="end" class="ax">0</text>')
+    out.append(f'<text x="{left}" y="{top - 30}" class="ax">Mismatching columns</text><text x="{(left + x(total)) / 2:.1f}" y="{height - 4}" text-anchor="middle" class="ax">Keys checked →</text>')
+    # The goal: a soft ring centred on its point (all keys, nothing mismatching).
+    out.append(f'<circle cx="{x(total):.1f}" cy="{y(0):.1f}" r="20" fill="#e8f5ef" stroke="#bfe3d1"/><text x="{x(total):.1f}" y="{y(0) + 34:.1f}" text-anchor="middle" class="v">All {total:,}</text>')
+    points = ' '.join(f'{x(r["keys_checked"]):.1f},{y(r["mismatching"]):.1f}' for r in rounds)
+    out.append(f'<polyline points="{points}" fill="none" stroke="#193a50" stroke-width="2" stroke-linejoin="round"/>')
+    last = rounds[-1]
+    if last['keys_checked'] < total or last['mismatching']:
+        out.append(f'<line x1="{x(last["keys_checked"]):.1f}" y1="{y(last["mismatching"]):.1f}" x2="{x(total):.1f}" y2="{y(0):.1f}" stroke="#8a9ba6" stroke-width="2" stroke-dasharray="5 5"/>')
+    reached = last['keys_checked'] >= total and last['clean']
+    for r in rounds:
+        cx, cy = x(r['keys_checked']), y(r['mismatching'])
+        fill = '#007b99' if r['clean'] else '#b8433a'
+        label = 'Goal reached' if reached and r is last else 'Clean' if r['clean'] else f'{r["mismatching"]:,} column' + ('' if r['mismatching'] == 1 else 's')
+        out.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="11" fill="{fill}" stroke="#fff" stroke-width="3"/><text x="{cx:.1f}" y="{cy + 4:.1f}" text-anchor="middle" class="n">{r["n"]}</text>')
+        # Labels go above-right of a stop, or below-left where the right edge is too close.
+        at_goal = reached and r is last
+        near_edge = cx > width - right + 20 and not at_goal
+        lx, ly, anchor = (cx + 26, cy - 28, 'start') if at_goal else (cx - 14, cy - 50 if cy + 50 > height - bottom else cy + 22, 'end') if near_edge else (cx + 14, cy - 36, 'start')
+        date = datetime.fromtimestamp(r.get('finished') or r['created'], IST).strftime('%d %b')
+        out.append(f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" class="v">{esc(label)}</text><text x="{lx:.1f}" y="{ly + 13:.1f}" text-anchor="{anchor}" class="ax">{r["keys_checked"]:,} keys</text>'
+                   f'<text x="{lx:.1f}" y="{ly + 26:.1f}" text-anchor="{anchor}" class="ax">{date}</text>')
+    return ''.join(out) + '</svg>'
+
+
+def project_signoff_html(project, progress, latest, signoff, attachments):
+    """The final project report, built like the comparison report (same masthead, section index, blocks and
+    tables): the verdict and who signed off, the journey, the reasons for any remaining mismatches, every round with
+    its own HTML report attached, and the sign-off details."""
+    from datetime import datetime, timezone
+    esc = lambda value: html.escape(str(value))
+    rounds, population = progress['rounds'], progress['population']
+    last = rounds[-1]
+    stamp = lambda value: datetime.fromtimestamp(value, IST)
+    signed = stamp(signoff['at'])
+    clean = signoff['mode'] == 'clean'
+    fixed = sum(r['fixed'] for r in rounds)
+    files = [name for name in (last.get('title') or '').split(' ↔ ') if name] or ['File 1', 'File 2']
+    keys = ', '.join(latest.get('key_columns') or [])
+    coverage = f'all {population:,} keys' if population and last['keys_checked'] >= population else f'{last["keys_checked"]:,}' + (f' of {population:,}' if population else '') + ' keys'
+    how = {'carry': 'Previous round’s keys + random', 'random': 'Random sample', 'files': 'Every key in the files', 'all': 'All keys'}
+    attached = {item['id']: item for item in attachments}
+    plural = lambda count, word: f'{count:,} {word}' + ('' if count == 1 else 's')
+    reasons = signoff['reasons'].get('columns', []) if not clean else []
+
+    out = html_start(f'TransUnion | {project["name"]} sign-off report')
+    out = out.replace('</style>', PROJECT_STYLE + '</style>', 1)
+    out += ('<h1>Project sign-off report<time datetime="' + signed.isoformat(timespec='seconds') + '">' + esc(project['name']) + ' · signed off '
+            + signed.strftime('%d %b %Y, %H:%M IST') + '</time></h1><button class="print" type="button" onclick="window.print()">Print or save as PDF</button>'
+            + '<div class="files">' + ''.join(f'<div class="file-source"><span>{label}</span><strong>{esc(name)}</strong></div>' for label, name in zip(('File 1', 'File 2'), files))
+            + (f'<div class="keys">Matched on <strong>{esc(keys)}</strong></div>' if keys else '') + '</div></div></header>')
+    sections = [('summary', 'Summary', None), ('journey', 'Journey', len(rounds))]
+    if not clean:
+        sections.append(('reasons', 'Reasons', len(reasons) + (1 if signoff['reasons'].get('keys') else 0)))
+    available = [r for r in rounds if (attached.get(r['id']) or {}).get('content')]
+    sections += [('rounds', 'Rounds', len(rounds)), ('round-reports', 'Round reports', len(available)), ('signoff', 'Sign-off', None)]
+    out += '<nav class="toc" aria-label="Report sections"><ol>' + ''.join(
+        f'<li><a href="#{anchor}">{label}' + (f'<span class="count">{count:,}</span>' if count is not None else '') + '</a></li>' for anchor, label, count in sections) + '</ol></nav>'
+    out += '<main class="page">'
+
+    # Summary: the answer first, in the comparison report's verdict layout.
+    matched, columns, cells = latest.get('matched_keys') or 0, latest.get('compared_columns') or 0, latest.get('changed_cells') or 0
+    rate = 100 * (1 - cells / (matched * columns)) if matched and columns else None
+    if clean:
+        state, state_class = 'Signed off at 100% match', 'is-clean'
+        sentence = f'Round {last["n"]} matched every compared value on <strong>{esc(coverage)}</strong>.'
+    else:
+        state, state_class = 'Signed off with reasons', 'is-reasons'
+        sentence = (f'Round {last["n"]} still had <strong>{plural(last["mismatching"], "mismatching column")}</strong>'
+                    + (f' and <strong>{plural(last["left_only"] + last["right_only"], "key")}</strong> in only one file' if last['left_only'] or last['right_only'] else '')
+                    + f' on {esc(coverage)}. The reviewer accepted each with a reason.')
+    out += ('<section class="block" id="summary"><div class="verdict"><p class="rate">' + percent(rate)
+            + f'<small>Overall cell match in round {last["n"]}, the round signed off</small></p><div><span class="state {state_class}">{state}</span><p class="verdict-text">{sentence}</p></div></div>')
+    figures = [('Rounds', f'{len(rounds):,}', 'From first sample to sign-off'),
+               ('Keys checked', f'{last["keys_checked"]:,}', 'All keys' if population and last['keys_checked'] >= population else (f'{100 * last["keys_checked"] / population:.2f}% of {population:,}' if population else 'In the last round')),
+               ('Mismatching columns', f'{last["mismatching"]:,}', 'At sign-off'),
+               ('Columns fixed', f'{fixed:,}', 'Over all rounds')]
+    out += '<dl class="figures">' + ''.join(f'<div><dt>{label}</dt><dd>{value}<small>{note}</small></dd></div>' for label, value, note in figures) + '</dl>'
+    out += (f'<div class="sources"><p>Signed off by <strong>{esc(signoff["reviewer"])}</strong><br>{signed.strftime("%d %b %Y, %H:%M IST")}</p>'
+            + (f'<p>Note<br><strong>{esc(signoff["note"])}</strong></p>' if signoff.get('note') else f'<p>Round signed off<br><strong>Round {last["n"]} · {esc(coverage)}</strong></p>') + '</div></section>')
+
+    # Journey: the same picture as the project page.
+    out += ('<section class="block" id="journey"><h2>The journey</h2><p class="lede">Each dot is a round: right means more keys checked, down means fewer columns mismatch. '
+            'The goal is the bottom-right corner: every key checked and nothing mismatching.</p>' + _journey_svg(rounds, population, esc)
+            + '<ul class="bands"><li><span class="dot j-bad"></span>Round with mismatches</li><li><span class="dot j-ok"></span>Clean round</li><li><span class="dot j-goal"></span>Goal</li></ul></section>')
+
+    # Reasons: like the mismatching-columns table, with the accepted reason in place of review notes.
+    if not clean:
+        largest = max([item['cells'] for item in reasons] or [1])
+        out += (f'<section class="block" id="reasons"><h2>Reasons for the remaining mismatches ({len(reasons):,})</h2>'
+                f'<p class="lede">Each column still mismatching in round {last["n"]}, largest first, with the reason the reviewer gave for accepting it.</p>'
+                '<div class="toolbar"><div><h3>Accepted differences</h3><p>Percentages use ' + f'{matched:,}' + ' matched keys.</p></div>'
+                '<label class="search-label">Find a column <input id="reasonSearch" type="search" placeholder="Column name"></label></div>'
+                '<div class="table-wrap"><table id="reasonTable"><thead><tr><th>Column</th><th class="num">Mismatched cells</th><th class="num">Mismatch %</th><th>Mismatching since</th><th>Reason</th></tr></thead><tbody>')
+        for item in reasons:
+            share = 100 * item['cells'] / matched if matched else 0
+            out += (f'<tr><td>{esc(item["column"])}</td><td class="num">{item["cells"]:,}<span class="share b{band_index(item["cells"], matched) if matched else 3}" data-share="{item["cells"] / largest:.4f}"><i></i></span></td>'
+                    f'<td class="num">{share:.4f}%</td><td>{esc(item["since"])}</td><td>{esc(item["reason"])}</td></tr>')
+        out += '</tbody></table></div>'
+        if signoff['reasons'].get('keys'):
+            out += (f'<div class="notice"><h2>Keys in only one file</h2><p>{last["left_only"]:,} keys only in File 1 and {last["right_only"]:,} only in File 2.</p>'
+                    f'<p>{esc(signoff["reasons"]["keys"])}</p></div>')
+        out += '</section>'
+
+    # Rounds, each with its full comparison report attached inside this file.
+    out += ('<section class="block" id="rounds"><h2>Rounds</h2><p class="lede">Every round of the project, oldest first. '
+            'Each round’s full comparison report is included below; select View report to open it.</p><div class="table-wrap"><table><thead><tr>'
+            '<th>Round</th><th>Ran</th><th class="num">Keys checked</th><th>Keys chosen</th><th>Result</th><th>Change</th><th>Report</th></tr></thead><tbody>')
+    for r in rounds:
+        item = attached.get(r['id'])
+        link = (f'<a class="view-report" href="#round-reports" data-round="{r["n"]}">View report</a>'
+                if item and item.get('content') else '<span class="muted">Not available: the comparison’s results were removed</span>')
+        result = ('<span class="ok">Clean</span>' if r['clean'] else f'<span class="bad">{plural(r["mismatching"], "column")}</span>'
+                  + (f'<br><small class="muted">{r["left_only"] + r["right_only"]:,} keys in one file</small>' if r['left_only'] or r['right_only'] else ''))
+        change = '—' if r['n'] == 1 else f'{r["fixed"]:,} fixed · {r["new"]:,} new'
+        out += (f'<tr><td><span class="round-n{" is-clean" if r["clean"] else ""}">{r["n"]}</span></td><td>{stamp(r.get("finished") or r["created"]).strftime("%d %b %Y")}</td>'
+                f'<td class="num">{r["keys_checked"]:,}</td><td>{esc(how.get(r["how"], ""))}</td><td>{result}</td><td>{change}</td><td>{link}</td></tr>')
+    out += '</tbody></table></div></section>'
+
+    # Round reports: each round's own comparison report, shown in full inside this file. A frame keeps each report's
+    # styles and scripts to itself, so its section index, search and pattern drawer work as they do on their own.
+    if available:
+        signed_round = next((r for r in rounds if r['id'] == signoff['round_id']), last)
+        chips = ''.join(
+            f'<button type="button" class="round-chip" data-round="{r["n"]}" aria-pressed="false"><span class="round-n{" is-clean" if r["clean"] else ""}">{r["n"]}</span>'
+            f'<span><b>Round {r["n"]}</b><small>{r["keys_checked"]:,} keys · ' + ('clean' if r['clean'] else plural(r['mismatching'], 'column')) + '</small></span>'
+            + ('<em>Signed off</em>' if r['id'] == signed_round['id'] else '') + '</button>' for r in available)
+        data = json.dumps([dict(n=r['n'], ran=stamp(r.get('finished') or r['created']).strftime('%d %b %Y, %H:%M IST'), keys=f'{r["keys_checked"]:,}',
+                                result='Clean' if r['clean'] else plural(r['mismatching'], 'mismatching column'), how=how.get(r['how'], ''),
+                                html=base64.b64encode(attached[r['id']]['content']).decode()) for r in available])
+        out += (f'<section class="block viewer" id="round-reports"><h2>Round reports ({len(available):,})</h2>'
+                '<p class="lede">The full comparison report of each round, exactly as it was produced. Choose a round; each report has its own sections, search and pattern drawer.</p>'
+                f'<div class="round-switch" role="group" aria-label="Choose a round">{chips}</div>'
+                '<div class="viewer-head"><div><strong id="viewerTitle"></strong><span id="viewerMeta"></span></div>'
+                '<div class="viewer-actions"><button type="button" class="viewer-button" id="viewerOpen">Open in a new tab</button><a class="viewer-button" id="viewerDownload">Download</a></div></div>'
+                '<iframe id="viewerFrame" title="Round comparison report"></iframe>'
+                '<p class="print-note">Round reports are interactive. To print one, open it in a new tab and use its Print button.</p>'
+                f'<script type="application/json" id="roundReportData">{data}</script></section>')
+        default_round = signed_round['n'] if any(r['id'] == signed_round['id'] for r in available) else available[-1]['n']
+    else:
+        default_round = 0
+
+    # Sign-off details, as the comparison report lists its scope.
+    details = [('Project', project['name']), ('Description', project.get('description') or '—'), ('Signed off by', signoff['reviewer']),
+               ('Signed off on', signed.strftime('%d %b %Y, %H:%M IST')), ('Path', 'Latest round matched 100%' if clean else 'Mismatches accepted with reasons'),
+               ('Round signed off', f'Round {last["n"]}, {coverage}'), ('Note', signoff.get('note') or '—'),
+               ('Round reports included', f'{len(available):,} of {len(rounds):,} rounds')]
+    out += ('<section class="block scope-text" id="signoff"><h2>Sign-off</h2><p>A new round in this project reopens it; this report stays as the record of this sign-off.</p>'
+            '<dl class="defs">' + ''.join(f'<dt>{label}</dt><dd>{esc(value)}</dd>' for label, value in details) + '</dl></section>')
+    out += '</main><footer>TransUnion project sign-off report, generated by the comparison tool.</footer>'
+    out += """<script>
+(function(){
+const search=document.getElementById('reasonSearch');
+if(search)search.addEventListener('input',()=>{const q=search.value.toLowerCase();document.querySelectorAll('#reasonTable > tbody > tr').forEach(r=>r.hidden=!r.cells[0].textContent.toLowerCase().includes(q));});
+for(const bar of document.querySelectorAll('.share'))bar.firstChild.style.width=Math.max(2,100*Number(bar.dataset.share))+'%';
+const links=[...document.querySelectorAll('.toc a')],targets=links.map(a=>document.querySelector(a.getAttribute('href')));
+function mark(){let current=0;targets.forEach((t,i)=>{if(t&&t.getBoundingClientRect().top<120)current=i;});links.forEach((a,i)=>a.setAttribute('aria-current',String(i===current)));}
+addEventListener('scroll',mark,{passive:true});mark();
+// Round reports: the chosen round's full report fills the frame; its own scripts and styles stay inside it.
+const store=document.getElementById('roundReportData');
+if(store){
+ const rounds=JSON.parse(store.textContent),frame=document.getElementById('viewerFrame'),chips=[...document.querySelectorAll('.round-chip')];
+ const decode=b64=>new TextDecoder().decode(Uint8Array.from(atob(b64),c=>c.charCodeAt(0)));
+ let current=null;
+ function show(n,scroll){
+  current=rounds.find(r=>r.n===Number(n))||rounds[rounds.length-1];
+  chips.forEach(c=>c.setAttribute('aria-pressed',String(Number(c.dataset.round)===current.n)));
+  document.getElementById('viewerTitle').textContent='Round '+current.n+' comparison report';
+  document.getElementById('viewerMeta').textContent=' · ran '+current.ran+' · '+current.keys+' keys ('+current.how.toLowerCase()+') · '+current.result;
+  const download=document.getElementById('viewerDownload');download.href='data:text/html;base64,'+current.html;download.download='round-'+current.n+'-report.html';
+  frame.title='Round '+current.n+' comparison report';frame.srcdoc=decode(current.html);
+  if(scroll)document.getElementById('round-reports').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+ }
+ chips.forEach(c=>c.addEventListener('click',()=>show(c.dataset.round)));
+ document.querySelectorAll('.view-report').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();show(a.dataset.round,true);}));
+ document.getElementById('viewerOpen').addEventListener('click',()=>{const url=URL.createObjectURL(new Blob([decode(current.html)],{type:'text/html'}));window.open(url,'_blank','noopener');setTimeout(()=>URL.revokeObjectURL(url),60000);});
+ show(DEFAULT_ROUND);
+}
+})();
+</script></body></html>""".replace('DEFAULT_ROUND', str(default_round))
+    return out
+
+
+# Additions to the comparison report's style for the project sign-off report.
+PROJECT_STYLE = """
+.state.is-reasons::before{background:var(--band-medium)}
+.journey{width:100%;max-width:820px;height:auto;display:block;margin:4px 0 14px}
+.journey text{font-family:var(--sans);font-size:11.5px;fill:var(--muted)}
+.journey .v{fill:var(--ink);font-weight:600;font-size:12.5px}.journey .n{fill:#fff;font-weight:700;font-size:11.5px}
+.dot.j-bad{background:#b8433a;border-radius:50%}.dot.j-ok{background:var(--link);border-radius:50%}.dot.j-goal{background:var(--ink);border-radius:50%}
+.round-n{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;background:#b8433a;color:#fff;font-weight:600;font-size:12.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.round-n.is-clean{background:var(--link)}
+.ok{color:var(--link);font-weight:600}.bad{color:#b8433a;font-weight:600}.muted{color:var(--muted)}
+#reasonTable{min-width:760px}#reasonTable>tbody>tr>td:first-child{font-weight:600}
+#reasonTable td:last-child{min-width:260px}
+.view-report{font-weight:600}
+.viewer .round-switch{position:sticky;top:48px;z-index:3;display:flex;gap:8px;overflow-x:auto;margin:0 -32px;padding:10px 32px;background:color-mix(in srgb,var(--paper) 94%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--line-soft);scrollbar-width:thin}
+.round-chip{display:flex;align-items:center;gap:10px;flex:none;padding:8px 14px 8px 8px;border:1px solid var(--line);border-radius:10px;background:var(--paper);font:inherit;color:var(--ink);cursor:pointer;text-align:left}
+.round-chip:hover{border-color:#9fd7e3}
+.round-chip[aria-pressed=true]{border-color:var(--link);box-shadow:inset 0 0 0 1px var(--link);background:#f1f9fb}
+.round-chip b{display:block;font-size:13.5px;font-weight:600}.round-chip small{display:block;font-size:12px;color:var(--muted)}
+.round-chip em{font-style:normal;font-size:11.5px;font-weight:600;color:var(--link);background:#e7f5f8;border-radius:999px;padding:2px 8px}
+.viewer-head{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin:16px 0 10px}
+.viewer-head strong{font-size:15px}.viewer-head span{font-size:13px;color:var(--muted)}
+.viewer-actions{display:flex;gap:8px}
+.viewer-button{font:inherit;font-size:13px;font-weight:600;padding:7px 12px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);cursor:pointer;text-decoration:none}
+.viewer-button:hover{border-color:#9fd7e3;background:#f1f9fb}
+#viewerFrame{display:block;width:100%;height:calc(100vh - 150px);min-height:620px;border:1px solid var(--line);border-radius:10px;background:var(--canvas)}
+.print-note{display:none}
+@media (max-width:900px){.viewer .round-switch{margin:0 -18px;padding:10px 18px}}
+@media print{.viewer .round-switch,.viewer-actions,#viewerFrame{display:none!important}.print-note{display:block;color:var(--muted)}}
+"""

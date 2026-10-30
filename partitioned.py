@@ -16,7 +16,7 @@ range that ends inside a quoted line break fails its strict parse, so it is merg
 and re-read from the last proven boundary. Genuine errors are reported with the same global record
 number as the sequential engines.
 """
-from invalid_rows import invalid, combine as combine_invalid, FIELDS as SKIP_FIELDS, COUNTERS as SKIP_COUNTERS
+from invalid_rows import invalid, blank_key, combine as combine_invalid, FIELDS as SKIP_FIELDS, COUNTERS as SKIP_COUNTERS
 import base64
 import bisect
 import csv
@@ -543,7 +543,7 @@ def _read_fingerprints(task):
             excluded_count += 1
             continue
         if not allow_empty and any(value == '' for value in key_values):
-            raise ValueError(f'{path}: record {count}: empty key component')
+            raise _NotSimple  # The audited text reader records blank keys as skipped records.
         if kind is not None:
             stored = REF + kind + digest(record if mode == 'raw' else _ref_payload(record, kind, layout)) + REF_TAIL.pack(offset, len(record))
         else:
@@ -659,7 +659,9 @@ def _partition_range(task):
                 excluded_count += 1
                 continue
             if not allow_empty and any(value is None or value == '' for value in key_values):
-                raise ValueError(f'{path}: record {count}: empty key component')
+                location = f'record {count}' if task['whole'] else f"byte range {task['start']}, record {count} within range"
+                key_values, payload = blank_key(location, path, [task['names'][i] for i in task['key_positions']], key_values)
+                key = encode_key(key_values)
             buffers[bisect_right(bounds, key)].append(pack(len(key), len(payload)) + key + payload)
             pending += len(key) + len(payload) + 16
             if pending >= SPILL_BYTES:

@@ -168,7 +168,9 @@ def _build(args, left_names, right_names, canonical, stats, progress):
                         excluded += 1
                     else:
                         if not args.allow_empty_keys and any(value is None or value == '' for value in key_values):
-                            raise ValueError(f'{path}: record {count}: empty key component')
+                            from invalid_rows import blank_key
+                            key_values, payload = blank_key(f'record {count}', path, args.keys, key_values)
+                            key = encode(key_values)
                         previous = rows.get(key)
                         if previous is None:
                             rows[key] = (payload, 1)

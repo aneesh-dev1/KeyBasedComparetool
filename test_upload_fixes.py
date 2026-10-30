@@ -16,6 +16,9 @@ class HeaderAndFileTests(unittest.TestCase):
         self.assertEqual(normalize_headers(['','column1','a','a','a_1','  ']),['column1_1','column1','a','a_2','a_1','column6'])
         names=normalize_headers(['','a','a','a_1'])
         self.assertEqual(normalize_headers(names),names)
+    def test_text_headers_ignore_surrounding_spaces(self):
+        self.assertEqual(normalize_headers([' id ','Amount\t','a','a '],trim=True),['id','Amount','a','a_1'])
+        self.assertEqual(normalize_headers([' id '],trim=False),[' id '])
     def test_transient_permission_error_retries_unique_temp(self):
         with tempfile.TemporaryDirectory() as d:
             target=Path(d)/'job.json';target.write_text('old')

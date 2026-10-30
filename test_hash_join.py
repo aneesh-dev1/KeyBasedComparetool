@@ -125,12 +125,15 @@ class HashJoinTests(unittest.TestCase):
         self.assertEqual(self.stats, before)
         self.assertTrue(any(message == 'Indexing left file complete' for message,_ in self.events))
 
-    def test_invalid_data_is_not_converted_into_fallback(self):
-        self.write('left', ['id','v'], [['','invalid']])
-        self.write('right', ['id','v'], [['a','value']])
-        with self.assertRaisesRegex(ValueError, 'empty key component'):
-            self.build(self.args())
-        self.assertEqual(self.stats, {'untouched':'yes'})
+    def test_blank_keys_are_audited_not_joined(self):
+        self.write('left', ['id','v'], [['','invalid'], ['a','value']])
+        self.write('right', ['id','v'], [['','invalid'], ['a','value']])
+        maps = self.build(self.args())
+        self.assertIsNotNone(maps)
+        # Blank keys on the two sides are separate unavailable keys, never a match.
+        blank = [key for side in ('left', 'right') for key in getattr(maps, side) if b'invalid_source' in key]
+        self.assertEqual(len(blank), 2)
+        self.assertEqual(len(set(blank)), 2)
 
     def test_cancellation_checked_for_excluded_rows(self):
         self.write('left', ['id','v'], [['a','ignored']]*1001)

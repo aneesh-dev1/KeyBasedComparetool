@@ -56,8 +56,17 @@ class InvalidRowsTests(unittest.TestCase):
     def test_unclosed_quotes_remain_errors(self):
         for engine in ['auto','sort','partitioned']:
             with self.subTest(engine=engine):
-                with self.assertRaises((csv.Error,ValueError)):
-                    self.run_case(engine,'id,a,b\n1,"unfinished\n','id,a,b\n1,a,b\n')
+                with self.assertRaises((csv.Error,ValueError)) as caught:
+                    self.run_case(engine,'id,a,b\n2,a,b\n1,"unfinished\n','id,a,b\n1,a,b\n')
+                # The error names the file and record, and the likely cause.
+                self.assertRegex(str(caught.exception), r'left\.csv: record 2: .*missing its closing quote')
+
+    def test_blank_key_is_skipped_not_fatal(self):
+        for engine in ['auto','sort','partitioned']:
+            with self.subTest(engine=engine):
+                result,audit,_ = self.run_case(engine,'id,a\n,x\n1,y\n','id,a\n,x\n1,z\n')
+                self.assertEqual((result['matched_keys'],result['changed_cells'],result['unidentified_records']), (1,1,2))
+                self.assertEqual([(row['side'],row['reason']) for row in audit], [('left','Blank key value in id'),('right','Blank key value in id')])
 
     def test_reports_include_audit_and_avoid_false_clean_verdict(self):
         import zipfile
