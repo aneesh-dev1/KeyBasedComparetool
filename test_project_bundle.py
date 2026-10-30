@@ -159,6 +159,50 @@ class ProjectBundleTests(unittest.TestCase):
         self.assertEqual(notes['columns']['status']['note']['comment'], 'Source renamed the codes')
         self.assertEqual((notes['columns']['status']['note']['status'], notes['columns']['status']['cells'], notes['keys']), ('Expected', 2, 0))
 
+    def test_export_after_a_comparison_was_deleted(self):
+        project = self.client.request('/api/projects', {'name': 'Partly deleted'})['id']
+        first = self.start(self.upload(('status',)), project_id=project)
+        self.start(self.upload(()), project_id=project)
+        self.client.request('/api/jobs/' + first['id'], None, 'DELETE')
+        before = self.client.request('/api/projects/' + project)
+        bundle = self.client.request(f'/api/projects/{project}/export')
+        with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+            manifest = json.loads(archive.read('manifest.json'))
+            self.assertNotIn('rounds/1/job.json', archive.namelist())
+        self.assertEqual(manifest['rounds'][0]['summary']['changed_cells'], first['summary']['changed_cells'])
+        copy = self.client.request('/api/projects/import/' + self.client.request('/api/projects/import', bundle, 'POST', {'Content-Type': 'application/zip'})['upload_id'], {'name': 'Partly deleted copy'})['id']
+        after = self.client.request('/api/projects/' + copy)
+        shape = lambda detail: [(r['n'], r['keys_checked'], r['mismatching'], r['clean'], r['created']) for r in detail['progress']['rounds']]
+        self.assertEqual(shape(after), shape(before))
+        self.assertFalse(min(after['records'], key=lambda record: record['created'])['source_available'])
+
+    def test_damaged_import_leaves_nothing_behind(self):
+        project = self.client.request('/api/projects', {'name': 'Templated'})['id']
+        self.start(self.upload(()), project_id=project)
+        self.client.request(f'/api/projects/{project}/template', {'name': 'Kept settings'})
+        bundle = self.client.request(f'/api/projects/{project}/export')
+        self.client.request('/api/profiles', {'id': self.client.request('/api/projects/' + project)['template']['id']}, 'DELETE')
+        folders = sorted(path.name for path in self.server.app.root.iterdir())
+        source, damaged = zipfile.ZipFile(io.BytesIO(bundle)), io.BytesIO()
+        with zipfile.ZipFile(damaged, 'w') as archive:
+            for name in source.namelist():
+                data = source.read(name)
+                if name == 'rounds/1/job.json':
+                    job = json.loads(data); job.pop('files'); data = json.dumps(job)
+                archive.writestr(name, data)
+        code, body = self.error('/api/projects/import', damaged.getvalue(), 'POST')
+        self.assertIn('Round 1 in the export is damaged', body['error'])
+        # Even if a round fails while being written, the import is undone completely.
+        from unittest.mock import patch
+        upload = self.client.request('/api/projects/import', bundle, 'POST', {'Content-Type': 'application/zip'})['upload_id']
+        with patch.object(type(self.server.app), 'save', side_effect=OSError('disk full')):
+            code, body = self.error('/api/projects/import/' + upload, {'name': 'Fails'})
+        self.assertEqual(body['error'], 'disk full')
+        self.assertEqual(sorted(path.name for path in self.server.app.root.iterdir() if path.name != 'project-imports'), [n for n in folders if n != 'project-imports'])
+        self.assertEqual(self.client.request('/api/profiles')['profiles'], [])
+        (self.server.app.root / 'projects.indexed').unlink(missing_ok=True)
+        self.assertEqual([item['name'] for item in self.client.request('/api/projects')['projects']], ['Templated'])
+
     def test_refuses_files_that_are_not_exports(self):
         code, body = self.error('/api/projects/import', b'not a zip', 'POST')
         self.assertIn('isn’t a project export', body['error'])

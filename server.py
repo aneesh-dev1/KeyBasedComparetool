@@ -1104,12 +1104,14 @@ class Handler(BaseHTTPRequestHandler):
             with self.app.lock:
                 profiles=json.loads(self.profiles_path().read_text()) if self.profiles_path().exists() else []
                 count=len(profiles);profile_id=project_bundle.restore_template(manifest.get('template'),profiles)
-                if len(profiles)!=count:save_profiles(profiles)
+                added=len(profiles)!=count
+                if added:save_profiles(profiles)
             identity=None
             try:
                 identity,signoffs,ids=project_bundle.install(self.app,store,target,manifest,name,self.workspace if self.server.shared else None,profile_id)
                 # Build every round's report and the sign-off report here, from the imported data.
-                for job_id in ids.values():self.app._run_export(job_id,'html')
+                for job_id in ids.values():
+                    if (self.app.directory(job_id)/'job.json').exists():self.app._run_export(job_id,'html')
                 if signoffs:
                     # The latest sign-off is the one whose report can be downloaded.
                     latest=store.signoffs(identity)[-1]
@@ -1117,6 +1119,11 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 if identity:
                     for job_id in store.remove(identity):shutil.rmtree(self.app.directory(job_id),ignore_errors=True)
+                # A template this import added goes too.
+                if added:
+                    with self.app.lock:
+                        current=json.loads(self.profiles_path().read_text()) if self.profiles_path().exists() else []
+                        save_profiles([p for p in current if p['id']!=profile_id])
                 raise
             target.unlink(missing_ok=True)
             self.json_response(dict(id=identity),201);return True
@@ -1211,7 +1218,8 @@ class Handler(BaseHTTPRequestHandler):
                                 try:
                                     item=self.app.load(entry.parent.name)
                                     store.sync(job_snapshot(item))
-                                except (ValueError,OSError):continue
+                                # A damaged job file is skipped; it must not take the project list down.
+                                except (ValueError,OSError,KeyError,TypeError):continue
                             marker.touch()
                     return self.json_response(dict(projects=store.overview()))
                 if path=='/api/projects' and self.command=='POST':

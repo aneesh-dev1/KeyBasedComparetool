@@ -2166,7 +2166,7 @@ loadDiagnostics=async function(){
    const count=value==='all'?items.length:items.filter(item=>item.kind===value).length;
    const tab=el('button','pj-activity-filter'+(value===filter?' is-active':''));tab.type='button';tab.setAttribute('role','tab');tab.setAttribute('aria-selected',String(value===filter));
    tab.append(el('span','',label),el('span','pj-activity-count',number(count)));tab.disabled=!count&&value!=='all';
-   tab.addEventListener('click',()=>openActivity(value));filters.append(tab);
+   tab.dataset.filter=value;tab.addEventListener('click',()=>{openActivity(value);document.querySelector(`#projectDrawer .pj-activity-filter[data-filter="${value}"]`)?.focus();});filters.append(tab);
   }
   body.append(filters);
   const shown=items.filter(item=>filter==='all'||item.kind===filter);
@@ -3330,7 +3330,7 @@ loadDiagnostics=async function(){
   banner.replaceChildren(icon('flag'),el('span','',''),);
   const text=banner.querySelector('span');text.append(el('strong','',`Round ${round.n} of ${round.name}`),document.createTextNode(` · compares ${what}.`+(round.template?` Uses the template ${round.template.name}.`:'')));
   useRoundTemplate();
-  const cancel=projectButton('Cancel round',()=>{try{sessionStorage.removeItem(ROUND_KEY);}catch{}syncBanner();},'pr-link');banner.append(cancel);
+  const cancel=projectButton('Cancel round',()=>{forgetRoundTemplate(round);try{sessionStorage.removeItem(ROUND_KEY);}catch{}syncBanner();},'pr-link');banner.append(cancel);
  }
  const flow=$('mainWorkspace');flow?.querySelector('.workspace-topbar')?.after(banner);
  const goViewBeforeRound=goView;goView=async function(...args){const result=await goViewBeforeRound(...args);syncBanner();if(currentView!=='projectsPanel')document.body.classList.remove('pr-project-open');else if(activeProject)fitPage();return result;};
@@ -3340,6 +3340,11 @@ loadDiagnostics=async function(){
   if(round){config.project_id=round.project;if(round.sample)config.sample=round.sample;}
   return config;
  };
+ // A cancelled round's template must not carry over to the next ordinary comparison.
+ function forgetRoundTemplate(round){
+  const select=$('quickProfile');
+  if(round?.template&&select&&select.value===round.template.id){select.value='';select.dispatchEvent(new Event('change'));}
+ }
  // A round of a project with a template picks it in the upload step, so it's applied once the files are read.
  function useRoundTemplate(){
   const round=pendingRound(),select=$('quickProfile');

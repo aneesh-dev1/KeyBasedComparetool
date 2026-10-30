@@ -188,6 +188,8 @@ class Store:
             else:db.execute('DELETE FROM records WHERE project_id=?',(identity,))
             db.execute('DELETE FROM projects WHERE id=?',(identity,))
         return ids
+    def forget(self,record_ids):
+        with self.connect() as db:db.executemany('DELETE FROM records WHERE id=?',[(i,) for i in record_ids])
     def set_signoff_report(self,signoff_id,report):
         with self.connect() as db:db.execute('UPDATE signoffs SET report=? WHERE id=?',(str(report),signoff_id))
     def exists(self,identity):

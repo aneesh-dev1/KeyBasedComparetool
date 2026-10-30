@@ -8,6 +8,8 @@ templates, so an imported project looks like one made there.
     manifest.json                 project, template, rounds (settings + audit), sign-offs, activity
     rounds/<n>/job.json           the round's comparison settings and summary
     rounds/<n>/report/<file>      the round's result files
+
+A round whose comparison was deleted (only its audit summary is left) travels as that summary in the manifest.
 """
 import json
 import re
@@ -23,6 +25,7 @@ TRANSIENT = {'owner', 'source_paths', 'exports', 'analysis', 'upload_compression
              'allocation', 'memory_concurrency', 'ai_options', 'excel_options'}
 MEMBER = re.compile(r'manifest\.json|rounds/[1-9][0-9]{0,5}/(job\.json|report/[A-Za-z0-9][A-Za-z0-9._-]{0,120})')
 MAX_UNPACKED = 200 * 1024 ** 3
+RECORD_ONLY = {'project_id', 'audit_status', 'audit_note', 'reviewer', 'updated'}
 
 
 def _report_files(folder):
@@ -42,6 +45,10 @@ def export(app, store, identity, template, target):
                     rounds=[], signoffs=[], events=[])
     with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED, allowZip64=True) as bundle:
         for n, record in enumerate(rounds, 1):
+            audit = dict(n=n, title=record.get('title'), audit_status=record['audit_status'], audit_note=record['audit_note'], reviewer=record['reviewer'])
+            if not (app.directory(record['id']) / 'job.json').exists():
+                manifest['rounds'].append(dict(audit, summary={k: v for k, v in record.items() if k not in RECORD_ONLY}, files=[]))
+                continue
             job = {k: v for k, v in app.load(record['id']).items() if k not in TRANSIENT}
             if isinstance(job.get('sample'), dict) and job['sample'].get('from'):
                 job['sample'] = dict(job['sample'], **{'from': index.get(job['sample']['from'])})
@@ -49,9 +56,7 @@ def export(app, store, identity, template, target):
             files = _report_files(app.directory(record['id']) / 'report')
             for path in files:
                 bundle.write(path, f'rounds/{n}/report/{path.name}')
-            manifest['rounds'].append(dict(n=n, title=record.get('title'), audit_status=record['audit_status'],
-                                           audit_note=record['audit_note'], reviewer=record['reviewer'],
-                                           files=[path.name for path in files]))
+            manifest['rounds'].append(dict(audit, files=[path.name for path in files]))
         for item in store.signoffs(identity):
             if item['round_id'] in index:
                 manifest['signoffs'].append(dict(round=index[item['round_id']], **{k: item[k] for k in ('at', 'reviewer', 'note', 'mode', 'reasons')}))
@@ -88,8 +93,20 @@ def read(path):
         if not isinstance(project.get('name'), str) or not isinstance(manifest.get('rounds'), list):
             raise ValueError('The export’s manifest is incomplete, so it can’t be imported')
         for round_ in manifest['rounds']:
-            if f"rounds/{round_.get('n')}/job.json" not in names:
-                raise ValueError(f"Round {round_.get('n')} is missing from the export")
+            if not isinstance(round_, dict) or not isinstance(round_.get('n'), int):
+                raise ValueError('The export’s list of rounds is damaged, so it can’t be imported')
+            if isinstance(round_.get('summary'), dict):
+                continue
+            if f"rounds/{round_['n']}/job.json" not in names:
+                raise ValueError(f"Round {round_['n']} is missing from the export")
+            try:
+                job = json.loads(bundle.read(f"rounds/{round_['n']}/job.json"))
+                valid = all(isinstance(job['files'][side]['name'], str) for side in ('left', 'right')) and isinstance(job['keys'], list) \
+                    and isinstance(job.get('summary'), dict) and isinstance(job['created'], (int, float))
+            except (ValueError, KeyError, TypeError):
+                valid = False
+            if not valid:
+                raise ValueError(f"Round {round_['n']} in the export is damaged, so the project can’t be imported")
     return manifest
 
 
@@ -127,12 +144,37 @@ def install(app, store, path, manifest, name, owner, profile_id):
     identity = store.create(dict(name=name, description=project.get('description', ''), created=project.get('created'),
                                  profile_id=profile_id, imported=True))
     ids, now = {}, time.time()
+    try:
+        _install_rounds(app, store, path, manifest, identity, owner, ids, now)
+    except Exception:
+        # Nothing of a failed import stays behind: not the project, its records, or any round's folder.
+        store.remove(identity)
+        store.forget(ids.values())
+        for job_id in ids.values():
+            shutil.rmtree(app.directory(job_id), ignore_errors=True)
+        raise
+    events = [dict(at=e['at'], message=e['message'], record_id=ids.get(e.get('round'))) for e in manifest.get('events', [])
+              if isinstance(e, dict) and isinstance(e.get('at'), (int, float)) and isinstance(e.get('message'), str)]
+    events.append(dict(at=now, message=f"Imported from an export of “{project['name']}”" + (f' as “{name}”' if name != project['name'] else ''), record_id=None))
+    signoffs = [dict(round_id=ids[s['round']], at=s['at'], reviewer=s['reviewer'], note=s.get('note', ''), mode=s['mode'], reasons=s.get('reasons') or {})
+                for s in manifest.get('signoffs', []) if isinstance(s, dict) and s.get('round') in ids]
+    return identity, store.restore(identity, events, signoffs), ids
+
+
+def _install_rounds(app, store, path, manifest, identity, owner, ids, now):
+    project = manifest['project']
     with zipfile.ZipFile(path) as bundle:
         for round_ in manifest['rounds']:
             n = round_['n']
-            job = json.loads(bundle.read(f'rounds/{n}/job.json'))
             job_id = uuid.uuid4().hex
             ids[n] = job_id
+            audit = (round_.get('audit_status') or 'Unreviewed', round_.get('audit_note') or '', round_.get('reviewer') or '')
+            if isinstance(round_.get('summary'), dict):
+                # Only the audit summary was left of this round; it comes back the same way.
+                store.sync(dict(round_['summary'], id=job_id, owner=owner, source_available=False))
+                store.adopt(job_id, identity, *audit)
+                continue
+            job = json.loads(bundle.read(f'rounds/{n}/job.json'))
             folder = app.directory(job_id)
             (folder / 'report').mkdir(parents=True)
             prefix = f'rounds/{n}/report/'
@@ -148,10 +190,4 @@ def install(app, store, path, manifest, name, owner, profile_id):
                        analysis=dict(state='not_started', message='Prepare analysis to include mismatch patterns.'),
                        imported=dict(at=now, project=project['name'], round=n))
             app.save(job)
-            store.adopt(job_id, identity, round_.get('audit_status') or 'Unreviewed', round_.get('audit_note') or '', round_.get('reviewer') or '')
-    events = [dict(at=e['at'], message=e['message'], record_id=ids.get(e.get('round'))) for e in manifest.get('events', [])
-              if isinstance(e, dict) and isinstance(e.get('at'), (int, float)) and isinstance(e.get('message'), str)]
-    events.append(dict(at=now, message=f"Imported from an export of “{project['name']}”" + (f' as “{name}”' if name != project['name'] else ''), record_id=None))
-    signoffs = [dict(round_id=ids[s['round']], at=s['at'], reviewer=s['reviewer'], note=s.get('note', ''), mode=s['mode'], reasons=s.get('reasons') or {})
-                for s in manifest.get('signoffs', []) if isinstance(s, dict) and s.get('round') in ids]
-    return identity, store.restore(identity, events, signoffs), ids
+            store.adopt(job_id, identity, *audit)
