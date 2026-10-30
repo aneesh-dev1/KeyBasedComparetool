@@ -90,9 +90,7 @@ class ProjectBundleTests(unittest.TestCase):
         for job in (first, second):
             self.client.request('/api/jobs/' + job['id'], None, 'DELETE')
         self.client.request('/api/profiles', {'id': template}, 'DELETE')
-        # The app has no project delete yet; remove the project the way one would.
-        from projects import Store, database
-        Store(database(self.server.app.root)).remove(project)
+        self.assertEqual(self.client.request('/api/projects/' + project, {}, 'DELETE')['deleted'], True)
         self.assertNotIn('Ledger rounds', [item['name'] for item in self.client.request('/api/projects')['projects']])
 
         preview = self.client.request('/api/projects/import', bundle, 'POST', {'Content-Type': 'application/zip'})
@@ -120,6 +118,46 @@ class ProjectBundleTests(unittest.TestCase):
         self.assertEqual(rerun['summary']['changed_cells_by_column'].get(failing, 0), 0)
         # Changing the key columns needs the original files, which an export doesn't carry.
         self.assertEqual(self.client.request(f"/api/jobs/{round_one['id']}/review-plan", dict(keys=['status']))['mode'], 'full')
+
+    def test_delete_project(self):
+        project, first, second = self.project()
+        root = self.server.app.root
+        self.assertTrue((root / 'project-reports' / project).exists())
+        result = self.client.request('/api/projects/' + project, {'comparisons': True}, 'DELETE')
+        self.assertEqual(result, dict(deleted=True, comparisons=2))
+        for job in (first, second):
+            self.assertFalse((root / job['id']).exists())
+        self.assertFalse((root / 'project-reports' / project).exists())
+        self.assertEqual(self.client.request('/api/projects')['projects'], [])
+        code, body = self.error('/api/projects/' + project, {}, 'DELETE')
+        self.assertIn('not found', body['error'])
+        # Keeping the comparisons leaves them in history, outside any project.
+        kept = self.client.request('/api/projects', {'name': 'Kept'})['id']
+        job = self.start(self.upload(()), project_id=kept)
+        self.assertEqual(self.client.request('/api/projects/' + kept, {'comparisons': False}, 'DELETE')['comparisons'], 0)
+        self.assertTrue((root / job['id'] / 'job.json').exists())
+        record = self.client.request('/api/projects/records?id=' + job['id'])['records'][0]
+        self.assertIsNone(record['project_id'])
+
+    def test_delete_refuses_while_a_round_runs(self):
+        project = self.client.request('/api/projects', {'name': 'Busy'})['id']
+        job = self.start(self.upload(()), project_id=project)
+        self.server.app.patch(job['id'], state='running')
+        code, body = self.error('/api/projects/' + project, {}, 'DELETE')
+        self.assertIn('still running', body['error'])
+        self.assertTrue((self.server.app.root / job['id']).exists())
+
+    def test_latest_round_comments(self):
+        project = self.client.request('/api/projects', {'name': 'Commented'})['id']
+        self.assertIsNone(self.client.request('/api/projects/' + project)['latest_notes'])
+        job = self.start(self.upload(('status',)), project_id=project)
+        path = '/api/jobs/' + job['id'] + '/annotations'
+        self.client.request(path, dict(column='status', status='Expected', comment='Source renamed the codes'))
+        self.client.request(path, dict(column='status', key=['1'], status='Needs investigation', comment='Check this one'))
+        self.client.request(path, dict(column='status', key=['2'], status='Resolved', comment=''))
+        notes = self.client.request('/api/projects/' + project)['latest_notes']
+        self.assertEqual(notes['columns']['status']['note']['comment'], 'Source renamed the codes')
+        self.assertEqual((notes['columns']['status']['note']['status'], notes['columns']['status']['cells'], notes['keys']), ('Expected', 2, 0))
 
     def test_refuses_files_that_are_not_exports(self):
         code, body = self.error('/api/projects/import', b'not a zip', 'POST')

@@ -416,6 +416,45 @@ class Application:
         # Rename atomically removes the job from history before reclaiming large files.
         shutil.rmtree(trash)
 
+    def round_notes(self, identity):
+        """A round's analysis comments by column: the column's own comment and how many cells have one."""
+        try:
+            notes = json.loads((self.directory(identity) / 'report' / 'annotations.json').read_text())
+        except (OSError, ValueError):
+            return None
+        columns, keys = {}, 0
+        for note in notes if isinstance(notes, list) else []:
+            column = note.get('column') or ''
+            if not column:
+                keys += 1
+                continue
+            entry = columns.setdefault(column, dict(note=None, cells=0))
+            if note.get('key') is None:
+                entry['note'] = {k: note.get(k) for k in ('status', 'comment', 'updated')}
+            else:
+                entry['cells'] += 1
+        return dict(columns=columns, keys=keys) if columns or keys else None
+
+    def delete_project(self, store, identity, comparisons, workspace=None):
+        """Delete a project. With ``comparisons`` its comparisons and their results are deleted too; otherwise they
+        stay in history without a project. Every comparison is checked before anything is deleted."""
+        if not store.exists(identity):
+            raise ValueError('Project not found')
+        ids = store.record_ids(identity)
+        jobs = [identity_ for identity_ in ids if (self.directory(identity_) / 'job.json').exists()]
+        if comparisons:
+            for job_id in jobs:
+                job = self.load(job_id)
+                if workspace is not None and job.get('owner') != workspace:
+                    raise ValueError('This project has comparisons someone else created. Keep the comparisons, or ask them to delete theirs first.')
+                if self.busy(job) or self.requests.get(job_id, 0) > 0:
+                    raise ValueError('A comparison in this project is still running or exporting. Wait for it to finish, then delete the project.')
+            for job_id in jobs:
+                self.remove_job(job_id)
+        store.remove(identity, keep_records=not comparisons)
+        shutil.rmtree(self.root / 'project-reports' / identity, ignore_errors=True)
+        return dict(deleted=True, comparisons=len(jobs) if comparisons else 0)
+
     def compare_runs(self, store, project, query):
         """Two completed runs of one project side by side: counts, columns, settings and, when the runs match on the
         same keys and both still have their results, the cells that are new, resolved or changed."""
@@ -1210,11 +1249,16 @@ class Handler(BaseHTTPRequestHandler):
                     with target.open('rb') as stream:shutil.copyfileobj(stream,self.wfile,1024*1024)
                     return
                 match_project=re.fullmatch(r'/api/projects/([a-f0-9]{32})',path)
+                if match_project and self.command=='DELETE':
+                    config=self.body()
+                    return self.json_response(self.app.delete_project(store,match_project.group(1),config.get('comparisons') is not False,self.workspace if self.server.shared else None))
                 if match_project and self.command=='GET':
                     detail=store.detail(match_project.group(1),max(0,int(query.get('offset',['0'])[0])))
                     profiles=json.loads(self.profiles_path().read_text()) if self.profiles_path().exists() else []
                     template=next((p for p in profiles if p['id']==detail['project'].get('profile_id')),None)
                     detail['template']=template and dict(id=template['id'],name=template['name'])
+                    latest=(detail.get('progress') or {}).get('rounds') or []
+                    detail['latest_notes']=self.app.round_notes(latest[-1]['id']) if latest else None
                     return self.json_response(detail)
                 return self.json_response({'error':'Not found'},404)
             if path in ('/api/json-compare', '/api/json-arrays') and self.command == 'POST':

@@ -2057,3 +2057,63 @@ body.pr-project-open #mainWorkspace>.heading{display:none}
 #projectDrawer :is(.pr-ghost,.pr-cta) svg.lucide{width:16px;height:16px}
 #projectDrawer .pr-ghost{display:inline-flex;align-items:center;gap:6px;border:1px solid #dbe5ea;background:#fff;border-radius:8px;padding:8px 12px;font-size:12.5px;font-weight:600;color:#193a50;white-space:nowrap;cursor:pointer}
 #projectDrawer .pr-ghost:hover{border-color:#9fd7e3;background:#e7f5f8}
+/* Delete project: red marks only what deletes. */
+#projectsPanel.pr .pr-expand.is-danger:is(:hover,:focus-visible){border-color:#e3b4b0;background:#fbeceb;color:#b8433a}
+#projectDrawer .pr-delete-warn{display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid #f0cfcb;border-radius:12px;background:#fdf5f4}
+#projectDrawer .pr-delete-mark{display:grid;place-items:center;flex:none;width:40px;height:40px;border-radius:11px;background:#fbeceb;color:#b8433a;box-shadow:inset 0 0 0 1px #b8433a33}
+#projectDrawer .pr-delete-mark svg.lucide{width:20px;height:20px}
+#projectDrawer .pr-delete-warn .pr-import-words span{white-space:normal;line-height:1.45}
+#projectDrawer .pr-delete-keep{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid #dbe5ea;border-radius:10px;font-size:13px;color:#5d7180}
+#projectDrawer .pr-delete-option{display:flex;flex-direction:row;margin:0;align-items:center;gap:10px;font-size:13.5px;font-weight:600;color:#193a50;cursor:pointer}
+#projectDrawer .pr-delete-option input{width:16px;height:16px;accent-color:#b8433a;margin:0}
+#projectDrawer .pr-delete-option+.pr-sub{margin:-8px 0 0 26px}
+#projectDrawer .pr-danger{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 16px;border:0;border-radius:8px;background:#b8433a;color:#fff;font-size:13.5px;font-weight:650;cursor:pointer}
+#projectDrawer .pr-danger:hover:not(:disabled){background:#9e3830}
+#projectDrawer .pr-danger:focus-visible{outline:2px solid #b8433a;outline-offset:2px}
+#projectDrawer .pr-danger:disabled{background:#e6c3bf;cursor:not-allowed}
+#projectDrawer .pr-danger svg.lucide{width:16px;height:16px}
+/* Activity: the project's story on one rail of state seals, grouped by day. */
+#projectDrawer .pj-activity-drawer{display:grid;gap:18px;align-content:start}
+#projectDrawer .pj-activity-filters{display:flex;gap:4px;padding:4px;border:1px solid #dbe5ea;border-radius:10px;background:#f6f9fa;position:sticky;top:0;z-index:1}
+#projectDrawer .pj-activity-filter{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;border:0;border-radius:7px;background:none;color:#5d7180;font-size:12.5px;font-weight:600;cursor:pointer}
+#projectDrawer .pj-activity-filter:hover:not(:disabled){color:#002b40}
+#projectDrawer .pj-activity-filter.is-active{background:#fff;color:#002b40;box-shadow:0 0 0 1px #dbe5ea}
+#projectDrawer .pj-activity-filter:disabled{opacity:.45;cursor:default}
+#projectDrawer .pj-activity-filter:focus-visible{outline:2px solid #00a6ca;outline-offset:1px}
+#projectDrawer .pj-activity-count{min-width:20px;padding:0 6px;border-radius:999px;background:#edf2f4;font-size:11.5px;line-height:18px;color:#5d7180}
+#projectDrawer .pj-activity-filter.is-active .pj-activity-count{background:#e7f5f8;color:#007b99}
+#projectDrawer .pj-timeline{display:grid;gap:20px}
+#projectDrawer .pj-day-title{margin:0 0 8px;font-size:12.5px;font-weight:650;color:#5d7180}
+#projectDrawer .pj-day-events{list-style:none;margin:0;padding:0}
+#projectDrawer .pj-event{--tone:#8a9ba6;--tone-soft:#edf2f4;position:relative;display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:12px;align-items:start;padding:0 0 14px}
+#projectDrawer .pj-event::before{content:'';position:absolute;left:14.5px;top:30px;bottom:0;width:1px;background:#dbe5ea}
+#projectDrawer .pj-event:last-child{padding-bottom:0}
+#projectDrawer .pj-event:last-child::before{display:none}
+#projectDrawer .pj-event.is-green{--tone:#1f7a52;--tone-soft:#e8f5ef}
+#projectDrawer .pj-event.is-red{--tone:#b8433a;--tone-soft:#fbeceb}
+#projectDrawer .pj-event.is-amber{--tone:#7a5b10;--tone-soft:#fbf3df}
+#projectDrawer .pj-event.is-cyan{--tone:#007b99;--tone-soft:#e7f5f8}
+#projectDrawer .pj-event.is-navy{--tone:#002b40;--tone-soft:#e6edf1}
+#projectDrawer .pj-event-seal{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:var(--tone-soft);color:var(--tone);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--tone) 22%,transparent)}
+#projectDrawer .pj-event-seal svg.lucide{width:15px;height:15px}
+#projectDrawer .pj-event-copy{display:grid;gap:4px;justify-items:start;min-width:0;padding-top:5px}
+#projectDrawer .pj-event-text{margin:0;font-size:13.5px;line-height:1.4;color:#193a50;overflow-wrap:anywhere}
+#projectDrawer .pj-event-time{padding-top:6px;font-size:12px;color:#8a9ba6;font-variant-numeric:tabular-nums;white-space:nowrap}
+#projectDrawer .pj-event-round{display:inline-flex;align-items:center;gap:5px;padding:0;border:0;background:none;color:#007b99;font-size:12px;font-weight:600;cursor:pointer}
+#projectDrawer .pj-event-round svg.lucide{width:13px;height:13px}
+#projectDrawer .pj-event-round:hover{text-decoration:underline;text-underline-offset:3px}
+#projectDrawer .pj-event-round:focus-visible{outline:2px solid #00a6ca;outline-offset:2px;border-radius:3px}
+#projectDrawer .pj-activity-empty{display:grid;gap:4px;padding:28px 16px;border:1px dashed #dbe5ea;border-radius:12px;text-align:center;color:#5d7180;font-size:13px}
+#projectDrawer .pj-activity-empty strong{color:#002b40;font-size:14px}
+#projectDrawer .pj-activity-note{margin:0;font-size:12px;color:#8a9ba6;text-align:center}
+/* What's left to fix: comments from the latest round's analysis, under their column. */
+#projectsPanel.pr .pr-left .pr-note{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;margin-top:-2px;padding:7px 10px;border-radius:8px;background:#f6f9fa}
+#projectsPanel.pr .pr-note-status{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:650;white-space:nowrap}
+#projectsPanel.pr .pr-note-status svg.lucide{width:13px;height:13px;align-self:center}
+#projectsPanel.pr .pr-note-status.is-cyan{color:#007b99}
+#projectsPanel.pr .pr-note-status.is-amber{color:#7a5b10}
+#projectsPanel.pr .pr-note-status.is-green{color:#1f7a52}
+#projectsPanel.pr .pr-note-status.is-muted{color:#5d7180}
+#projectsPanel.pr .pr-note-text{order:2;flex:1 1 100%;min-width:0;margin:0;font-size:12.5px;line-height:1.45;color:#193a50;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#projectsPanel.pr .pr-note-cells{margin-left:auto;display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#5d7180;white-space:nowrap}
+#projectsPanel.pr .pr-note-cells svg.lucide{width:13px;height:13px}

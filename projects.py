@@ -176,12 +176,17 @@ class Store:
         """Attach an imported round with its audit status; the import restores the original activity itself."""
         if status not in STATUSES:status='Unreviewed'
         with self.connect() as db:db.execute('UPDATE records SET project_id=?,status=?,note=?,reviewer=? WHERE id=?',(identity,status,note[:2000],reviewer[:100],record_id))
-    def remove(self,identity):
-        """Undo a failed import: the project and everything recorded for it."""
+    def record_ids(self,identity):
+        with self.connect() as db:return [row[0] for row in db.execute('SELECT id FROM records WHERE project_id=?',(identity,))]
+    def remove(self,identity,keep_records=False):
+        """Delete a project with its activity and sign-offs. Its comparison records go too, or with ``keep_records``
+        they stay in history, no longer in a project. Also undoes a failed import."""
         with self.connect() as db:
             ids=[row[0] for row in db.execute('SELECT id FROM records WHERE project_id=?',(identity,))]
             for table in ('signoffs','events'):db.execute(f'DELETE FROM {table} WHERE project_id=?',(identity,))
-            db.execute('DELETE FROM records WHERE project_id=?',(identity,));db.execute('DELETE FROM projects WHERE id=?',(identity,))
+            if keep_records:db.execute('UPDATE records SET project_id=NULL WHERE project_id=?',(identity,))
+            else:db.execute('DELETE FROM records WHERE project_id=?',(identity,))
+            db.execute('DELETE FROM projects WHERE id=?',(identity,))
         return ids
     def set_signoff_report(self,signoff_id,report):
         with self.connect() as db:db.execute('UPDATE signoffs SET report=? WHERE id=?',(str(report),signoff_id))

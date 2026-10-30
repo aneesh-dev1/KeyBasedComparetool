@@ -2119,12 +2119,77 @@ loadDiagnostics=async function(){
   return section;
  }
 
- function openActivity(){
+ // Activity: the project's story on one rail, newest first, grouped by day (IST). Each round's queued/running/finished
+ // events become one line, messages read as plain sentences, and an event that belongs to a round links to it.
+ const activityCount=(count,word)=>`${number(count)} ${word}${count===1?'':'s'}`;
+ const activityDay=date=>date.toLocaleDateString('en-CA',IST);
+ const LIFECYCLE=/^Comparison (queued|running|complete|error|cancelled)$/;
+ function describeEvent(event,round){
+  const message=event.message,name=round?`Round ${round.n}`:'A comparison',state=(message.match(LIFECYCLE)||[])[1];
+  if(state==='complete'){
+   if(!round)return {kind:'rounds',icon:'circle-check',tone:'cyan',text:'A comparison finished'};
+   return round.clean?{kind:'rounds',icon:'circle-check',tone:'green',text:`${name} finished with nothing mismatching`}
+    :{kind:'rounds',icon:'triangle-alert',tone:'red',text:`${name} finished with ${activityCount(round.mismatching,'column')} mismatching`};
+  }
+  if(state==='error')return {kind:'rounds',icon:'circle-x',tone:'red',text:`${name} stopped with an error`};
+  if(state==='cancelled')return {kind:'rounds',icon:'circle-x',tone:'muted',text:`${name} was cancelled`};
+  if(state)return {kind:'rounds',icon:'loader-circle',tone:'cyan',text:state==='queued'?`${name} is waiting to run`:`${name} is running`};
+  if(message==='Comparison attached')return {kind:'rounds',icon:'link',tone:'cyan',text:round?`${name} added to the project`:'A comparison was added'};
+  if(message==='Comparison detached')return {kind:'rounds',icon:'package-x',tone:'muted',text:'A comparison was removed from the project'};
+  if(message.startsWith('Source files removed'))return {kind:'rounds',icon:'hard-drive',tone:'muted',text:`${name}'s source files were removed; its results are kept`};
+  const audit=message.match(/^Audit: ([^·]+?)(?: · (.+))?$/);
+  if(audit){const tone={Approved:'green','Changes requested':'red','In review':'amber'}[audit[1]]||'muted';
+   return {kind:'reviews',icon:'clipboard-list',tone,text:`${name} marked ${audit[1].toLowerCase()}${audit[2]?' by '+audit[2]:''}`};}
+  const signed=message.match(/^Project signed off( with reasons for remaining mismatches| at 100% match)(?: · (.+))?$/);
+  if(signed)return {kind:'signoffs',icon:'badge-check',tone:'green',text:`Signed off${signed[1].includes('100%')?' at 100% match':' with reasons for what still mismatches'}${signed[2]?' by '+signed[2]:''}`};
+  if(message.startsWith('Project created'))return {kind:'project',icon:'folder-plus',tone:'navy',text:message.includes('template')?'Project created from a template':'Project created'};
+  if(message.startsWith('Imported from'))return {kind:'project',icon:'upload',tone:'navy',text:message};
+  if(message.startsWith('Template'))return {kind:'project',icon:'layout-template',tone:'cyan',text:message==='Template removed'?'Template no longer used for new rounds':'Template saved for new rounds'};
+  return {kind:'project',icon:'circle',tone:'muted',text:message};
+ }
+ const ACTIVITY_FILTERS=[['all','All'],['rounds','Rounds'],['reviews','Reviews'],['signoffs','Sign-offs']];
+ function openActivity(filter='all'){
   openProjectDrawer('Activity');
-  const list=el('ol','pj-activity');
-  for(const event of projectDetail.events){const item=el('li');item.append(el('span','pj-activity-dot'),el('strong','',event.message),el('time','',longDate(event.at)));list.append(item);}
-  if(!projectDetail.events.length)list.append(el('li','pj-empty-line','No activity yet.'));
-  $('projectDrawerBody').append(list);
+  const body=$('projectDrawerBody');body.classList.add('pj-activity-drawer');
+  const rounds=new Map((projectDetail.progress?.rounds||[]).map(round=>[round.id,round]));
+  // Keep only the newest lifecycle event of each comparison: events arrive newest first.
+  const seen=new Set(),items=[];
+  for(const event of projectDetail.events){
+   if(LIFECYCLE.test(event.message)&&event.record_id){if(seen.has(event.record_id))continue;seen.add(event.record_id);}
+   items.push({event,round:rounds.get(event.record_id),results:event.message==='Comparison complete',...describeEvent(event,rounds.get(event.record_id))});
+  }
+  if(!items.length){
+   const empty=el('div','pj-activity-empty');empty.append(el('strong','','Nothing has happened yet'),el('span','','Start round 1 and each step of the project shows up here.'));body.append(empty);return;
+  }
+  const filters=el('div','pj-activity-filters');filters.setAttribute('role','tablist');filters.setAttribute('aria-label','Show activity');
+  for(const [value,label] of ACTIVITY_FILTERS){
+   const count=value==='all'?items.length:items.filter(item=>item.kind===value).length;
+   const tab=el('button','pj-activity-filter'+(value===filter?' is-active':''));tab.type='button';tab.setAttribute('role','tab');tab.setAttribute('aria-selected',String(value===filter));
+   tab.append(el('span','',label),el('span','pj-activity-count',number(count)));tab.disabled=!count&&value!=='all';
+   tab.addEventListener('click',()=>openActivity(value));filters.append(tab);
+  }
+  body.append(filters);
+  const shown=items.filter(item=>filter==='all'||item.kind===filter);
+  const today=activityDay(new Date()),yesterday=activityDay(new Date(Date.now()-864e5));
+  const heading=at=>{const key=activityDay(new Date(at*1000));return key===today?'Today':key===yesterday?'Yesterday':new Date(at*1000).toLocaleDateString(undefined,{...IST,weekday:'short',day:'numeric',month:'short',year:new Date(at*1000).getFullYear()===new Date().getFullYear()?undefined:'numeric'});};
+  const timeline=el('div','pj-timeline');let group=null,label=null;
+  for(const item of shown){
+   const day=heading(item.event.at);
+   if(day!==label){label=day;const section=el('section','pj-day');section.append(el('h3','pj-day-title',day));group=el('ol','pj-day-events');section.append(group);timeline.append(section);}
+   const row=el('li','pj-event is-'+item.tone),seal=el('span','pj-event-seal'),copy=el('div','pj-event-copy');
+   seal.append(lucideNode(item.icon));
+   copy.append(el('p','pj-event-text',item.text));
+   // The link sits on the line where a round's results arrived, not on every event of that round.
+   if(item.results&&item.round&&item.round.source_available!==false){
+    const link=projectButton('',()=>{$('projectDrawer').close();openJob(item.round.id);},'pj-event-round');
+    link.append(lucideNode('chart-column'),document.createTextNode(`Open round ${item.round.n}`));copy.append(link);
+   }
+   const time=el('time','pj-event-time',new Date(item.event.at*1000).toLocaleTimeString(undefined,{...IST,hour:'2-digit',minute:'2-digit'}));
+   time.dateTime=new Date(item.event.at*1000).toISOString();time.title=longDate(item.event.at);
+   row.append(seal,copy,time);group.append(row);
+  }
+  body.append(timeline);
+  if(projectDetail.events.length>=100)body.append(el('p','pj-activity-note','Showing the latest 100 events.'));
  }
 
  // Compare runs: what changed between two runs of this project. Totals first, then the columns that got better or
@@ -2890,6 +2955,7 @@ loadDiagnostics=async function(){
  }
 
  // What's left to fix: the columns that mismatch in the latest round. Fixed columns fold into one line.
+ const NOTE_STYLE={'Expected':['check','cyan'],'Needs investigation':['circle-alert','amber'],'Resolved':['circle-check','green']};
  function leftSection(detail){
   const progress=detail.progress,issues=progress.issues,latest=progress.rounds.at(-1);
   const section=el('section','pr-card');section.setAttribute('aria-labelledby','prLeftTitle');
@@ -2897,14 +2963,28 @@ loadDiagnostics=async function(){
   const accepted=progress.signoff?.mode==='exceptions'?new Map((progress.signoff.reasons.columns||[]).map(item=>[item.column,item.reason])):null;
   const title=el('h3','',accepted?'Accepted at sign-off':"What's left to fix");title.id='prLeftTitle';section.append(title);
   if(!latest){section.append(el('p','pr-sub','Mismatching columns appear here after the first round.'));return section;}
-  section.append(el('p','pr-sub',accepted?`Columns that still mismatch in round ${latest.n}, with the reason given at sign-off.`:`Columns that mismatch in round ${latest.n}.`));
+  const commented=detail.latest_notes&&Object.keys(detail.latest_notes.columns||{}).length;
+  section.append(el('p','pr-sub',accepted?`Columns that still mismatch in round ${latest.n}, with the reason given at sign-off.`:`Columns that mismatch in round ${latest.n}${commented?', with their comments':''}.`));
   const open=[...issues.still.items.map(item=>({...item,fresh:false})),...issues.new.items.map(item=>({...item,fresh:true}))].sort((a,b)=>b.cells-a.cells);
   const total=issues.still.total+issues.new.total;
   const list=el('ul','pr-left');
   const add=item=>{const row=el('li'),name=el('div'),label=el('code','',item.column);name.append(label);
    if(item.fresh&&!accepted)name.append(el('span','pr-new','New'));
    name.append(el('small',accepted?'pr-accepted':'',accepted?(accepted.get(item.column)||'Accepted'):item.fresh?(latest.n>1?`Found in round ${latest.n}`:'Found in round 1'):`Mismatching since round ${item.since}`));
-   row.append(name,el('span','pr-cells',plural(item.cells,'cell')));list.append(row);};
+   row.append(name,el('span','pr-cells',plural(item.cells,'cell')));
+   // Comments added in the latest round's analysis: the column's own comment, then how many cells have one.
+   const notes=detail.latest_notes?.columns?.[item.column];
+   if(notes){
+    const block=el('div','pr-note');
+    if(notes.note){
+     const [glyph,tone]=NOTE_STYLE[notes.note.status]||['message-square-text','muted'];
+     const badge=el('span','pr-note-status is-'+tone);badge.append(icon(glyph),document.createTextNode(notes.note.status||'Comment'));block.append(badge);
+     if(notes.note.comment){const text=el('p','pr-note-text',notes.note.comment);text.title=notes.note.comment;block.append(text);}
+    }
+    if(notes.cells){const cells=el('span','pr-note-cells');cells.append(icon('message-square-text'),document.createTextNode(plural(notes.cells,'cell comment')));block.append(cells);}
+    row.append(block);
+   }
+   list.append(row);};
   open.slice(0,oneView.matches?200:8).forEach(add);
   const scroll=el('div','pr-scroll');section.append(scroll);
   if(open.length)scroll.append(list);
@@ -2978,7 +3058,8 @@ loadDiagnostics=async function(){
   titles.append(name,feed);
   const actions=el('div','pr-actions');
   actions.append(expand('history','Activity',()=>window.pjOpenActivity()),expand('plus','Attach comparison',()=>showProjectCandidates()),
-   expand('layout-template',detail.template?'Change template':'Save as template',()=>openTemplateDrawer(detail)),expand('download','Export project',()=>exportProject(detail)));
+   expand('layout-template',detail.template?'Change template':'Save as template',()=>openTemplateDrawer(detail)),expand('download','Export project',()=>exportProject(detail)),
+   expand('trash-2','Delete project',()=>openDeleteDrawer(detail),'is-danger'));
   // Starting a round is the yellow button while fixing; otherwise it stays one click away here.
   if(['clean','signed_off','running'].includes(progress.status))actions.append(expand('play','Start round '+next,()=>openRoundDrawer(detail,next)));
   head.append(back,titles,actions);
@@ -3104,6 +3185,37 @@ loadDiagnostics=async function(){
    catch(failure){go.disabled=false;text.textContent='Import project';if(failure.status===409){showClash(name);input.focus();input.select();}else error.textContent=failure.message;}
   },'primary pr-cta');go.append(icon('upload'),text);
   foot.append(go);body.append(card,field,note,foot);input.focus();input.select();
+ }
+ // Deleting a project can't be undone, so the drawer offers an export first and asks for the project's name.
+ function openDeleteDrawer(detail){
+  openProjectDrawer('Delete project');
+  const body=$('projectDrawerBody'),error=$('projectDrawerError'),name=detail.project.name,count=detail.total||0;
+  body.classList.add('pr-drawer','pr-delete-drawer');
+  const warn=el('section','pr-delete-warn'),mark=el('span','pr-delete-mark'),words=el('div','pr-import-words');
+  mark.append(icon('trash-2'));
+  words.append(el('strong','',name),el('span','',`Its ${plural(detail.progress.rounds.length,'round')}, activity, sign-offs and sign-off report are deleted. This can’t be undone.`));
+  warn.append(mark,words);
+  const keep=el('div','pr-delete-keep');
+  keep.append(el('span','','Want a copy? Export the project first; you can import it again later.'),projectButton('',()=>exportProject(detail),'pr-ghost'));
+  keep.lastChild.append(icon('download'),document.createTextNode('Export project'));
+  const option=el('label','pr-delete-option'),box=el('input');box.type='checkbox';box.checked=true;
+  option.append(box,el('span','',count?`Also delete its ${plural(count,'comparison')} and their results`:'Also delete its comparisons'));
+  const hint=el('p','pr-sub','');
+  const sync=()=>{hint.textContent=box.checked?'Cell differences, reports and source files of those comparisons are removed too.':'The comparisons stay in comparison history, no longer in a project.';};
+  box.addEventListener('change',sync);sync();
+  const field=el('div','pr-field'),label=el('label','',`Type the project name to confirm`),input=el('input');input.id='prDeleteName';input.autocomplete='off';input.placeholder=name;label.htmlFor=input.id;
+  field.append(label,input);
+  const foot=el('div','pr-drawer-foot'),text=el('span','','Delete project');
+  const go=projectButton('',async()=>{
+   error.textContent='';go.disabled=true;text.textContent='Deleting…';
+   try{
+    const result=await api('/api/projects/'+detail.project.id,{comparisons:box.checked},'DELETE');
+    $('projectDrawer').close();activeProject=null;projectDetail=null;document.body.classList.remove('pr-project-open');await loadProjects();
+    if(typeof notify==='function')notify('success','Project deleted',result.comparisons?`${name} and ${plural(result.comparisons,'comparison')} were deleted.`:`${name} was deleted.`);
+   }catch(failure){go.disabled=false;text.textContent='Delete project';error.textContent=failure.message;}
+  },'pr-danger');go.append(icon('trash-2'),text);go.disabled=true;
+  input.addEventListener('input',()=>{go.disabled=input.value.trim()!==name.trim();});
+  foot.append(go);body.append(warn,keep,option,hint,field,foot);input.focus();
  }
  // A project's template is a saved set of round settings; each new round starts with it.
  async function openTemplateDrawer(detail){
