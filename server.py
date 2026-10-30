@@ -308,7 +308,8 @@ class Application:
             job_file = self.directory(round_['id']) / 'job.json'
             # Rebuild a round's report when it is missing or was built by an older report version.
             stale = job_file.exists() and self.load(round_['id']).get('exports', {}).get('html', {}).get('report_version') != REPORT_VERSION
-            if (not target.exists() or stale) and job_file.exists():
+            # A round whose results are gone has nothing to rebuild from; it's listed without a report.
+            if (not target.exists() or stale) and job_file.exists() and (self.directory(round_['id']) / 'report' / 'summary.json').exists():
                 try:
                     self._run_export(round_['id'], 'html')
                 except Exception:
@@ -440,6 +441,18 @@ class Application:
         stay in history without a project. Every comparison is checked before anything is deleted."""
         if not store.exists(identity):
             raise ValueError('Project not found')
+        # A parent goes with its subprojects. All of them are checked before anything is deleted.
+        if comparisons:
+            for project in [*store.children(identity), identity]:
+                for job_id in store.record_ids(project):
+                    if not (self.directory(job_id) / 'job.json').exists():
+                        continue
+                    job = self.load(job_id)
+                    if workspace is not None and job.get('owner') != workspace:
+                        raise ValueError('This project has comparisons someone else created. Keep the comparisons, or ask them to delete theirs first.')
+                    if self.busy(job) or self.requests.get(job_id, 0) > 0:
+                        raise ValueError('A comparison in this project is still running or exporting. Wait for it to finish, then delete the project.')
+        removed = sum(self.delete_project(store, child, comparisons, workspace)['comparisons'] for child in store.children(identity))
         ids = store.record_ids(identity)
         jobs = [identity_ for identity_ in ids if (self.directory(identity_) / 'job.json').exists()]
         if comparisons:
@@ -453,7 +466,7 @@ class Application:
                 self.remove_job(job_id)
         store.remove(identity, keep_records=not comparisons)
         shutil.rmtree(self.root / 'project-reports' / identity, ignore_errors=True)
-        return dict(deleted=True, comparisons=len(jobs) if comparisons else 0)
+        return dict(deleted=True, comparisons=removed + (len(jobs) if comparisons else 0))
 
     def compare_runs(self, store, project, query):
         """Two completed runs of one project side by side: counts, columns, settings and, when the runs match on the
@@ -1038,10 +1051,11 @@ class Handler(BaseHTTPRequestHandler):
         match=re.fullmatch(r'/api/projects/([a-f0-9]{32})/(export|template)',path)
         if match and match.group(2)=='export' and self.command=='GET':
             identity=match.group(1);project=store.detail(identity)['project']
-            template=next((p for p in profiles if p['id']==project.get('profile_id')),None)
+            # A subproject travels with its parent: the whole project is exported from there.
+            if project.get('parent_id'):raise ValueError('Subprojects are exported with their project. Open the project and export it from there.')
             folder=self.project_import_folder();target=folder/f'export-{uuid.uuid4().hex}.part'
             try:
-                project_bundle.export(self.app,store,identity,template,target)
+                project_bundle.export(self.app,store,identity,{p['id']:p for p in profiles},target)
                 name=re.sub(r'[^A-Za-z0-9._-]+','-',project['name']).strip('-')[:60] or 'project'
                 self.send_response(200)
                 self.send_header('Content-Type','application/zip')
@@ -1101,29 +1115,32 @@ class Handler(BaseHTTPRequestHandler):
             if not 1<=len(name)<=100:raise ValueError('Use a project name of 1–100 characters')
             if store.name_taken(name):
                 self.json_response(dict(error=f'A project named “{name}” already exists. Choose another name to import this one.',exists=True),409);return True
+            # Each part (the project, then each subproject) brings its template back into the library.
             with self.app.lock:
                 profiles=json.loads(self.profiles_path().read_text()) if self.profiles_path().exists() else []
-                count=len(profiles);profile_id=project_bundle.restore_template(manifest.get('template'),profiles)
-                added=len(profiles)!=count
+                before={p['id'] for p in profiles}
+                profile_ids=[project_bundle.restore_template(part.get('template'),profiles) for part,_ in project_bundle.parts(manifest)]
+                added={p['id'] for p in profiles}-before
                 if added:save_profiles(profiles)
             identity=None
             try:
-                identity,signoffs,ids=project_bundle.install(self.app,store,target,manifest,name,self.workspace if self.server.shared else None,profile_id)
-                # Build every round's report and the sign-off report here, from the imported data.
-                for job_id in ids.values():
-                    if (self.app.directory(job_id)/'job.json').exists():self.app._run_export(job_id,'html')
-                if signoffs:
-                    # The latest sign-off is the one whose report can be downloaded.
-                    latest=store.signoffs(identity)[-1]
-                    store.set_signoff_report(latest['id'],self.app.signoff_report(store,identity,latest))
+                identity,signoffs,jobs=project_bundle.install(self.app,store,target,manifest,name,self.workspace if self.server.shared else None,profile_ids)
+                # Build every round's report and each latest sign-off's report here, from the imported data.
+                for job_id in jobs:
+                    if (self.app.directory(job_id)/'report'/'summary.json').exists():self.app._run_export(job_id,'html')
+                for project_id,items in signoffs.items():
+                    if items:
+                        latest=store.signoffs(project_id)[-1]
+                        store.set_signoff_report(latest['id'],self.app.signoff_report(store,project_id,latest))
             except Exception:
                 if identity:
-                    for job_id in store.remove(identity):shutil.rmtree(self.app.directory(job_id),ignore_errors=True)
-                # A template this import added goes too.
+                    for project_id in [*store.children(identity),identity]:
+                        for job_id in store.remove(project_id):shutil.rmtree(self.app.directory(job_id),ignore_errors=True)
+                # Templates this import added go too.
                 if added:
                     with self.app.lock:
                         current=json.loads(self.profiles_path().read_text()) if self.profiles_path().exists() else []
-                        save_profiles([p for p in current if p['id']!=profile_id])
+                        save_profiles([p for p in current if p['id'] not in added])
                 raise
             target.unlink(missing_ok=True)
             self.json_response(dict(id=identity),201);return True
@@ -1792,6 +1809,9 @@ class Handler(BaseHTTPRequestHandler):
                     project=config.get('project_id')
                     project_store=ProjectStore(project_database(self.app.root,self.workspace),self.workspace if self.server.shared else None)
                     if project is not None and (not re.fullmatch(r'[a-f0-9]{32}',str(project)) or not project_store.exists(project)):raise ValueError('That project no longer exists')
+                    if project is not None and not project_store.accepts_comparisons(project):raise ValueError('This project groups subprojects. Start the round in one of its subprojects.')
+                    as_of=config.get('as_of') or None
+                    if as_of is not None and (not isinstance(as_of,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',as_of)):raise ValueError('Enter the date as YYYY-MM-DD')
                     job.update(**execution_settings(config),comparison_rules=rules,state='queued', keys=keys, memory_cap_mb=self.server.max_sort_mb, sort_workers=1,
                                ignore_columns=ignored_columns, ignore_keys=config.get('ignore_keys', ''), value_overrides=overrides,
                                ignore_container_ids=ids, ignore_key_containers=containers)
@@ -1801,7 +1821,7 @@ class Handler(BaseHTTPRequestHandler):
                         if decision['mode']!='review':raise ValueError('A full comparison is required: '+decision['reason'])
                     self.app.save(job)
                     if project:
-                        project_store.update_record(dict(comparison_id=identity,project_id=project))
+                        project_store.update_record(dict(comparison_id=identity,project_id=project,as_of=as_of))
                     with (directory / 'run.log').open('a') as log:
                         log.write(f'{time.strftime("%H:%M:%S")}  Comparison queued\n')
                     self.app.submit(identity,'comparison',self.app.run_comparison)

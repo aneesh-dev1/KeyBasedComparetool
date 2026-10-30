@@ -751,7 +751,8 @@ def _journey_svg(rounds, population, esc):
         at_goal = reached and r is last
         near_edge = cx > width - right + 20 and not at_goal
         lx, ly, anchor = (cx + 26, cy - 28, 'start') if at_goal else (cx - 14, cy - 50 if cy + 50 > height - bottom else cy + 22, 'end') if near_edge else (cx + 14, cy - 36, 'start')
-        date = datetime.fromtimestamp(r.get('finished') or r['created'], IST).strftime('%d %b')
+        # A date the user gave the round is shown as written; otherwise the day it ran (IST).
+        date = datetime.strptime(r['as_of'], '%Y-%m-%d').strftime('%d %b') if r.get('as_of') else datetime.fromtimestamp(r.get('finished') or r['created'], IST).strftime('%d %b')
         out.append(f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" class="v">{esc(label)}</text><text x="{lx:.1f}" y="{ly + 13:.1f}" text-anchor="{anchor}" class="ax">{r["keys_checked"]:,} keys</text>'
                    f'<text x="{lx:.1f}" y="{ly + 26:.1f}" text-anchor="{anchor}" class="ax">{date}</text>')
     return ''.join(out) + '</svg>'
@@ -847,7 +848,10 @@ def project_signoff_html(project, progress, latest, signoff, attachments):
         result = ('<span class="ok">Clean</span>' if r['clean'] else f'<span class="bad">{plural(r["mismatching"], "column")}</span>'
                   + (f'<br><small class="muted">{r["left_only"] + r["right_only"]:,} keys in one file</small>' if r['left_only'] or r['right_only'] else ''))
         change = '—' if r['n'] == 1 else f'{r["fixed"]:,} fixed · {r["new"]:,} new'
-        out += (f'<tr><td><span class="round-n{" is-clean" if r["clean"] else ""}">{r["n"]}</span></td><td>{stamp(r.get("finished") or r["created"]).strftime("%d %b %Y")}</td>'
+        ran = stamp(r.get('finished') or r['created'])
+        when = (datetime.strptime(r['as_of'], '%Y-%m-%d').strftime('%d %b %Y') + '<br><small class="muted">ran ' + ran.strftime('%d %b') + '</small>'
+                if r.get('as_of') else ran.strftime('%d %b %Y'))
+        out += (f'<tr><td><span class="round-n{" is-clean" if r["clean"] else ""}">{r["n"]}</span></td><td>{when}</td>'
                 f'<td class="num">{r["keys_checked"]:,}</td><td>{esc(how.get(r["how"], ""))}</td><td>{result}</td><td>{change}</td><td>{link}</td></tr>')
     out += '</tbody></table></div></section>'
 

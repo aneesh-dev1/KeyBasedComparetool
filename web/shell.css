@@ -2117,3 +2117,50 @@ body.pr-project-open #mainWorkspace>.heading{display:none}
 #projectsPanel.pr .pr-note-text{order:2;flex:1 1 100%;min-width:0;margin:0;font-size:12.5px;line-height:1.45;color:#193a50;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 #projectsPanel.pr .pr-note-cells{margin-left:auto;display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#5d7180;white-space:nowrap}
 #projectsPanel.pr .pr-note-cells svg.lucide{width:13px;height:13px}
+/* Subprojects: a completion strip, one segment per subproject in its status colour, signed off first. */
+#projectsPanel.pr .pr-strip{display:flex;gap:2px;width:100%;max-width:220px;height:8px}
+#projectsPanel.pr .pr-strip-part{flex:1;min-width:6px;border:0;padding:0;border-radius:2px;background:#cfd9df}
+#projectsPanel.pr .pr-strip-part:first-child{border-radius:4px 2px 2px 4px}
+#projectsPanel.pr .pr-strip-part:last-child{border-radius:2px 4px 4px 2px}
+#projectsPanel.pr .pr-strip-part:only-child{border-radius:4px}
+#projectsPanel.pr .pr-strip-part.is-signed_off{background:var(--pr-green)}
+#projectsPanel.pr .pr-strip-part.is-clean{background:var(--pr-cyan)}
+#projectsPanel.pr .pr-strip-part.is-ready{background:#c9951a}
+#projectsPanel.pr .pr-strip-part.is-fixing{background:var(--pr-red)}
+#projectsPanel.pr .pr-strip-part.is-running{background:var(--tu-navy-950)}
+#projectsPanel.pr .pr-strip-part.is-empty{background:#cfd9df}
+#projectsPanel.pr .pr-strip.is-large{max-width:520px;height:14px;gap:3px;margin-top:10px}
+#projectsPanel.pr .pr-strip.is-large .pr-strip-part{cursor:pointer;transition:transform .12s ease}
+#projectsPanel.pr .pr-strip.is-large .pr-strip-part:hover{transform:scaleY(1.35)}
+#projectsPanel.pr .pr-strip.is-large .pr-strip-part:focus-visible{outline:2px solid #00a6ca;outline-offset:2px}
+@media(prefers-reduced-motion:reduce){#projectsPanel.pr .pr-strip.is-large .pr-strip-part{transition:none}}
+#projectsPanel.pr .pr-row.is-parent .pr-journey{display:grid;gap:6px;align-content:center}
+/* Parent page: band, then the subprojects list scrolling inside the page. */
+#projectsPanel.pr .pr-parent-page .pr-sub-list{flex:1;min-height:0;display:flex;flex-direction:column}
+#projectsPanel.pr .pr-parent-page .pr-sub-list .pr-list{flex:1;min-height:0;overflow:auto;margin-top:10px}
+#projectsPanel.pr .pr-parent-link{display:inline-flex;align-items:center;gap:6px;width:max-content;margin-bottom:2px;padding:0;border:0;background:none;color:var(--pr-cyan);font-size:12.5px;font-weight:600;cursor:pointer}
+#projectsPanel.pr .pr-parent-link svg.lucide{width:14px;height:14px}
+#projectsPanel.pr .pr-parent-link:hover{text-decoration:underline;text-underline-offset:3px}
+#projectsPanel.pr .pr-parent-link:focus-visible{outline:2px solid #00a6ca;outline-offset:2px;border-radius:3px}
+/* A round's date: the user's date in ink with a calendar, the run date muted; both open the date drawer. */
+#projectsPanel.pr .pr-date-button{display:flex;align-items:center;gap:4px;margin-top:1px;padding:0;border:0;background:none;color:var(--pr-muted);font-size:12px;cursor:pointer}
+#projectsPanel.pr .pr-date-button svg.lucide{width:12px;height:12px;opacity:0;transition:opacity .12s}
+#projectsPanel.pr .pr-date-button.is-set{color:var(--pr-ink);font-weight:600}
+#projectsPanel.pr .pr-date-button.is-set svg.lucide,#projectsPanel.pr .pr-date-button:is(:hover,:focus-visible) svg.lucide{opacity:1}
+#projectsPanel.pr .pr-date-button:hover{color:var(--pr-cyan)}
+#projectsPanel.pr .pr-date-button:focus-visible{outline:2px solid #00a6ca;outline-offset:2px;border-radius:3px}
+#projectDrawer .pr-optional{margin-left:auto;font-size:12px;font-weight:500;color:#8a9ba6}
+#projectDrawer .pr-round-date input[type=date],#projectDrawer .pr-date-drawer input[type=date]{max-width:220px}
+#projectDrawer .pr-date-foot{gap:8px}
+/* The subprojects list is the dashboard's list, under a heading, not a card within a card. */
+#projectsPanel.pr .pr-parent-page .pr-card.pr-sub-list{padding:0;border:0;background:none}
+#projectsPanel.pr .pr-parent-page .pr-sub-list>h3{margin:4px 0 0;font-size:15px}
+#projectsPanel.pr .pr-parent-page .pr-sub-list .pr-list{margin-top:8px}
+/* New project drawer: the round drawer's steps and option cards, with text fields filling each step. */
+#projectDrawer .pr-new-drawer .pr-step :is(input:not([type=radio]),textarea,select){width:100%;box-sizing:border-box}
+#projectDrawer .pr-new-drawer .pr-step textarea{resize:vertical;min-height:58px}
+#projectDrawer .pr-new-drawer .pr-step[hidden]{display:none}
+#projectDrawer .pr-new-drawer .pr-step .pr-sub{margin:0;font-size:12.5px}
+#projectDrawer .pr-import-subs{display:flex;align-items:flex-start;gap:8px;margin:0;font-size:13px;color:#193a50}
+#projectDrawer .pr-import-subs svg.lucide{flex:none;width:15px;height:15px;margin-top:2px;color:#007b99}
+#projectDrawer .pr-delete-keep[hidden]{display:none}

@@ -173,7 +173,7 @@ new MutationObserver(()=>{if($('rerunDialog').open){const select=$('rerun-scope'
 const originalProjectAudit=openProjectAudit;openProjectAudit=async function(identity,attach=false){
   if(currentView==='projectsPanel')return originalProjectAudit(identity,attach);
   const [recordData,catalog]=await Promise.all([api('/api/projects/records?id='+identity),api('/api/projects')]);const record=recordData.records[0];if(!record)throw Error('Comparison is not available.');
-  openProjectDrawer('Attach to project');const body=$('projectDrawerBody'),label=document.createElement('label'),select=document.createElement('select');label.textContent='Project';select.append(new Option('No project',''));for(const p of catalog.projects)select.append(new Option(p.name,p.id));select.value=record.project_id||'';label.append(select);body.append(label,projectButton('Attach comparison',async()=>{await api('/api/projects/records',{comparison_id:identity,project_id:select.value||null,status:record.audit_status,note:record.audit_note,reviewer:record.reviewer});$('projectDrawer').close();},'primary'));
+  openProjectDrawer('Attach to project');const body=$('projectDrawerBody'),label=document.createElement('label'),select=document.createElement('select');label.textContent='Project';select.append(new Option('No project',''));for(const [id,name] of projectOptions(catalog.projects))select.append(new Option(name,id));select.value=record.project_id||'';label.append(select);body.append(label);body.insertAdjacentHTML('beforeend',dateField('attachDate',record.as_of));body.append(projectButton('Attach comparison',async()=>{await api('/api/projects/records',{comparison_id:identity,project_id:select.value||null,status:record.audit_status,note:record.audit_note,reviewer:record.reviewer,as_of:$('attachDate').value||null});$('projectDrawer').close();},'primary'));
 };
 for(const button of $('results').querySelectorAll('button'))if(/Project & audit|Review and file/i.test(button.textContent))button.textContent='Attach to project';
 
@@ -2143,6 +2143,8 @@ loadDiagnostics=async function(){
   const signed=message.match(/^Project signed off( with reasons for remaining mismatches| at 100% match)(?: · (.+))?$/);
   if(signed)return {kind:'signoffs',icon:'badge-check',tone:'green',text:`Signed off${signed[1].includes('100%')?' at 100% match':' with reasons for what still mismatches'}${signed[2]?' by '+signed[2]:''}`};
   if(message.startsWith('Project created'))return {kind:'project',icon:'folder-plus',tone:'navy',text:message.includes('template')?'Project created from a template':'Project created'};
+  if(message.startsWith('Subproject added: '))return {kind:'project',icon:'folder-plus',tone:'cyan',text:message};
+  if(message.startsWith('Date set: ')||message==='Date cleared')return {kind:'rounds',icon:'calendar',tone:'cyan',text:message==='Date cleared'?`${name} uses its run date again`:`${name} dated ${new Date(message.slice(10)+'T00:00:00Z').toLocaleDateString(undefined,{timeZone:'UTC',day:'numeric',month:'short',year:'numeric'})}`};
   if(message.startsWith('Imported from'))return {kind:'project',icon:'upload',tone:'navy',text:message};
   if(message.startsWith('Template'))return {kind:'project',icon:'layout-template',tone:'cyan',text:message==='Template removed'?'Template no longer used for new rounds':'Template saved for new rounds'};
   return {kind:'project',icon:'circle',tone:'muted',text:message};
@@ -2740,6 +2742,9 @@ loadDiagnostics=async function(){
  const when=value=>{if(!value)return '—';const date=new Date(value*1000);
   return istDay(date)===istDay(new Date())?'Today, '+date.toLocaleTimeString(undefined,{...IST,hour:'2-digit',minute:'2-digit'})+' IST':day(value);};
  const icon=(name,label)=>{const node=lucideNode(name);if(label){node.setAttribute('aria-label',label);node.removeAttribute('aria-hidden');}return node;};
+ // A user-given date (YYYY-MM-DD) is a calendar day, not a moment, so it's shown as written.
+ const asOfDay=value=>new Date(value+'T00:00:00Z').toLocaleDateString(undefined,{timeZone:'UTC',day:'numeric',month:'short'});
+ const roundDay=round=>round.as_of?asOfDay(round.as_of):day(round.finished||round.created);
  const STATES=[['fixing','Fixing'],['ready','Ready for all keys'],['clean','Ready to sign off'],['signed_off','Signed off'],['running','Running'],['empty','No rounds yet']];
  const statusTag=(status,label)=>el('span','pr-tag is-'+status,label);
  // Secondary actions use the app's slide-on-hover button: the Lucide icon alone, its label sliding out on hover.
@@ -2782,6 +2787,55 @@ loadDiagnostics=async function(){
   else{activeProject=null;renderOverview();}
  };
 
+ // Subprojects of a parent in a strip, one segment each, signed off first: how much of the project is done.
+ const STRIP_ORDER=['signed_off','clean','ready','empty','running','fixing'];
+ function completionStrip(subprojects,open){
+  const strip=el('span','pr-strip'+(open?' is-large':''));strip.setAttribute('role',open?'list':'img');
+  const done=subprojects.filter(sub=>sub.status==='signed_off').length;
+  if(!open)strip.setAttribute('aria-label',`${done} of ${subprojects.length} subprojects signed off`);
+  for(const sub of [...subprojects].sort((a,b)=>STRIP_ORDER.indexOf(a.status)-STRIP_ORDER.indexOf(b.status))){
+   const part=open?projectButton('',()=>open(sub),'pr-strip-part is-'+sub.status):el('i','pr-strip-part is-'+sub.status);
+   part.title=`${sub.name}: ${sub.status_label}`;if(open){part.setAttribute('role','listitem');part.setAttribute('aria-label',`${sub.name}: ${sub.status_label}. Open`);}
+   strip.append(part);
+  }
+  return strip;
+ }
+ // What's left among subprojects, in words: "1 fixing, 1 ready to sign off".
+ const LEFT_WORDS={running:'running',fixing:'fixing',ready:'ready for all keys',clean:'ready to sign off',empty:'not started'};
+ const leftWords=subprojects=>{const counts={};for(const sub of subprojects)if(sub.status!=='signed_off')counts[sub.status]=(counts[sub.status]||0)+1;
+  return Object.keys(LEFT_WORDS).filter(key=>counts[key]).map(key=>`${number(counts[key])} ${LEFT_WORDS[key]}`).join(', ');};
+ function projectRow(project){
+  const subs=project.subprojects||[];
+  if(subs.length){
+   const row=el('button','pr-row is-parent');row.type='button';row.setAttribute('role','row');
+   row.addEventListener('click',()=>selectProject(project.id).catch(showError));
+   const done=subs.filter(sub=>sub.status==='signed_off').length,left=subs.length-done;
+   const name=el('span','pr-name');name.append(el('b','',project.name),el('small','',`${plural(subs.length,'subproject')}${project.description?' · '+project.description:''}`));
+   const journey=el('span','pr-journey');journey.append(completionStrip(subs),el('small','',`${number(done)} of ${number(subs.length)} signed off`));
+   const last=el('span','pr-last');last.append(el('span','',left?`${number(left)} left`:'All signed off'),el('small','',left?leftWords(subs):'Every subproject is signed off'));
+   const ran=el('span','pr-when',project.last_run?when(project.last_run):'—');if(project.last_run)ran.title=fullTime(project.last_run);
+   row.append(name,statusTag(project.status,project.status_label),journey,last,ran);
+   for(const cell of row.children)cell.setAttribute('role','cell');
+   return row;
+  }
+  const row=el('button','pr-row');row.type='button';row.setAttribute('role','row');
+  row.addEventListener('click',()=>selectProject(project.id).catch(showError));
+  const latest=project.latest_round,rounds=project.rounds||[];
+  const name=el('span','pr-name');name.append(el('b','',project.name),el('small','',project.feed||project.description||'No comparisons yet'));
+  const journey=el('span','pr-journey');journey.append(miniJourney(rounds,project.population),el('small','',coverageText(latest,project.population)));
+  const last=el('span','pr-last');
+  if(project.status==='running')last.append(el('span','','A round is running'),el('small','',latest?`Round ${latest.n} was the last to finish`:'First round'));
+  else if(!latest)last.append(el('span','','No rounds yet'),el('small','','Start with a few random keys'));
+  else{
+   last.append(el('span','',latest.mismatching?plural(latest.mismatching,'column')+' mismatch':latest.clean?'No mismatches':plural(latest.left_only+latest.right_only,'key')+' in only one file'));
+   last.append(el('small','',project.status==='signed_off'?`${project.signoff?.mode==='exceptions'?'Signed off with reasons':'Signed off at 100% match'} · ${project.signoff?.reviewer||''}`:project.status==='clean'?`Next: sign off round ${latest.n}`:project.status==='ready'?'Next: check all keys':latest.n>1&&latest.fixed?`${number(latest.fixed)} fixed since round ${latest.n-1}`:latest.n===1?'First round':'No columns fixed since the last round'));
+  }
+  // The date the latest round ran, not when a comparison was attached or its record changed.
+  const ran=el('span','pr-when',project.last_run?when(project.last_run):'—');if(project.last_run)ran.title=fullTime(project.last_run);
+  row.append(name,statusTag(project.status,project.status_label),journey,last,ran);
+  for(const cell of row.children)cell.setAttribute('role','cell');
+  return row;
+ }
  function renderOverview(){
   activeProject=null;document.body.classList.remove('pr-project-open');
   const dashboard=$('projectDashboard');dashboard.replaceChildren();
@@ -2798,7 +2852,9 @@ loadDiagnostics=async function(){
    const starts=el('div','pr-empty-actions');starts.append(start,importButton());empty.append(starts);
    dashboard.append(empty);return;
   }
-  const counts={};for(const project of projectCatalog)counts[project.status]=(counts[project.status]||0)+1;
+  // The dashboard lists top-level projects; subprojects are counted and shown in their parent.
+  const topLevel=projectCatalog.filter(project=>!project.parent_id);
+  const counts={};for(const project of topLevel)counts[project.status]=(counts[project.status]||0)+1;
   // The four outcomes are always shown, so their counts can be compared; running and empty only when present.
   const cards=el('div','pr-summary');cards.setAttribute('role','group');cards.setAttribute('aria-label','Show projects by status');
   for(const [key,label] of STATES){
@@ -2816,25 +2872,10 @@ loadDiagnostics=async function(){
    const headRow=el('div','pr-row pr-row-head');headRow.setAttribute('role','row');
    for(const label of ['Project','Status','Journey: keys checked → mismatching columns','Latest round','Last run']){const cell=el('span','',label);cell.setAttribute('role','columnheader');headRow.append(cell);}
    table.append(headRow);
-   const shown=projectCatalog.filter(project=>(filter==='all'||project.status===filter)&&project.name.toLowerCase().includes(query.toLowerCase()));
+   const find=query.toLowerCase(),matches=project=>project.name.toLowerCase().includes(find)||(project.subprojects||[]).some(sub=>sub.name.toLowerCase().includes(find));
+   const shown=topLevel.filter(project=>(filter==='all'||project.status===filter)&&matches(project));
    for(const project of shown){
-    const row=el('button','pr-row');row.type='button';row.setAttribute('role','row');
-    row.addEventListener('click',()=>selectProject(project.id).catch(showError));
-    const latest=project.latest_round,rounds=project.rounds||[];
-    const name=el('span','pr-name');name.append(el('b','',project.name),el('small','',project.feed||project.description||'No comparisons yet'));
-    const journey=el('span','pr-journey');journey.append(miniJourney(rounds,project.population),el('small','',coverageText(latest,project.population)));
-    const last=el('span','pr-last');
-    if(project.status==='running')last.append(el('span','','A round is running'),el('small','',latest?`Round ${latest.n} was the last to finish`:'First round'));
-    else if(!latest)last.append(el('span','','No rounds yet'),el('small','','Start with a few random keys'));
-    else{
-     last.append(el('span','',latest.mismatching?plural(latest.mismatching,'column')+' mismatch':latest.clean?'No mismatches':plural(latest.left_only+latest.right_only,'key')+' in only one file'));
-     last.append(el('small','',project.status==='signed_off'?`${project.signoff?.mode==='exceptions'?'Signed off with reasons':'Signed off at 100% match'} · ${project.signoff?.reviewer||''}`:project.status==='clean'?`Next: sign off round ${latest.n}`:project.status==='ready'?'Next: check all keys':latest.n>1&&latest.fixed?`${number(latest.fixed)} fixed since round ${latest.n-1}`:latest.n===1?'First round':'No columns fixed since the last round'));
-    }
-    // The date the latest round ran, not when a comparison was attached or its record changed.
-    const ran=el('span','pr-when',project.last_run?when(project.last_run):'—');if(project.last_run)ran.title=fullTime(project.last_run);
-    row.append(name,statusTag(project.status,project.status_label),journey,last,ran);
-    for(const cell of row.children)cell.setAttribute('role','cell');
-    table.append(row);
+    table.append(projectRow(project));
    }
    if(!shown.length)table.append(el('p','pr-none',query?'No project matches that name.':'No projects with this status.'));
   }
@@ -2850,8 +2891,9 @@ loadDiagnostics=async function(){
  // Where the project stands, in one status, one sentence and one next step.
  function statusBand(detail,next){
   const progress=detail.progress,latest=progress.rounds.at(-1),population=progress.population,all=population?`all ${number(population)} keys`:'all keys';
-  const ran=latest?` on ${day(latest.finished||latest.created)}`:'';
-  const checked=latest?(population&&latest.keys_checked>=population?`Round ${latest.n} ran${ran} and checked ${all}.`:`Round ${latest.n} ran${ran} and checked ${number(latest.keys_checked)}${population?` of ${number(population)}`:''} keys.`):'';
+  // A user-given date is the round's date, not the day it ran.
+  const ran=latest?(latest.as_of?`Round ${latest.n}, dated ${roundDay(latest)},`:`Round ${latest.n} ran on ${roundDay(latest)} and`):'';
+  const checked=latest?(population&&latest.keys_checked>=population?`${ran} checked ${all}.`:`${ran} checked ${number(latest.keys_checked)}${population?` of ${number(population)}`:''} keys.`):'';
   const outside=latest?latest.left_only+latest.right_only:0;
   const text={
    empty:['No rounds yet','Start round 1 with a few random keys, for example 10. Each round after that checks a bigger sample, until every key is checked.'],
@@ -2931,10 +2973,10 @@ loadDiagnostics=async function(){
    // Three lines: the result, the keys checked, and the date the round ran. The goal's label clears its ring.
    const [lx,ly,anchor]=atGoal?[cx+28,cy-30,'start']:labelLeft?[cx-16,cy+56>H-B?cy-54:cy+30,'end']:[cx+16,cy-40,'start'];
    const [first,second]=atGoal?['Goal reached','Clean on all keys']:[round.clean?'Clean':round.mismatching?plural(round.mismatching,'column'):'Keys missing',plural(round.keys_checked,'key')];
-   const date=day(round.finished||round.created);
+   const date=roundDay(round);
    svg.append(svgEl('text',{class:'pr-val',x:lx,y:ly,'text-anchor':anchor},first),svgEl('text',{x:lx,y:ly+14,'text-anchor':anchor},second),svgEl('text',{class:'pr-date',x:lx,y:ly+28,'text-anchor':anchor},date));
    const hit=svgEl('circle',{cx,cy,r:24,fill:'transparent',tabindex:0,'aria-label':`Round ${round.n}, ${date}: ${plural(round.keys_checked,'key')} checked, ${plural(round.mismatching,'mismatching column')}`+(index?`, ${number(round.fixed)} fixed and ${number(round.new)} new since round ${round.n-1}`:'')});
-   const show=()=>{tip.replaceChildren(el('b','',`Round ${round.n} · ${date}`),el('span','',`${plural(round.keys_checked,'key')} checked`),el('span','',`${plural(round.mismatching,'column')} ${round.mismatching===1?'mismatches':'mismatch'}`));
+   const show=()=>{tip.replaceChildren(el('b','',`Round ${round.n} · ${date}`),...(round.as_of?[el('span','',`Ran on ${day(round.finished||round.created)}`)]:[]),el('span','',`${plural(round.keys_checked,'key')} checked`),el('span','',`${plural(round.mismatching,'column')} ${round.mismatching===1?'mismatches':'mismatch'}`));
     if(index)tip.append(el('span','',`${number(round.fixed)} fixed and ${number(round.new)} new since round ${round.n-1}`));
     if(round.left_only||round.right_only)tip.append(el('span','',`${number(round.left_only)} keys only in File 1, ${number(round.right_only)} only in File 2`));
     tip.hidden=false;tip.style.left=Math.max(0,Math.min(W-tip.offsetWidth,cx+20))+'px';tip.style.top=(cy+18)+'px';};
@@ -3027,7 +3069,12 @@ loadDiagnostics=async function(){
   [...progress.rounds].reverse().forEach(round=>{
    const previous=progress.rounds[round.n-2],row=el('tr');
    const number_=el('td');number_.append(el('span','pr-r'+(round.clean?' is-clean':''),String(round.n)));
-   const keys=el('td');keys.append(document.createTextNode(number(round.keys_checked)),el('small','',day(round.finished||round.created)));
+   const keys=el('td');keys.append(document.createTextNode(number(round.keys_checked)));
+   // The date is the user's date when one was given; either way it opens the date drawer.
+   const date=projectButton('',()=>openDateDrawer(detail,round),'pr-date-button'+(round.as_of?' is-set':''));
+   date.title=round.as_of?`Date you set · ran on ${day(round.finished||round.created)}`:'Set a date for this round';
+   date.setAttribute('aria-label',`Round ${round.n} date: ${roundDay(round)}. Change`);date.append(document.createTextNode(roundDay(round)),icon('calendar'));
+   keys.append(date);
    const result=el('td','pr-num');
    result.append(el('span',round.clean?'pr-ok':'pr-bad',round.clean?'Clean':round.mismatching?plural(round.mismatching,'column'):plural(round.left_only+round.right_only,'key')+' missing'));
    if(progress.signoff?.round_id===round.id)result.append(el('small','','Signed off'));
@@ -3041,14 +3088,17 @@ loadDiagnostics=async function(){
  }
 
  function renderProject(detail){
+  if(detail.subprojects){renderParent(detail);return;}
   const dashboard=$('projectDashboard');dashboard.replaceChildren();document.body.classList.add('pr-project-open');
   const progress=detail.progress,rounds=progress.rounds,next=rounds.length+progress.running.length+1,latest=rounds.at(-1);
   const page=el('div','pr-page');
   const head=el('div','pr-head pr-head-compact'),titles=el('div','pr-titles');
   // Back is a plain icon button: no sliding label, the tooltip names it.
-  const back=projectButton('',()=>{activeProject=null;document.body.classList.remove('pr-project-open');loadProjects().catch(showError);},'pr-back-button');
-  back.setAttribute('aria-label','All projects');back.title='All projects';back.append(icon('arrow-left'));
-  const name=el('div','pr-name-line');name.append(el('h2','pr-title',detail.project.name));
+  // A subproject's back button returns to its parent, which is also named above the title.
+  const parent=detail.parent,back=backButton(parent);
+  const name=el('div','pr-name-line');
+  if(parent){const up=projectButton('',()=>selectProject(parent.id).catch(showError),'pr-parent-link');up.append(icon('folder-kanban'),el('span','',parent.name));titles.append(up);}
+  name.append(el('h2','pr-title',detail.project.name));
   const feed=el('div','pr-feed');
   if(latest?.title){const [a,b]=latest.title.split(' ↔ ');feed.append(el('code','',a));if(b)feed.append(el('span','','vs'),el('code','',b));}
   const facts=[progress.population&&`${number(progress.population)} keys`,detail.key_columns?.length&&`matched on ${detail.key_columns.join(', ')}`].filter(Boolean);
@@ -3058,10 +3108,14 @@ loadDiagnostics=async function(){
   titles.append(name,feed);
   const actions=el('div','pr-actions');
   actions.append(expand('history','Activity',()=>window.pjOpenActivity()),expand('plus','Attach comparison',()=>showProjectCandidates()),
-   expand('layout-template',detail.template?'Change template':'Save as template',()=>openTemplateDrawer(detail)),expand('download','Export project',()=>exportProject(detail)),
+   expand('layout-template',detail.template?'Change template':'Save as template',()=>openTemplateDrawer(detail)),
+   // A subproject is exported with its project, from the parent's page.
+   ...(parent?[]:[expand('download','Export project',()=>exportProject(detail))]),
    expand('trash-2','Delete project',()=>openDeleteDrawer(detail),'is-danger'));
   // Starting a round is the yellow button while fixing; otherwise it stays one click away here.
   if(['clean','signed_off','running'].includes(progress.status))actions.append(expand('play','Start round '+next,()=>openRoundDrawer(detail,next)));
+  // An empty top-level project can become a parent instead of running rounds itself.
+  if(!parent&&!rounds.length&&!progress.running.length)actions.prepend(expand('folder-plus','Add subproject',()=>openSubprojectDrawer(detail)));
   head.append(back,titles,actions);
   const main=el('div','pr-main'),side=el('div','pr-side');
   if(rounds.length)main.append(journeySection(detail));
@@ -3069,6 +3123,128 @@ loadDiagnostics=async function(){
   side.append(leftSection(detail),roundsSection(detail));main.append(side);
   page.append(head,statusBand(detail,next),main);dashboard.append(page);
   fitPage();
+ }
+ function backButton(parent){
+  const back=projectButton('',()=>{if(parent){selectProject(parent.id).catch(showError);return;}activeProject=null;document.body.classList.remove('pr-project-open');loadProjects().catch(showError);},'pr-back-button');
+  const label=parent?`Back to ${parent.name}`:'All projects';back.setAttribute('aria-label',label);back.title=label;back.append(icon('arrow-left'));return back;
+ }
+ // A parent project only groups subprojects: how many are signed off, what's left, and each subproject's row.
+ function renderParent(detail){
+  const dashboard=$('projectDashboard');dashboard.replaceChildren();document.body.classList.add('pr-project-open');
+  const subs=detail.subprojects||[],done=subs.filter(sub=>sub.status==='signed_off').length,left=subs.length-done;
+  const page=el('div','pr-page pr-parent-page');
+  const head=el('div','pr-head pr-head-compact'),titles=el('div','pr-titles'),name=el('div','pr-name-line');
+  name.append(el('h2','pr-title',detail.project.name));
+  const feed=el('div','pr-feed');feed.append(el('span','',detail.project.description||`${plural(subs.length,'subproject')}, each compared in its own rounds.`));
+  titles.append(name,feed);
+  const actions=el('div','pr-actions');
+  actions.append(expand('history','Activity',()=>window.pjOpenActivity()),expand('download','Export project',()=>exportProject(detail)),expand('trash-2','Delete project',()=>openDeleteDrawer(detail),'is-danger'));
+  head.append(backButton(null),titles,actions);
+  const open=sub=>selectProject(sub.id).catch(showError);
+  const band=el('section','pr-band pr-parent-band is-'+(subs.length&&!left?'signed_off':'clean'));band.setAttribute('aria-labelledby','prBandTitle');
+  const seal=el('span','pr-band-seal');seal.append(icon(left||!subs.length?'folder-kanban':'badge-check'));
+  const copy=el('div','pr-band-copy'),title=el('h2','',!subs.length?'No subprojects yet':left?`${number(done)} of ${plural(subs.length,'subproject')} signed off`:`All ${plural(subs.length,'subproject')} signed off`);title.id='prBandTitle';
+  copy.append(title,el('p','',!subs.length?'Add a subproject for each pair of files to check. Each runs its own rounds and is signed off on its own.':left?`${number(left)} left: ${leftWords(subs)}. Open one to carry on.`:'Every subproject is signed off.'));
+  if(subs.length)copy.append(completionStrip(subs,open));
+  const figures=el('dl','pr-figures');
+  for(const [label,value] of [['Subprojects',subs.length],['Signed off',done],['Left',left]]){const item=el('div');item.append(el('dt','',label),el('dd','',number(value)));figures.append(item);}
+  const buttons=el('div','pr-band-actions'),add=projectButton('',()=>openSubprojectDrawer(detail),'primary pr-cta');add.append(icon('folder-plus'),document.createTextNode('Add subproject'));buttons.append(add);
+  band.append(seal,copy,figures,buttons);
+  const list=el('section','pr-card pr-sub-list');list.setAttribute('aria-labelledby','prSubTitle');
+  const listTitle=el('h3','','Subprojects');listTitle.id='prSubTitle';list.append(listTitle);
+  if(subs.length){
+   const table=el('div','pr-list');table.setAttribute('role','table');table.setAttribute('aria-label','Subprojects');
+   const headRow=el('div','pr-row pr-row-head');headRow.setAttribute('role','row');
+   for(const label of ['Subproject','Status','Journey: keys checked → mismatching columns','Latest round','Last run']){const cell=el('span','',label);cell.setAttribute('role','columnheader');headRow.append(cell);}
+   table.append(headRow);for(const sub of subs)table.append(projectRow(sub));list.append(table);
+  }else list.append(el('p','pr-sub','Subprojects appear here once you add them.'));
+  page.append(head,band,list);dashboard.append(page);fitPage();
+ }
+ // A subproject is a project of its own, inside a parent that only groups.
+ async function openSubprojectDrawer(parent){
+  openProjectDrawer('Add subproject');
+  const body=$('projectDrawerBody'),error=$('projectDrawerError');body.classList.add('pr-drawer','pr-round-drawer','pr-new-drawer');
+  body.append(el('p','pr-sub',`Part of ${parent.project.name}. It runs its own rounds and is signed off on its own.`));
+  const step=(n,label,control)=>{const section=el('section','pr-step'),head=el('div','pr-step-head'),title=el('label','',label);
+   title.htmlFor=control.id;head.append(el('span','pr-step-n',String(n)),title);section.append(head,control);return section;};
+  const name=el('input');name.id='prSubName';name.maxLength=100;name.placeholder='e.g. Cards, North region';name.autocomplete='off';
+  const description=el('textarea');description.id='prSubDescription';description.rows=2;description.maxLength=2000;description.placeholder='What it checks (optional)';description.setAttribute('aria-label','Description');
+  const named=step(1,'Name it',name);named.append(description);
+  const template=el('select');template.id='prSubTemplate';template.add(new Option('No template',''));
+  const templated=step(2,'Start from a template',template);templated.append(el('p','pr-sub','Each round starts with the template’s column mapping, keys and rules.'));
+  api('/api/profiles').then(result=>{for(const profile of result.profiles)template.add(new Option(profile.name,profile.id));}).catch(()=>{});
+  const foot=el('div','pr-drawer-foot pr-round-foot'),create=projectButton('',async()=>{
+   error.textContent='';
+   if(!name.value.trim()){error.textContent='Enter a subproject name.';name.focus();return;}
+   const result=await api('/api/projects',{name:name.value,description:description.value,parent_id:parent.project.id,profile_id:template.value||null});
+   $('projectDrawer').close();await selectProject(result.id);
+  },'primary pr-cta');create.append(icon('folder-plus'),document.createTextNode('Create subproject'));
+  foot.append(el('p','pr-round-summary','You start its round 1 next.'),create);
+  body.append(named,templated,foot);name.focus();
+ }
+ // New project, in the same steps as the other project drawers: name it, say what it holds, then its settings.
+ // From the upload page (onCreated) a project always takes comparisons, so the choice isn't offered there.
+ createProjectDrawer=function(onCreated){
+  openProjectDrawer('New project');
+  const body=$('projectDrawerBody'),error=$('projectDrawerError');
+  // The round drawer's option cards are reused, so the drawer carries its class too.
+  body.classList.add('pr-drawer','pr-round-drawer','pr-new-drawer');
+  const step=(n,label,control)=>{const section=el('section','pr-step'),head=el('div','pr-step-head'),title=el(control?'label':'span','',label);
+   if(control)title.htmlFor=control.id;head.append(el('span','pr-step-n',String(n)),title);section.append(head);return section;};
+  // 1. Name and description.
+  const name=el('input');name.id='prNewName';name.maxLength=100;name.placeholder='e.g. Q3 ledger migration';name.autocomplete='off';
+  const description=el('textarea');description.id='prNewDescription';description.rows=2;description.maxLength=2000;description.placeholder='What it checks and why (optional)';description.setAttribute('aria-label','Description');
+  const named=step(1,'Name it',name);named.append(name,description);
+  // 2. What it holds.
+  const kinds=el('fieldset','pr-step pr-choice'),legend=el('legend','pr-step-head');legend.append(el('span','pr-step-n','2'),document.createTextNode('What it holds'));kinds.append(legend);
+  const options=el('div','pr-options');
+  const option=(value,glyph,title,text)=>{const card=el('label','pr-opt'),radio=el('input');radio.type='radio';radio.name='prNewKind';radio.value=value;radio.className='pr-sr-radio';
+   const copy=el('span','pr-opt-copy');copy.append(el('b','',title),el('span','pr-opt-note',text));
+   const mark=el('span','pr-opt-icon'),check=el('span','pr-opt-check');mark.append(icon(glyph));check.append(icon('check'));
+   card.append(radio,mark,copy,check);radio.addEventListener('change',sync);options.append(card);return radio;};
+  const rounds=option('rounds','git-compare-arrows','Two files, compared in rounds','Start with a few random keys and grow to all of them, then sign off.');
+  const group=option('group','folder-kanban','A group of subprojects','One subproject per pair of files. See how many are signed off and what’s left.');
+  rounds.checked=true;kinds.append(options);
+  // 3. Template, for a project that runs rounds.
+  const template=el('select');template.id='prNewTemplate';template.add(new Option('No template',''));
+  const templated=step(3,'Start from a template',template);templated.append(template,el('p','pr-sub','Each round starts with the template’s column mapping, keys and rules, so you only choose the files.'));
+  api('/api/profiles').then(result=>{for(const profile of result.profiles)template.add(new Option(profile.name,profile.id));if(!result.profiles.length)templated.querySelector('.pr-sub').textContent='No templates yet. Save one from a project’s round to reuse its settings.';}).catch(()=>{});
+  const foot=el('div','pr-drawer-foot pr-round-foot'),summary=el('p','pr-round-summary');
+  const create=projectButton('',async()=>{
+   error.textContent='';
+   if(!name.value.trim()){error.textContent='Enter a project name.';name.focus();return;}
+   const isGroup=group.checked&&!onCreated;
+   const result=await api('/api/projects',{name:name.value,description:description.value,profile_id:isGroup?null:template.value||null});
+   activeProject=result.id;projectOffset=0;$('projectDrawer').close();
+   if(typeof onCreated==='function'){await onCreated(result.id);return;}
+   if(isGroup){await selectProject(result.id);openSubprojectDrawer(projectDetail);return;}
+   await loadProjects();
+  },'primary pr-cta');create.append(icon('folder-plus'),document.createTextNode('Create project'));
+  foot.append(summary,create);
+  body.append(named);if(!onCreated)body.append(kinds);body.append(templated,foot);
+  function sync(){
+   const isGroup=group.checked&&!onCreated;
+   templated.hidden=isGroup;templated.querySelector('.pr-step-n').textContent=onCreated?'2':'3';
+   summary.textContent=isGroup?'You add its first subproject next.':onCreated?'This comparison is attached to it.':'You start round 1 next, from the project page.';
+  }
+  sync();name.focus();
+ };
+ // The date shown for a round on the journey: the user's date, or the day it ran when none is given.
+ function openDateDrawer(detail,round){
+  openProjectDrawer(`Round ${round.n} date`);
+  const body=$('projectDrawerBody'),error=$('projectDrawerError');body.classList.add('pr-drawer','pr-date-drawer');
+  body.append(el('p','pr-sub',`The journey and reports show this date instead of the day round ${round.n} ran (${day(round.finished||round.created)}).`));
+  const wrap=el('div','pr-field'),label=el('label','','Date for this round'),input=el('input');input.type='date';input.id='prRoundDate';input.value=round.as_of||'';label.htmlFor=input.id;wrap.append(label,input);
+  const save=async value=>{
+   error.textContent='';
+   const record=(await api('/api/projects/records?id='+round.id)).records[0];
+   await api('/api/projects/records',{comparison_id:round.id,project_id:detail.project.id,status:record.audit_status,note:record.audit_note,reviewer:record.reviewer,as_of:value||null});
+   $('projectDrawer').close();projectDetail=await api('/api/projects/'+detail.project.id);renderProject(projectDetail);
+  };
+  const foot=el('div','pr-drawer-foot pr-date-foot');
+  if(round.as_of)foot.append(projectButton('Use the run date',()=>save(null),'pr-ghost'));
+  const go=projectButton('',()=>{if(!input.value){error.textContent='Choose a date, or use the run date.';input.focus();return;}return save(input.value);},'primary pr-cta');go.append(icon('calendar'),document.createTextNode('Save date'));
+  foot.append(go);body.append(wrap,foot);input.focus();
  }
  // The page's height is what's left of the window below its top, so it never scrolls when it fits.
  function fitPage(){
@@ -3166,8 +3342,11 @@ loadDiagnostics=async function(){
   const card=el('section','pr-import-card'),head=el('div','pr-import-head'),mark=el('span','pr-import-mark'),words=el('div','pr-import-words');
   mark.append(icon('folder-kanban'));words.append(el('strong','',preview.name),el('span','',`Exported ${day(preview.exported)} · created ${day(preview.created)}`));head.append(mark,words);
   const facts=el('dl','pr-import-facts');
-  for(const [label,value] of [['Rounds',number(preview.rounds)],['Sign-offs',number(preview.signoffs)],['Template',preview.template||'None']]){const item=el('div');item.append(el('dt','',label),el('dd','',value));facts.append(item);}
+  // A project with subprojects comes in whole; the preview lists them.
+  const subs=preview.subprojects||[];
+  for(const [label,value] of subs.length?[['Subprojects',number(subs.length)],['Rounds',number(preview.rounds)],['Sign-offs',number(preview.signoffs)]]:[['Rounds',number(preview.rounds)],['Sign-offs',number(preview.signoffs)],['Template',preview.template||'None']]){const item=el('div');item.append(el('dt','',label),el('dd','',value));facts.append(item);}
   card.append(head,facts);if(preview.description)card.append(el('p','pr-import-description',preview.description));
+  if(subs.length){const list=el('p','pr-import-subs');list.append(icon('folder-kanban'),el('span','',subs.join(', ')));card.append(list);}
   const field=el('div','pr-field'),label=el('label','','Project name'),input=el('input');input.id='prImportName';input.maxLength=100;label.htmlFor=input.id;
   const clash=el('p','pr-import-clash');clash.setAttribute('role','alert');clash.hidden=true;
   const showClash=name=>{clash.replaceChildren(icon('triangle-alert'),el('span','',`A project named “${name}” already exists. Give this one a different name to import it.`));clash.hidden=false;field.classList.add('has-clash');};
@@ -3193,13 +3372,14 @@ loadDiagnostics=async function(){
   body.classList.add('pr-drawer','pr-delete-drawer');
   const warn=el('section','pr-delete-warn'),mark=el('span','pr-delete-mark'),words=el('div','pr-import-words');
   mark.append(icon('trash-2'));
-  words.append(el('strong','',name),el('span','',`Its ${plural(detail.progress.rounds.length,'round')}, activity, sign-offs and sign-off report are deleted. This can’t be undone.`));
+  const subs=detail.subprojects||[];
+  words.append(el('strong','',name),el('span','',subs.length?`Its ${plural(subs.length,'subproject')}, with their rounds, activity and sign-offs, are deleted too. This can’t be undone.`:`Its ${plural(detail.progress.rounds.length,'round')}, activity, sign-offs and sign-off report are deleted. This can’t be undone.`));
   warn.append(mark,words);
-  const keep=el('div','pr-delete-keep');
+  const keep=el('div','pr-delete-keep');keep.hidden=!!detail.parent;
   keep.append(el('span','','Want a copy? Export the project first; you can import it again later.'),projectButton('',()=>exportProject(detail),'pr-ghost'));
   keep.lastChild.append(icon('download'),document.createTextNode('Export project'));
   const option=el('label','pr-delete-option'),box=el('input');box.type='checkbox';box.checked=true;
-  option.append(box,el('span','',count?`Also delete its ${plural(count,'comparison')} and their results`:'Also delete its comparisons'));
+  option.append(box,el('span','',subs.length?'Also delete the subprojects’ comparisons and their results':count?`Also delete its ${plural(count,'comparison')} and their results`:'Also delete its comparisons'));
   const hint=el('p','pr-sub','');
   const sync=()=>{hint.textContent=box.checked?'Cell differences, reports and source files of those comparisons are removed too.':'The comparisons stay in comparison history, no longer in a project.';};
   box.addEventListener('change',sync);sync();
@@ -3210,7 +3390,9 @@ loadDiagnostics=async function(){
    error.textContent='';go.disabled=true;text.textContent='Deleting…';
    try{
     const result=await api('/api/projects/'+detail.project.id,{comparisons:box.checked},'DELETE');
-    $('projectDrawer').close();activeProject=null;projectDetail=null;document.body.classList.remove('pr-project-open');await loadProjects();
+    $('projectDrawer').close();projectDetail=null;
+    // A deleted subproject returns to its parent; anything else to all projects.
+    if(detail.parent)await selectProject(detail.parent.id);else{activeProject=null;document.body.classList.remove('pr-project-open');await loadProjects();}
     if(typeof notify==='function')notify('success','Project deleted',result.comparisons?`${name} and ${plural(result.comparisons,'comparison')} were deleted.`:`${name} was deleted.`);
    }catch(failure){go.disabled=false;text.textContent='Delete project';error.textContent=failure.message;}
   },'pr-danger');go.append(icon('trash-2'),text);go.disabled=true;
@@ -3290,12 +3472,17 @@ loadDiagnostics=async function(){
    if(mode!=='files'&&!isAll()&&!n){error.textContent='Enter how many keys to compare.';input.focus();return;}
    if(mode==='carry'&&n<=latest.keys_checked){error.textContent=`Round ${latest.n} compared ${number(latest.keys_checked)} keys. Choose more to add new ones.`;input.focus();return;}
    const sample=mode==='files'||isAll()?null:{size:n,mode,seed,...(mode==='carry'?{from:latest.id}:{})};
-   const round={project:detail.project.id,name:detail.project.name,n:next,population,sample,previous:latest?{n:latest.n,keys:latest.keys_checked}:null,template:detail.template||null};
+   const round={project:detail.project.id,name:detail.project.name,n:next,population,sample,previous:latest?{n:latest.n,keys:latest.keys_checked}:null,template:detail.template||null,as_of:asOf.value||null};
    try{sessionStorage.setItem(ROUND_KEY,JSON.stringify(round));}catch{}
    $('projectDrawer').close();localStorage.removeItem('keywise-job');localStorage.removeItem(workspaceViewKey);softReload();
   },'primary pr-cta');go.append(document.createTextNode('Choose files'),icon('arrow-right'));
   const copy=el('div');copy.append(summary,seedLine);foot.append(copy,go);
-  body.append(size,choice,foot);
+  // 3. An optional date for the round, shown on the journey instead of the day it runs.
+  const dated=el('section','pr-step pr-round-date'),dateHead=el('div','pr-step-head'),dateTitle=el('label','','Date for this round');dateTitle.htmlFor='prRoundAsOf';
+  dateHead.append(el('span','pr-step-n','3'),dateTitle,el('span','pr-optional','Optional'));
+  const asOf=el('input');asOf.type='date';asOf.id='prRoundAsOf';
+  dated.append(dateHead,asOf,el('p','pr-sub','For example the business date of the files. The journey shows it instead of the day the round runs.'));
+  body.append(size,choice,dated,foot);
   function sync(){
    const n=parse(),all=isAll(),mode=body.querySelector('input[name=prRoundKeys]:checked')?.value;
    const pct=population?Math.min(100,n*100/population):0;
@@ -3328,7 +3515,7 @@ loadDiagnostics=async function(){
   const sample=round.sample;
   const what=!sample?(round.population?'every key in the files':'every key in the files you choose'):sample.mode==='carry'?`${number(sample.size)} keys: round ${round.previous.n}'s ${number(round.previous.keys)} plus random keys`:`${number(sample.size)} random keys from File 1`;
   banner.replaceChildren(icon('flag'),el('span','',''),);
-  const text=banner.querySelector('span');text.append(el('strong','',`Round ${round.n} of ${round.name}`),document.createTextNode(` · compares ${what}.`+(round.template?` Uses the template ${round.template.name}.`:'')));
+  const text=banner.querySelector('span');text.append(el('strong','',`Round ${round.n} of ${round.name}`),document.createTextNode(` · compares ${what}.`+(round.template?` Uses the template ${round.template.name}.`:'')+(round.as_of?` Dated ${asOfDay(round.as_of)}.`:'')));
   useRoundTemplate();
   const cancel=projectButton('Cancel round',()=>{forgetRoundTemplate(round);try{sessionStorage.removeItem(ROUND_KEY);}catch{}syncBanner();},'pr-link');banner.append(cancel);
  }
@@ -3337,7 +3524,7 @@ loadDiagnostics=async function(){
  const panelBeforeRound=panel;panel=function(...args){const result=panelBeforeRound(...args);syncBanner();return result;};
  startConfiguration=function(){
   const config=configuration(),round=pendingRound();
-  if(round){config.project_id=round.project;if(round.sample)config.sample=round.sample;}
+  if(round){config.project_id=round.project;if(round.sample)config.sample=round.sample;if(round.as_of)config.as_of=round.as_of;}
   return config;
  };
  // A cancelled round's template must not carry over to the next ordinary comparison.

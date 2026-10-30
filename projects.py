@@ -1,5 +1,6 @@
 """Shared project audit metadata. Never reads comparison source files."""
 import json
+import re
 from contextlib import contextmanager
 import sqlite3
 import time
@@ -9,6 +10,9 @@ from pathlib import Path
 STATUSES=('Unreviewed','In review','Approved','Changes requested')
 MAX_COLUMNS=5000
 ISSUES_SHOWN=200
+DATE=re.compile(r'\d{4}-\d{2}-\d{2}')
+# A parent project takes the status of its most pressing subproject; it's signed off when all of them are.
+URGENCY=('running','fixing','ready','clean','empty','signed_off')
 STATE_LABELS=dict(empty='No rounds yet',running='Running',fixing='Fixing',ready='Ready for all keys',clean='Ready to sign off',signed_off='Signed off')
 
 
@@ -36,7 +40,7 @@ def progress(records,signoff=None):
                    keys_checked=checked,how=how,carried=(sample or {}).get('carried',0),seed=(sample or {}).get('seed'),
                    mismatching=len(failing),cells=record.get('changed_cells') or 0,keys_with_differences=record.get('changed_rows') or 0,
                    left_only=record.get('left_only') or 0,right_only=record.get('right_only') or 0,
-                   audit_status=record.get('audit_status'),source_available=record.get('source_available',True))
+                   audit_status=record.get('audit_status'),source_available=record.get('source_available',True),as_of=record.get('as_of'))
         entry['clean']=not failing and not entry['left_only'] and not entry['right_only']
         if previous is None:entry.update(still=0,new=len(failing),fixed=0)
         else:entry.update(still=len(failing&previous),new=len(failing-previous),fixed=len(previous-failing))
@@ -104,7 +108,7 @@ class Store:
         db=sqlite3.connect(self.path,timeout=15);db.row_factory=sqlite3.Row
         db.execute('PRAGMA foreign_keys=ON')
         db.executescript('''
-        CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL COLLATE NOCASE UNIQUE,description TEXT NOT NULL,created REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL COLLATE NOCASE,description TEXT NOT NULL,created REAL NOT NULL,profile_id TEXT,parent_id TEXT);
         CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),snapshot TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'Unreviewed',note TEXT NOT NULL DEFAULT '',reviewer TEXT NOT NULL DEFAULT '',updated REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS records_project ON records(project_id,updated DESC);
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),at REAL NOT NULL,message TEXT NOT NULL,record_id TEXT);
@@ -113,8 +117,20 @@ class Store:
         CREATE INDEX IF NOT EXISTS signoffs_project ON signoffs(project_id,at DESC);
         ''')
         # Projects made from a template (a saved comparison profile) remember it, so each round starts from it.
-        if 'profile_id' not in {row[1] for row in db.execute('PRAGMA table_info(projects)')}:
-            db.execute('ALTER TABLE projects ADD COLUMN profile_id TEXT')
+        columns={row[1] for row in db.execute('PRAGMA table_info(projects)')}
+        if 'profile_id' not in columns:db.execute('ALTER TABLE projects ADD COLUMN profile_id TEXT')
+        # Subprojects: one level under a parent project, which only groups them.
+        if 'parent_id' not in columns:db.execute('ALTER TABLE projects ADD COLUMN parent_id TEXT')
+        # The date a user gives a comparison when attaching it (YYYY-MM-DD), shown instead of the run date.
+        if 'as_of' not in {row[1] for row in db.execute('PRAGMA table_info(records)')}:db.execute('ALTER TABLE records ADD COLUMN as_of TEXT')
+        # Names were unique across the app; now they're unique among top-level projects and within each parent,
+        # so two projects can both have a "Cards" subproject. Older databases are rebuilt once without the constraint.
+        if 'UNIQUE' in (db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='projects'").fetchone()[0] or '').upper():
+            db.commit()
+            db.executescript('''PRAGMA foreign_keys=OFF;BEGIN;
+            CREATE TABLE projects_rebuilt(id TEXT PRIMARY KEY,name TEXT NOT NULL COLLATE NOCASE,description TEXT NOT NULL,created REAL NOT NULL,profile_id TEXT,parent_id TEXT);
+            INSERT INTO projects_rebuilt SELECT id,name,description,created,profile_id,parent_id FROM projects;
+            DROP TABLE projects;ALTER TABLE projects_rebuilt RENAME TO projects;COMMIT;PRAGMA foreign_keys=ON;''')
         try:
             with db: yield db
         finally: db.close()
@@ -149,8 +165,10 @@ class Store:
             db.execute('INSERT INTO signoffs(project_id,round_id,at,reviewer,note,mode,reasons,report) VALUES(?,?,?,?,?,?,?,?)',
                        (identity,round_id,time.time(),reviewer,note,mode,json.dumps(reasons),str(report)))
             self.event(db,identity,'Project signed off'+(' with reasons for remaining mismatches' if mode=='exceptions' else ' at 100% match')+' · '+reviewer,round_id)
-    def name_taken(self,name):
-        with self.connect() as db:return db.execute('SELECT 1 FROM projects WHERE name=?',(name.strip(),)).fetchone() is not None
+    def name_taken(self,name,parent=None):
+        with self.connect() as db:
+            if parent:return db.execute('SELECT 1 FROM projects WHERE parent_id=? AND name=?',(parent,name.strip())).fetchone() is not None
+            return db.execute('SELECT 1 FROM projects WHERE parent_id IS NULL AND name=?',(name.strip(),)).fetchone() is not None
     def set_profile(self,identity,profile_id):
         with self.connect() as db:
             if not db.execute('SELECT 1 FROM projects WHERE id=?',(identity,)).fetchone():raise ValueError('Project not found')
@@ -172,10 +190,11 @@ class Store:
                                   (identity,item['round_id'],item['at'],item['reviewer'],item['note'],item['mode'],json.dumps(item['reasons']),''))
                 ids.append(cursor.lastrowid)
             return ids
-    def adopt(self,record_id,identity,status,note,reviewer):
+    def adopt(self,record_id,identity,status,note,reviewer,as_of=None):
         """Attach an imported round with its audit status; the import restores the original activity itself."""
         if status not in STATUSES:status='Unreviewed'
-        with self.connect() as db:db.execute('UPDATE records SET project_id=?,status=?,note=?,reviewer=? WHERE id=?',(identity,status,note[:2000],reviewer[:100],record_id))
+        if not (isinstance(as_of,str) and DATE.fullmatch(as_of)):as_of=None
+        with self.connect() as db:db.execute('UPDATE records SET project_id=?,status=?,note=?,reviewer=?,as_of=? WHERE id=?',(identity,status,note[:2000],reviewer[:100],as_of,record_id))
     def record_ids(self,identity):
         with self.connect() as db:return [row[0] for row in db.execute('SELECT id FROM records WHERE project_id=?',(identity,))]
     def remove(self,identity,keep_records=False):
@@ -192,6 +211,11 @@ class Store:
         with self.connect() as db:db.executemany('DELETE FROM records WHERE id=?',[(i,) for i in record_ids])
     def set_signoff_report(self,signoff_id,report):
         with self.connect() as db:db.execute('UPDATE signoffs SET report=? WHERE id=?',(str(report),signoff_id))
+    def accepts_comparisons(self,identity):
+        with self.connect() as db:
+            return bool(db.execute('SELECT 1 FROM projects WHERE id=?',(identity,)).fetchone()) and not db.execute('SELECT 1 FROM projects WHERE parent_id=?',(identity,)).fetchone()
+    def children(self,identity):
+        with self.connect() as db:return [row[0] for row in db.execute('SELECT id FROM projects WHERE parent_id=? ORDER BY created',(identity,))]
     def exists(self,identity):
         with self.connect() as db:return db.execute('SELECT 1 FROM projects WHERE id=?',(identity,)).fetchone() is not None
     def event(self,db,project,message,record=None):
@@ -204,9 +228,18 @@ class Store:
         try:
             with self.connect() as db:
                 if db.execute('SELECT count(*) FROM projects').fetchone()[0]>=500:raise ValueError('Maximum 500 projects')
-                profile=config.get('profile_id') or None
-                db.execute('INSERT INTO projects(id,name,description,created,profile_id) VALUES(?,?,?,?,?)',(identity,name.strip(),description,config.get('created') or time.time(),profile))
+                profile=config.get('profile_id') or None;parent=config.get('parent_id') or None
+                if parent:
+                    row=db.execute('SELECT parent_id FROM projects WHERE id=?',(parent,)).fetchone()
+                    if not row:raise ValueError('The parent project no longer exists')
+                    if row['parent_id']:raise ValueError('A subproject can’t have subprojects of its own')
+                    if db.execute('SELECT 1 FROM records WHERE project_id=?',(parent,)).fetchone():
+                        raise ValueError('This project already has comparisons, so it can’t hold subprojects. Create a new project to group them.')
+                same=db.execute('SELECT 1 FROM projects WHERE parent_id=? AND name=?',(parent,name.strip())) if parent else db.execute('SELECT 1 FROM projects WHERE parent_id IS NULL AND name=?',(name.strip(),))
+                if same.fetchone():raise ValueError('A subproject with this name already exists in this project' if parent else 'A project with this name already exists')
+                db.execute('INSERT INTO projects(id,name,description,created,profile_id,parent_id) VALUES(?,?,?,?,?,?)',(identity,name.strip(),description,config.get('created') or time.time(),profile,parent))
                 if not config.get('imported'):self.event(db,identity,'Project created'+(' from a template' if profile else ''))
+                if parent and not config.get('imported'):self.event(db,parent,'Subproject added: '+name.strip())
         except sqlite3.IntegrityError as error:raise ValueError('A project with this name already exists') from error
         return identity
     def update_record(self,config):
@@ -218,16 +251,20 @@ class Store:
             if not current:raise ValueError('Comparison is not available')
             if self.viewer is not None and json.loads(current['snapshot']).get('owner')!=self.viewer:raise ValueError('Create your own review to change this comparison’s project or audit status')
             if project and not db.execute('SELECT 1 FROM projects WHERE id=?',(project,)).fetchone():raise ValueError('Project not found')
+            if project and db.execute('SELECT 1 FROM projects WHERE parent_id=?',(project,)).fetchone():raise ValueError('This project groups subprojects. Attach the comparison to one of its subprojects.')
+            as_of=config.get('as_of',current['as_of']) or None
+            if as_of is not None and (not isinstance(as_of,str) or not DATE.fullmatch(as_of)):raise ValueError('Enter the date as YYYY-MM-DD')
+            if project and as_of!=current['as_of']:self.event(db,project,'Date set: '+as_of if as_of else 'Date cleared',identity)
             if status=='Approved' and json.loads(current['snapshot'])['state']!='complete':raise ValueError('Complete the comparison before approving the audit')
             if current['project_id'] and current['project_id']!=project:self.event(db,current['project_id'],'Comparison detached',identity)
             if project:
                 if current['project_id']!=project:self.event(db,project,'Comparison attached',identity)
                 if (current['status'],current['note'],current['reviewer'])!=(status,note,reviewer):self.event(db,project,'Audit: '+status+(' · '+reviewer if reviewer else ''),identity)
-            db.execute('UPDATE records SET project_id=?,status=?,note=?,reviewer=?,updated=? WHERE id=?',(project or None,status,note,reviewer,time.time(),identity))
+            db.execute('UPDATE records SET project_id=?,status=?,note=?,reviewer=?,as_of=?,updated=? WHERE id=?',(project or None,status,note,reviewer,as_of,time.time(),identity))
     @staticmethod
     def record(row):
         snapshot=json.loads(row['snapshot']);snapshot.pop('owner',None)
-        return dict(snapshot,project_id=row['project_id'],audit_status=row['status'],audit_note=row['note'],reviewer=row['reviewer'],updated=row['updated'])
+        return dict(snapshot,project_id=row['project_id'],audit_status=row['status'],audit_note=row['note'],reviewer=row['reviewer'],updated=row['updated'],as_of=row['as_of'])
     def records(self,project=None,offset=0,identity=None):
         visible,values=self.visibility()
         where=' WHERE '+visible
@@ -256,6 +293,21 @@ class Store:
                            # When the latest round actually ran (or a running one started), not when a comparison
                            # was attached or its record last changed.
                            last_run=(state['running'][-1]['created'] if state['running'] else (latest.get('finished') or latest['created']) if latest else None))
+        # A parent's row summarises its subprojects: how many are signed off, and the most pressing status.
+        children={}
+        for project in projects:
+            if project.get('parent_id'):children.setdefault(project['parent_id'],[]).append(project)
+        for project in projects:
+            subs=children.get(project['id'])
+            if not subs:continue
+            done=sum(sub['status']=='signed_off' for sub in subs)
+            status='signed_off' if done==len(subs) else min((sub['status'] for sub in subs if sub['status']!='signed_off'),key=URGENCY.index)
+            runs=[sub['last_run'] for sub in subs if sub['last_run']]
+            # The tag colour follows the most pressing subproject; the words say how far the group is.
+            label='Signed off' if done==len(subs) else 'Not started' if all(sub['status']=='empty' for sub in subs) else 'In progress'
+            project.update(status=status,status_label=label,last_run=max(runs) if runs else None,
+                           subprojects=[dict(id=sub['id'],name=sub['name'],status=sub['status'],status_label=sub['status_label']) for sub in sorted(subs,key=lambda sub:sub['created'])],
+                           signed_off=done)
         projects.sort(key=lambda project:project['last_run'] or project['created'],reverse=True)
         return projects
     def runs(self,identity):
@@ -281,7 +333,16 @@ class Store:
             audit_counts={s:sum(r['audit_status']==s for r in records) for s in STATUSES},
             states={s:sum(r['state']==s for r in records) for s in {r['state'] for r in records}},
             latest=latest,trend=sorted(complete,key=lambda r:r.get('finished') or r['created'])[-12:],events=[dict(e) for e in events],
-            progress=progress(records,signoff),key_columns=(latest or {}).get('key_columns'))
+            progress=progress(records,signoff),key_columns=(latest or {}).get('key_columns'),
+            parent=self.parent_of(project),subprojects=self.subprojects(identity))
+    def parent_of(self,project):
+        if not project['parent_id']:return None
+        with self.connect() as db:row=db.execute('SELECT id,name FROM projects WHERE id=?',(project['parent_id'],)).fetchone()
+        return dict(row) if row else None
+    def subprojects(self,identity):
+        """A parent's subprojects, each as its dashboard row; None for a project without any."""
+        if not self.children(identity):return None
+        return [p for p in sorted(self.overview(),key=lambda p:p['created']) if p.get('parent_id')==identity]
 
 
 def migrate_workspaces(root):
@@ -303,7 +364,7 @@ def migrate_workspaces(root):
                     db.execute('INSERT INTO projects(id,name,description,created) VALUES(?,?,?,?)',(row['id'],name,row['description'],row['created']))
                 for row in old.execute('SELECT * FROM records'):
                     snapshot=json.loads(row['snapshot']);snapshot.setdefault('owner',source.parent.name)
-                    db.execute('INSERT OR IGNORE INTO records VALUES(?,?,?,?,?,?,?)',(row['id'],row['project_id'],json.dumps(snapshot),row['status'],row['note'],row['reviewer'],row['updated']))
+                    db.execute('INSERT OR IGNORE INTO records(id,project_id,snapshot,status,note,reviewer,updated) VALUES(?,?,?,?,?,?,?)',(row['id'],row['project_id'],json.dumps(snapshot),row['status'],row['note'],row['reviewer'],row['updated']))
                 for row in old.execute('SELECT project_id,at,message,record_id FROM events'):
                     db.execute('INSERT INTO events(project_id,at,message,record_id) VALUES(?,?,?,?)',tuple(row))
                 db.execute('INSERT INTO migrated_workspaces VALUES(?)',(str(source),))
